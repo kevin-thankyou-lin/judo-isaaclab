@@ -43,6 +43,11 @@
       "state_index": 639,
       "time_s": 21.3
     },
+    "inserted_held": {
+      "action_step": 743,
+      "state_index": 744,
+      "time_s": 24.8
+    },
     "both_released": {
       "action_step": 744,
       "state_index": 745,
@@ -53,6 +58,11 @@
       "state_index": 774,
       "time_s": 25.8
     }
+  },
+  "inserted_held_evidence": {
+    "future_stable_hang_state_index": 774,
+    "next_release_state_index": 745,
+    "selection": "last right-held simulator state before release"
   },
   "status": "passed"
 }

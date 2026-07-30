@@ -51,6 +51,7 @@ def _parser():
             "right_grasp",
             "handover_latched",
             "tree_approach",
+            "inserted_held",
         ),
         default="left_grasp",
     )
@@ -291,7 +292,7 @@ def _objective_components(
             +1.0 * (1.0 - left_grasp[:, keyframe_offset])
             +1.0 * right_grasp[:, post_keyframe].mean(axis=1)
         )
-    elif target_name == "tree_approach":
+    elif target_name in ("tree_approach", "inserted_held"):
         target_success = stage2 * right_grasp
         rewards += (
             3.0 * stage2[:, keyframe_offset]
@@ -299,6 +300,11 @@ def _objective_components(
             +1.0 * (1.0 - left_grasp[:, keyframe_offset])
             +2.0 * right_grasp[:, post_keyframe].mean(axis=1)
         )
+        if target_name == "inserted_held":
+            rewards += (
+                -40.0 * position_error[:, keyframe_offset]
+                -4.0 * rotation_error[:, keyframe_offset]
+            )
     else:
         raise ValueError(f"Unsupported target-name: {target_name}")
     return {
@@ -538,7 +544,11 @@ def main():
             ),
         }
         best_group = groups["best_sample"]
-        rotation_limit = 0.20 if args.target_name == "tree_approach" else 0.10
+        rotation_limit = (
+            0.20
+            if args.target_name in ("tree_approach", "inserted_held")
+            else 0.10
+        )
         reached = (
             best_group["keyframe_target_success_count"]
             == best_group["count"]

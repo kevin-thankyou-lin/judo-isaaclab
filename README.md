@@ -201,3 +201,13 @@ position error from 5.379 mm to 4.317 mm. The parallel video finishes with
 
 See `validation/hangmug_tree_approach_mpc.json` and
 `validation/hangmug_tree_approach_mpc_video.json`.
+
+The inserted/held target is state 744: the last simulator-verified right-held
+state immediately before release at state 745; continuous source replay reaches
+stable hang at state 774. Robust MPC from state 700 reaches this target in all
+six repeats, reducing mean position error from 7.330 mm to 5.239 mm and mean
+rotation error from 0.0586 rad to 0.0466 rad. Both video lanes visibly finish
+with the handle seated around the branch and the right gripper still closed.
+
+See `validation/hangmug_inserted_held_mpc.json` and
+`validation/hangmug_inserted_held_mpc_video.json`.

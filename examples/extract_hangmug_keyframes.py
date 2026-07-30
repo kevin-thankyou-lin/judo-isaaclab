@@ -86,6 +86,10 @@ def _first(events, predicate):
     return next((event for event in events if predicate(event)), None)
 
 
+def _last(events, predicate):
+    return next((event for event in reversed(events) if predicate(event)), None)
+
+
 def _sample(env, action_step):
     import torch
 
@@ -233,6 +237,19 @@ def main():
             ),
         )
         hang = _first(events, lambda item: item["stage3_hang"])
+        inserted_held = (
+            _last(
+                events,
+                lambda item: (
+                    item["action_step"] < release["action_step"]
+                    and item["stage2_handover"]
+                    and item["right_grasp"]
+                    and not item["left_grasp"]
+                ),
+            )
+            if release is not None
+            else None
+        )
         precontact_state = max(
             args.start_state,
             left_contact["state_index"] - args.precontact_actions
@@ -269,6 +286,9 @@ def main():
             "tree_approach": _keyframe(
                 "tree_approach", tree_approach, recorded_mug_poses
             ),
+            "inserted_held": _keyframe(
+                "inserted_held", inserted_held, recorded_mug_poses
+            ),
             "both_released": _keyframe(
                 "both_released", release, recorded_mug_poses
             ),
@@ -284,6 +304,17 @@ def main():
             "control_hz": 30,
             "source_start_state": args.start_state,
             "keyframes": keyframes,
+            "inserted_held_evidence": {
+                "selection": (
+                    "last right-held simulator state before release"
+                ),
+                "next_release_state_index": (
+                    None if release is None else release["state_index"]
+                ),
+                "future_stable_hang_state_index": (
+                    None if hang is None else hang["state_index"]
+                ),
+            },
             "missing_keyframes": missing,
         }
         with open(args.result_json, "w", encoding="utf-8") as stream:
