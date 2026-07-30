@@ -1,0 +1,25 @@
+{
+  "backend_diagnostics": {
+    "action_dim": 14,
+    "history_steps": 40,
+    "horizon_steps": 8,
+    "num_rollouts": 8,
+    "reset_completed": true
+  },
+  "dataset_sha256": "bef497ac85a5e27c587a007767b7e8faba457fb8f2e5af62c94e3455eb83f7c4",
+  "gear_dc_study_revision": "37fa0737b569709e46a6a81a696b838e134b6f02",
+  "grasp_counts": {
+    "left": 8,
+    "right": 8
+  },
+  "identical_controls": true,
+  "internal_max_spread": {
+    "left_q_max_abs": 0.006969928741455078,
+    "pot_rotation_rad": 0.002679051598533988,
+    "pot_translation_m": 0.0008481895783916116,
+    "pot_velocity_max_abs": 0.09215294569730759,
+    "right_q_max_abs": 0.0043833255767822266
+  },
+  "judo_revision": "96d6f451f482d68c903e17b223577b752319b4d1",
+  "status": "passed"
+}
