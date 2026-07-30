@@ -14,7 +14,7 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from hangmug_grasp_keyframe_mpc import _tensor_tree
+from hangmug_grasp_keyframe_mpc import _tensor_tree, _torch_quat_multiply
 
 
 def _parser():
@@ -70,6 +70,17 @@ def _load_inputs(args, device):
     start_state = int(controls["start_state"])
     target_state = int(controls["target_state"])
     target_name = str(controls["target_name"])
+    tree_offset_xyz = np.asarray(
+        controls["tree_offset_xyz"]
+        if "tree_offset_xyz" in controls.files
+        else np.zeros(3),
+        dtype=np.float32,
+    )
+    tree_yaw_deg = float(
+        controls["tree_yaw_deg"]
+        if "tree_yaw_deg" in controls.files
+        else 0.0
+    )
     if nominal.shape != best.shape or nominal.ndim != 2:
         raise ValueError(
             f"Control shapes must match (horizon, action_dim): "
@@ -80,6 +91,27 @@ def _load_inputs(args, device):
         checkpoint = _tensor_tree(
             group["states"], checkpoint_state, device
         )
+        tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
+        tree_pose[:, :3] += torch.as_tensor(
+            tree_offset_xyz,
+            dtype=tree_pose.dtype,
+            device=tree_pose.device,
+        )
+        if tree_yaw_deg:
+            half_yaw = np.deg2rad(tree_yaw_deg) / 2.0
+            yaw = torch.tensor(
+                [
+                    np.cos(half_yaw),
+                    0.0,
+                    0.0,
+                    np.sin(half_yaw),
+                ],
+                dtype=tree_pose.dtype,
+                device=tree_pose.device,
+            ).reshape(1, 4)
+            tree_pose[:, 3:7] = _torch_quat_multiply(
+                yaw, tree_pose[:, 3:7]
+            )
         history = torch.as_tensor(
             group["actions"][checkpoint_state:start_state],
             dtype=torch.float32,
@@ -96,6 +128,8 @@ def _load_inputs(args, device):
         "start_state": start_state,
         "target_state": target_state,
         "target_name": target_name,
+        "tree_offset_xyz": tree_offset_xyz.tolist(),
+        "tree_yaw_deg": tree_yaw_deg,
     }
 
 
@@ -382,6 +416,8 @@ def main():
                 "start_state": inputs["start_state"],
                 "target_state": inputs["target_state"],
                 "target_name": inputs["target_name"],
+                "tree_offset_xyz_m": inputs["tree_offset_xyz"],
+                "tree_yaw_deg": inputs["tree_yaw_deg"],
                 "candidate_horizon": int(inputs["candidate"].shape[1]),
             },
             "terminal": {

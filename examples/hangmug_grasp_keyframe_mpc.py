@@ -66,6 +66,20 @@ def _parser():
     parser.add_argument("--max-action-delta", type=float, default=0.08)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
+    parser.add_argument(
+        "--tree-offset-xyz",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("X", "Y", "Z"),
+        help="Translate the planning tree while preserving its relative target.",
+    )
+    parser.add_argument(
+        "--tree-yaw-deg",
+        type=float,
+        default=0.0,
+        help="Rotate the planning tree about world Z.",
+    )
     parser.add_argument("--seed", type=int, default=20260730)
     parser.add_argument(
         "--result-json",
@@ -102,12 +116,14 @@ def _state_row(group, index):
             np.asarray(group["rigid_object/mug/root_velocity"][index]),
             np.asarray(group["articulation/left_arm/joint_position"][index]),
             np.asarray(group["articulation/right_arm/joint_position"][index]),
+            np.asarray(group["rigid_object/mug_tree/root_pose"][index]),
         )
     ).astype(np.float32)
 
 
 def _load_demo(args, device):
     import h5py
+    import torch
 
     checkpoint_state = (
         args.start_state
@@ -120,6 +136,27 @@ def _load_demo(args, device):
         group = handle[f"data/{args.episode}"]
         states = group["states"]
         checkpoint = _tensor_tree(states, checkpoint_state, device)
+        tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
+        tree_pose[:, :3] += torch.as_tensor(
+            args.tree_offset_xyz,
+            dtype=tree_pose.dtype,
+            device=tree_pose.device,
+        )
+        if args.tree_yaw_deg:
+            half_yaw = np.deg2rad(args.tree_yaw_deg) / 2.0
+            yaw = torch.tensor(
+                [
+                    np.cos(half_yaw),
+                    0.0,
+                    0.0,
+                    np.sin(half_yaw),
+                ],
+                dtype=tree_pose.dtype,
+                device=tree_pose.device,
+            ).reshape(1, 4)
+            tree_pose[:, 3:7] = _torch_quat_multiply(
+                yaw, tree_pose[:, 3:7]
+            )
         history = np.asarray(
             group["actions"][checkpoint_state : args.start_state],
             dtype=np.float32,
@@ -153,6 +190,7 @@ def _encode_state(env):
                 state["rigid_object"]["mug"]["root_velocity"],
                 state["articulation"]["left_arm"]["joint_position"],
                 state["articulation"]["right_arm"]["joint_position"],
+                state["rigid_object"]["mug_tree"]["root_pose"],
             ),
             dim=-1,
         )
@@ -216,6 +254,68 @@ def _quaternion_error(actual, target):
     return 2.0 * np.arccos(np.clip(dots, 0.0, 1.0))
 
 
+def _torch_quat_multiply(left, right):
+    import torch
+
+    lw, lx, ly, lz = left.unbind(-1)
+    rw, rx, ry, rz = right.unbind(-1)
+    return torch.stack(
+        (
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+        ),
+        dim=-1,
+    )
+
+
+def _quat_multiply(left, right):
+    lw, lx, ly, lz = np.moveaxis(left, -1, 0)
+    rw, rx, ry, rz = np.moveaxis(right, -1, 0)
+    return np.stack(
+        (
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+        ),
+        axis=-1,
+    )
+
+
+def _quat_rotate(quaternion, vector):
+    quaternion = quaternion / np.linalg.norm(
+        quaternion, axis=-1, keepdims=True
+    )
+    q_vector = quaternion[..., 1:4]
+    twice_cross = 2.0 * np.cross(q_vector, vector)
+    return (
+        vector
+        + quaternion[..., :1] * twice_cross
+        + np.cross(q_vector, twice_cross)
+    )
+
+
+def _mug_in_tree_frame(rows):
+    mug_position = rows[..., :3]
+    mug_quaternion = rows[..., 3:7]
+    tree_position = rows[..., 29:32]
+    tree_quaternion = rows[..., 32:36]
+    mug_quaternion = mug_quaternion / np.linalg.norm(
+        mug_quaternion, axis=-1, keepdims=True
+    )
+    tree_quaternion = tree_quaternion / np.linalg.norm(
+        tree_quaternion, axis=-1, keepdims=True
+    )
+    tree_inverse = tree_quaternion.copy()
+    tree_inverse[..., 1:4] *= -1.0
+    return (
+        _quat_rotate(tree_inverse, mug_position - tree_position),
+        _quat_multiply(tree_inverse, mug_quaternion),
+    )
+
+
 def _objective_components(
     states,
     sensors,
@@ -226,12 +326,28 @@ def _objective_components(
     keyframe_offset,
     target_name,
 ):
-    position_error = np.linalg.norm(
+    world_position_error = np.linalg.norm(
         states[:, :, :3] - reference[None, :, :3], axis=-1
     )
-    rotation_error = _quaternion_error(
+    world_rotation_error = _quaternion_error(
         states[:, :, 3:7], reference[None, :, 3:7]
     )
+    if target_name in ("tree_approach", "inserted_held"):
+        relative_position, relative_quaternion = _mug_in_tree_frame(states)
+        reference_position, reference_quaternion = _mug_in_tree_frame(reference)
+        position_error = np.linalg.norm(
+            relative_position - reference_position[None, :, :],
+            axis=-1,
+        )
+        rotation_error = _quaternion_error(
+            relative_quaternion,
+            reference_quaternion[None, :, :],
+        )
+        target_frame = "mug_relative_to_tree"
+    else:
+        position_error = world_position_error
+        rotation_error = world_rotation_error
+        target_frame = "environment_origin"
     left_joint_error = np.sqrt(
         np.mean(
             np.square(
@@ -309,6 +425,7 @@ def _objective_components(
         raise ValueError(f"Unsupported target-name: {target_name}")
     return {
         "rewards": rewards,
+        "target_frame": target_frame,
         "keyframe_position_error_m": position_error[:, keyframe_offset],
         "keyframe_rotation_error_rad": rotation_error[:, keyframe_offset],
         "keyframe_left_joint_rms_rad": left_joint_error[:, keyframe_offset],
@@ -454,6 +571,8 @@ def main():
             )
             controls = nominal[None, :, :] + delta
             controls[:, :, (6, 13)] = nominal[None, :, (6, 13)]
+            if args.target_name == "inserted_held":
+                controls[:, : keyframe_offset + 1, 13] = nominal[0, 13]
             return controls
 
         iteration_summaries = []
@@ -569,6 +688,17 @@ def main():
                 "start_state": args.start_state,
                 "target_state": args.target_state,
                 "target_name": args.target_name,
+                "target_frame": (
+                    "mug_relative_to_tree"
+                    if args.target_name
+                    in ("tree_approach", "inserted_held")
+                    else "environment_origin"
+                ),
+                "right_gripper_held_through_target": (
+                    args.target_name == "inserted_held"
+                ),
+                "tree_offset_xyz_m": list(args.tree_offset_xyz),
+                "tree_yaw_deg": args.tree_yaw_deg,
                 "horizon": args.horizon,
                 "control_hz": 30,
             },
@@ -614,6 +744,10 @@ def main():
                 start_state=np.int64(args.start_state),
                 target_state=np.int64(args.target_state),
                 target_name=np.asarray(args.target_name),
+                tree_offset_xyz=np.asarray(
+                    args.tree_offset_xyz, dtype=np.float32
+                ),
+                tree_yaw_deg=np.float32(args.tree_yaw_deg),
             )
         print(
             "JUDO_ISAACLAB_HANGMUG_KEYFRAME_MPC="

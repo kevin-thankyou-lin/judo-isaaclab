@@ -211,3 +211,15 @@ with the handle seated around the branch and the right gripper still closed.
 
 See `validation/hangmug_inserted_held_mpc.json` and
 `validation/hangmug_inserted_held_mpc_video.json`.
+
+Tree approach and insertion targets are evaluated in the mug-tree frame, so
+the same target remains valid when the tree moves. A simulator proof translates
+the tree by `(10, -5, 0)` mm and rotates it by `1` degree, replays 490 history
+steps, and branches at state 600. All six robust repeats retain the right grasp
+and handover latch at the held-insertion target. The best samples finish with
+7.508 mm mean relative-position error and 0.1561 rad mean relative-rotation
+error. The side-by-side render fully decodes and ends with 0.760 mm mug
+separation between nominal and MPC.
+
+See `validation/hangmug_inserted_held_moved_tree_mpc.json` and
+`validation/hangmug_inserted_held_moved_tree_mpc_video.json`.

@@ -1,0 +1,58 @@
+{
+  "status": "passed",
+  "source": {
+    "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+    "episode": "demo_0",
+    "checkpoint_state": 110,
+    "history_steps": 490,
+    "start_state": 600,
+    "target_state": 744,
+    "target_name": "inserted_held",
+    "target_frame": "mug_relative_to_tree",
+    "right_gripper_held_through_target": true,
+    "tree_offset_xyz_m": [
+      0.01,
+      -0.005,
+      0.0
+    ],
+    "tree_yaw_deg": 1.0,
+    "horizon": 144,
+    "control_hz": 30
+  },
+  "optimizer": {
+    "type": "judo.optimizers.cem.CrossEntropyMethod",
+    "num_rollouts": 16,
+    "num_iterations": 3,
+    "num_elites": 4,
+    "duplicate_nominal": 4,
+    "candidate_repeats": 2,
+    "sigma_min": 0.002,
+    "sigma_max": 0.008,
+    "max_action_delta": 0.025
+  },
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 0,
+    "best_rollout": 10,
+    "improvement": 0.8747751712799072
+  },
+  "best_sample_repeat_evaluation": {
+    "count": 6,
+    "keyframe_target_success_count": 6,
+    "keyframe_right_grasp_count": 6,
+    "keyframe_stage2_count": 6,
+    "post_keyframe_target_fraction_mean": 1.0,
+    "keyframe_position_error_m_mean": 0.00750761479139328,
+    "keyframe_position_error_m_max": 0.010223246179521084,
+    "keyframe_rotation_error_rad_mean": 0.1561189889907837,
+    "keyframe_rotation_error_rad_max": 0.1647530496120453
+  },
+  "checks": {
+    "tree_pose_changed": true,
+    "relative_target_used": true,
+    "history_conditioned": true,
+    "all_repeats_right_grasped": true,
+    "all_repeats_handover_latched": true,
+    "all_repeats_reached_target": true
+  }
+}

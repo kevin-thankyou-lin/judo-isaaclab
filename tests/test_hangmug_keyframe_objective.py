@@ -12,10 +12,12 @@ from render_hangmug_mpc_comparison import _quaternion_error
 
 @pytest.fixture
 def rollout_inputs():
-    states = np.zeros((2, 2, 29), dtype=np.float32)
-    reference = np.zeros((2, 29), dtype=np.float32)
+    states = np.zeros((2, 2, 36), dtype=np.float32)
+    reference = np.zeros((2, 36), dtype=np.float32)
     states[:, :, 3] = 1.0
     reference[:, 3] = 1.0
+    states[:, :, 32] = 1.0
+    reference[:, 32] = 1.0
     sensors = np.zeros((2, 2, 10), dtype=np.float32)
     controls = np.zeros((2, 2, 14), dtype=np.float32)
     nominal = np.zeros((2, 14), dtype=np.float32)
@@ -84,3 +86,38 @@ def test_tree_targets_require_latched_handover_and_right_grasp(
 
     assert result["keyframe_target_success"].tolist() == [True, False]
     assert result["rewards"][0] > result["rewards"][1]
+
+
+def test_tree_relative_target_is_invariant_to_tree_translation_and_yaw(
+    rollout_inputs,
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    reference[:, :3] = [1.0, 0.0, 0.0]
+    yaw = np.sqrt(0.5)
+    states[0, :, :3] = [2.0, 4.0, 0.0]
+    states[0, :, 3:7] = [yaw, 0.0, 0.0, yaw]
+    states[0, :, 29:32] = [2.0, 3.0, 0.0]
+    states[0, :, 32:36] = [yaw, 0.0, 0.0, yaw]
+    states[1, :, :3] = [2.1, 4.0, 0.0]
+    states[1, :, 3:7] = [yaw, 0.0, 0.0, yaw]
+    states[1, :, 29:32] = [2.0, 3.0, 0.0]
+    states[1, :, 32:36] = [yaw, 0.0, 0.0, yaw]
+    sensors[:, :, 6] = 1.0
+    sensors[:, :, 8] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=0,
+        target_name="inserted_held",
+    )
+
+    assert result["target_frame"] == "mug_relative_to_tree"
+    assert result["keyframe_position_error_m"][0] == pytest.approx(
+        0.0, abs=1.0e-6
+    )
+    assert result["keyframe_rotation_error_rad"][0] == pytest.approx(0.0)
+    assert result["keyframe_position_error_m"][1] == pytest.approx(0.1)
