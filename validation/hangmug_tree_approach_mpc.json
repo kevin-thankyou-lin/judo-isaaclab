@@ -1,0 +1,58 @@
+{
+  "best_sample_reached_keyframe": true,
+  "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+  "gear_dc_study_revision": "3ac7d8f1d1745aac758192f62cebc4fba586d60a",
+  "judo_revision": "96d6f451f482d68c903e17b223577b752319b4d1",
+  "optimizer": {
+    "candidate_repeats": 2,
+    "duplicate_nominal": 4,
+    "max_action_delta": 0.05,
+    "num_elites": 4,
+    "num_iterations": 3,
+    "num_rollouts": 16,
+    "sigma_max": 0.02,
+    "sigma_min": 0.002,
+    "type": "judo.optimizers.cem.CrossEntropyMethod"
+  },
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 2,
+    "best_rollout": 12,
+    "improvement": 0.2846111059188843,
+    "nominal_reward_mean": 8.092911839485168,
+    "nominal_reward_std": 0.07089889049530029
+  },
+  "repeat_evaluation": {
+    "best_sample": {
+      "count": 6,
+      "keyframe_left_grasp_count": 0,
+      "keyframe_position_error_m_max": 0.0046897996217012405,
+      "keyframe_position_error_m_mean": 0.004316837061196566,
+      "keyframe_right_grasp_count": 6,
+      "keyframe_rotation_error_rad_mean": 0.059799566864967346,
+      "keyframe_stage2_count": 6,
+      "keyframe_target_success_count": 6,
+      "post_keyframe_target_fraction_mean": 1.0
+    },
+    "nominal": {
+      "count": 5,
+      "keyframe_left_grasp_count": 0,
+      "keyframe_position_error_m_mean": 0.005379173904657364,
+      "keyframe_right_grasp_count": 5,
+      "keyframe_rotation_error_rad_mean": 0.0491308756172657,
+      "keyframe_stage2_count": 5,
+      "keyframe_target_success_count": 5,
+      "post_keyframe_target_fraction_mean": 1.0
+    }
+  },
+  "source": {
+    "checkpoint_state": 110,
+    "control_hz": 30,
+    "history_steps": 490,
+    "horizon": 43,
+    "start_state": 600,
+    "target_name": "tree_approach",
+    "target_state": 639
+  },
+  "status": "passed"
+}

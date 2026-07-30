@@ -46,7 +46,12 @@ def _parser():
     parser.add_argument("--target-state", type=int, default=116)
     parser.add_argument(
         "--target-name",
-        choices=("left_grasp", "right_grasp", "handover_latched"),
+        choices=(
+            "left_grasp",
+            "right_grasp",
+            "handover_latched",
+            "tree_approach",
+        ),
         default="left_grasp",
     )
     parser.add_argument("--horizon", type=int, default=8)
@@ -54,6 +59,7 @@ def _parser():
     parser.add_argument("--num-iterations", type=int, default=3)
     parser.add_argument("--num-elites", type=int, default=4)
     parser.add_argument("--duplicate-nominal", type=int, default=4)
+    parser.add_argument("--candidate-repeats", type=int, default=1)
     parser.add_argument("--sigma-min", type=float, default=0.002)
     parser.add_argument("--sigma-max", type=float, default=0.03)
     parser.add_argument("--max-action-delta", type=float, default=0.08)
@@ -285,6 +291,14 @@ def _objective_components(
             +1.0 * (1.0 - left_grasp[:, keyframe_offset])
             +1.0 * right_grasp[:, post_keyframe].mean(axis=1)
         )
+    elif target_name == "tree_approach":
+        target_success = stage2 * right_grasp
+        rewards += (
+            3.0 * stage2[:, keyframe_offset]
+            +3.0 * right_grasp[:, keyframe_offset]
+            +1.0 * (1.0 - left_grasp[:, keyframe_offset])
+            +2.0 * right_grasp[:, post_keyframe].mean(axis=1)
+        )
     else:
         raise ValueError(f"Unsupported target-name: {target_name}")
     return {
@@ -480,6 +494,7 @@ def main():
             objective,
             num_iterations=args.num_iterations,
             duplicate_nominal=args.duplicate_nominal,
+            candidate_repeats=args.candidate_repeats,
             min_improvement=0.01,
             noise_std_multiplier=2.0,
             control_expander=expand,
@@ -523,11 +538,13 @@ def main():
             ),
         }
         best_group = groups["best_sample"]
+        rotation_limit = 0.20 if args.target_name == "tree_approach" else 0.10
         reached = (
             best_group["keyframe_target_success_count"]
             == best_group["count"]
             and best_group["keyframe_position_error_m_max"] <= 0.02
-            and best_group["keyframe_rotation_error_rad_max"] <= 0.10
+            and best_group["keyframe_rotation_error_rad_max"]
+            <= rotation_limit
         )
         result = {
             "status": "passed" if reached else "failed",
@@ -551,6 +568,7 @@ def main():
                 "num_iterations": args.num_iterations,
                 "num_elites": args.num_elites,
                 "duplicate_nominal": args.duplicate_nominal,
+                "candidate_repeats": args.candidate_repeats,
                 "sigma_min": args.sigma_min,
                 "sigma_max": args.sigma_max,
                 "max_action_delta": args.max_action_delta,

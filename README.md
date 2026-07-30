@@ -191,3 +191,13 @@ python examples/render_hangmug_mpc_comparison.py \
 
 The checked-in video receipts verify dynamic 1280x480 H.264 output, full decode,
 terminal grasp state, and origin-relative mug divergence.
+
+For the longer pre-tree transport window, each sampled control is evaluated in
+two clones and assigned their mean reward (`candidate_repeats=2`). From state
+600 to the tree-approach keyframe at state 639, this robust CEM run preserves
+right grasp and latched handover in all six repeats while reducing mean target
+position error from 5.379 mm to 4.317 mm. The parallel video finishes with
+2.036 mm origin-relative separation between nominal and MPC.
+
+See `validation/hangmug_tree_approach_mpc.json` and
+`validation/hangmug_tree_approach_mpc_video.json`.

@@ -61,3 +61,25 @@ def test_video_quaternion_error_is_sign_invariant():
     quaternion = np.array([0.5, 0.5, 0.5, 0.5])
 
     assert _quaternion_error(quaternion, -quaternion) == pytest.approx(0.0)
+
+
+def test_tree_approach_requires_latched_handover_and_right_grasp(
+    rollout_inputs,
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    sensors[0, :, 6] = 1.0
+    sensors[0, :, 8] = 1.0
+    sensors[1, :, 6] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=0,
+        target_name="tree_approach",
+    )
+
+    assert result["keyframe_target_success"].tolist() == [True, False]
+    assert result["rewards"][0] > result["rewards"][1]

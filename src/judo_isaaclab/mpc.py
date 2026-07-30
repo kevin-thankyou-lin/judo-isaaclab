@@ -42,6 +42,7 @@ class JudoIsaacLabMPC:
         control_expander: ControlExpander | None = None,
         num_iterations: int = 1,
         duplicate_nominal: int = 2,
+        candidate_repeats: int = 1,
         min_improvement: float = 0.0,
         noise_std_multiplier: float = 2.0,
     ) -> None:
@@ -49,12 +50,22 @@ class JudoIsaacLabMPC:
             raise ValueError("num_iterations must be positive")
         if duplicate_nominal < 1 or duplicate_nominal > optimizer.num_rollouts:
             raise ValueError("duplicate_nominal must fit within num_rollouts")
+        if (
+            candidate_repeats < 1
+            or optimizer.num_rollouts % candidate_repeats
+            or duplicate_nominal % candidate_repeats
+        ):
+            raise ValueError(
+                "candidate_repeats must divide both num_rollouts and "
+                "duplicate_nominal"
+            )
         self.optimizer = optimizer
         self.backend = backend
         self.objective = objective
         self.control_expander = control_expander or (lambda knots: knots)
         self.num_iterations = num_iterations
         self.duplicate_nominal = duplicate_nominal
+        self.candidate_repeats = candidate_repeats
         self.min_improvement = min_improvement
         self.noise_std_multiplier = noise_std_multiplier
 
@@ -88,6 +99,13 @@ class JudoIsaacLabMPC:
                 self.optimizer.sample_control_knots(nominal), dtype=np.float64
             )
             sampled[: self.duplicate_nominal] = nominal
+            if self.candidate_repeats > 1:
+                grouped = sampled.reshape(
+                    -1,
+                    self.candidate_repeats,
+                    *sampled.shape[1:],
+                )
+                grouped[:] = grouped[:, :1]
             controls = np.asarray(self.control_expander(sampled), dtype=np.float32)
             states, sensors, _ = self.backend.rollout(
                 np.empty(0, dtype=np.float64), controls
@@ -99,6 +117,13 @@ class JudoIsaacLabMPC:
                 raise ValueError(
                     "objective must return one reward per rollout, got "
                     f"{rewards.shape}"
+                )
+            if self.candidate_repeats > 1:
+                grouped_rewards = rewards.reshape(
+                    -1, self.candidate_repeats
+                )
+                grouped_rewards[:] = grouped_rewards.mean(
+                    axis=1, keepdims=True
                 )
             if iteration == 0:
                 starting_nominal_rewards = rewards[

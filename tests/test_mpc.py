@@ -111,3 +111,20 @@ def test_multiple_iterations_compare_against_starting_nominal():
     assert plan.best_rollout == 2
     np.testing.assert_allclose(plan.action, [3.0])
     np.testing.assert_allclose(plan.best_sampled_knots, [[3.0], [3.0]])
+
+
+def test_candidate_repeats_average_clone_scores():
+    objective = lambda states, sensors, controls: np.array([0.0, 2.0, 1.0, 5.0])
+    mpc = JudoIsaacLabMPC(
+        FakeOptimizer(),
+        FakeBackend(),
+        objective,
+        duplicate_nominal=2,
+        candidate_repeats=2,
+        min_improvement=0.5,
+    )
+
+    plan = mpc.plan(CONTEXT, np.zeros((2, 1)))
+
+    np.testing.assert_allclose(plan.rewards, [1.0, 1.0, 3.0, 3.0])
+    np.testing.assert_allclose(plan.action, [1.0])
