@@ -52,6 +52,7 @@ def _parser():
             "handover_latched",
             "tree_approach",
             "inserted_held",
+            "hang_complete",
         ),
         default="left_grasp",
     )
@@ -79,6 +80,40 @@ def _parser():
         type=float,
         default=0.0,
         help="Rotate the planning tree about world Z.",
+    )
+    parser.add_argument(
+        "--source-branch-points",
+        type=float,
+        nargs=9,
+        metavar=(
+            "X0",
+            "Y0",
+            "Z0",
+            "X1",
+            "Y1",
+            "Z1",
+            "X2",
+            "Y2",
+            "Z2",
+        ),
+        help="Three source-tree-local points defining the matched branch frame.",
+    )
+    parser.add_argument(
+        "--target-branch-points",
+        type=float,
+        nargs=9,
+        metavar=(
+            "X0",
+            "Y0",
+            "Z0",
+            "X1",
+            "Y1",
+            "Z1",
+            "X2",
+            "Y2",
+            "Z2",
+        ),
+        help="The three corresponding target-tree-local branch points.",
     )
     parser.add_argument("--seed", type=int, default=20260730)
     parser.add_argument(
@@ -297,6 +332,49 @@ def _quat_rotate(quaternion, vector):
     )
 
 
+def _quat_to_matrix(quaternion):
+    quaternion = quaternion / np.linalg.norm(
+        quaternion, axis=-1, keepdims=True
+    )
+    w, x, y, z = np.moveaxis(quaternion, -1, 0)
+    return np.stack(
+        (
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ),
+        axis=-1,
+    ).reshape(quaternion.shape[:-1] + (3, 3))
+
+
+def _rotation_matrix_error(actual, target):
+    relative = np.einsum("...ji,...jk->...ik", actual, target)
+    cosine = (np.trace(relative, axis1=-2, axis2=-1) - 1.0) / 2.0
+    return np.arccos(np.clip(cosine, -1.0, 1.0))
+
+
+def _branch_frame(points):
+    points = np.asarray(points, dtype=np.float32).reshape(3, 3)
+    x_axis = points[1] - points[0]
+    x_norm = np.linalg.norm(x_axis)
+    if x_norm < 1.0e-6:
+        raise ValueError("First two branch correspondence points must differ")
+    x_axis /= x_norm
+    z_axis = np.cross(x_axis, points[2] - points[0])
+    z_norm = np.linalg.norm(z_axis)
+    if z_norm < 1.0e-6:
+        raise ValueError("Branch correspondence points must be non-collinear")
+    z_axis /= z_norm
+    y_axis = np.cross(z_axis, x_axis)
+    return points[0], np.stack((x_axis, y_axis, z_axis), axis=-1)
+
+
 def _mug_in_tree_frame(rows):
     mug_position = rows[..., :3]
     mug_quaternion = rows[..., 3:7]
@@ -316,6 +394,21 @@ def _mug_in_tree_frame(rows):
     )
 
 
+def _mug_in_branch_frame(rows, points):
+    mug_position, mug_quaternion = _mug_in_tree_frame(rows)
+    origin, branch_rotation = _branch_frame(points)
+    position = np.einsum(
+        "ij,...j->...i",
+        branch_rotation.T,
+        mug_position - origin,
+    )
+    mug_rotation = _quat_to_matrix(mug_quaternion)
+    rotation = np.einsum(
+        "ij,...jk->...ik", branch_rotation.T, mug_rotation
+    )
+    return position, rotation
+
+
 def _objective_components(
     states,
     sensors,
@@ -325,6 +418,8 @@ def _objective_components(
     nominal,
     keyframe_offset,
     target_name,
+    source_branch_points=None,
+    target_branch_points=None,
 ):
     world_position_error = np.linalg.norm(
         states[:, :, :3] - reference[None, :, :3], axis=-1
@@ -332,7 +427,28 @@ def _objective_components(
     world_rotation_error = _quaternion_error(
         states[:, :, 3:7], reference[None, :, 3:7]
     )
-    if target_name in ("tree_approach", "inserted_held"):
+    tree_target = target_name in (
+        "tree_approach",
+        "inserted_held",
+        "hang_complete",
+    )
+    if tree_target and source_branch_points is not None:
+        relative_position, relative_rotation = _mug_in_branch_frame(
+            states, target_branch_points
+        )
+        reference_position, reference_rotation = _mug_in_branch_frame(
+            reference, source_branch_points
+        )
+        position_error = np.linalg.norm(
+            relative_position - reference_position[None, :, :],
+            axis=-1,
+        )
+        rotation_error = _rotation_matrix_error(
+            relative_rotation,
+            reference_rotation[None, :, :, :],
+        )
+        target_frame = "mug_relative_to_corresponded_branch"
+    elif tree_target:
         relative_position, relative_quaternion = _mug_in_tree_frame(states)
         reference_position, reference_quaternion = _mug_in_tree_frame(reference)
         position_error = np.linalg.norm(
@@ -340,10 +456,9 @@ def _objective_components(
             axis=-1,
         )
         rotation_error = _quaternion_error(
-            relative_quaternion,
-            reference_quaternion[None, :, :],
+            relative_quaternion, reference_quaternion[None, :, :]
         )
-        target_frame = "mug_relative_to_tree"
+        target_frame = "mug_relative_to_tree_root"
     else:
         position_error = world_position_error
         rotation_error = world_rotation_error
@@ -375,6 +490,7 @@ def _objective_components(
     right_grasp = sensors[:, :, 6]
     stage1 = sensors[:, :, 7]
     stage2 = sensors[:, :, 8]
+    stage3 = sensors[:, :, 9]
     post_keyframe = slice(keyframe_offset, None)
     rewards = (
         -80.0 * position_error[:, keyframe_offset]
@@ -421,6 +537,13 @@ def _objective_components(
                 -40.0 * position_error[:, keyframe_offset]
                 -4.0 * rotation_error[:, keyframe_offset]
             )
+    elif target_name == "hang_complete":
+        target_success = stage3
+        rewards += (
+            8.0 * stage3[:, keyframe_offset]
+            +4.0 * stage3[:, post_keyframe].mean(axis=1)
+            +2.0 * stage2[:, keyframe_offset]
+        )
     else:
         raise ValueError(f"Unsupported target-name: {target_name}")
     return {
@@ -472,8 +595,28 @@ def _group_summary(name, rows, components):
     }
 
 
+def _subtask_reached(group):
+    return group["keyframe_target_success_count"] == group["count"]
+
+
 def main():
     args = _parser()
+    if (args.source_branch_points is None) != (
+        args.target_branch_points is None
+    ):
+        raise ValueError(
+            "source-branch-points and target-branch-points must be supplied together"
+        )
+    source_branch_points = (
+        None
+        if args.source_branch_points is None
+        else np.asarray(args.source_branch_points, dtype=np.float32).reshape(3, 3)
+    )
+    target_branch_points = (
+        None
+        if args.target_branch_points is None
+        else np.asarray(args.target_branch_points, dtype=np.float32).reshape(3, 3)
+    )
     keyframe_offset = args.target_state - args.start_state - 1
     if not 0 <= keyframe_offset < args.horizon:
         raise ValueError("target-state must fall inside the rollout horizon")
@@ -586,6 +729,8 @@ def main():
                 nominal=nominal,
                 keyframe_offset=keyframe_offset,
                 target_name=args.target_name,
+                source_branch_points=source_branch_points,
+                target_branch_points=target_branch_points,
             )
             iteration_summaries.append(
                 {
@@ -650,6 +795,8 @@ def main():
             nominal=nominal,
             keyframe_offset=keyframe_offset,
             target_name=args.target_name,
+            source_branch_points=source_branch_points,
+            target_branch_points=target_branch_points,
         )
         groups = {
             "nominal": _group_summary(
@@ -663,18 +810,7 @@ def main():
             ),
         }
         best_group = groups["best_sample"]
-        rotation_limit = (
-            0.20
-            if args.target_name in ("tree_approach", "inserted_held")
-            else 0.10
-        )
-        reached = (
-            best_group["keyframe_target_success_count"]
-            == best_group["count"]
-            and best_group["keyframe_position_error_m_max"] <= 0.02
-            and best_group["keyframe_rotation_error_rad_max"]
-            <= rotation_limit
-        )
+        reached = _subtask_reached(best_group)
         result = {
             "status": "passed" if reached else "failed",
             "source": {
@@ -688,17 +824,23 @@ def main():
                 "start_state": args.start_state,
                 "target_state": args.target_state,
                 "target_name": args.target_name,
-                "target_frame": (
-                    "mug_relative_to_tree"
-                    if args.target_name
-                    in ("tree_approach", "inserted_held")
-                    else "environment_origin"
-                ),
+                "target_frame": evaluation["target_frame"],
+                "acceptance": "task_subtask_success",
                 "right_gripper_held_through_target": (
                     args.target_name == "inserted_held"
                 ),
                 "tree_offset_xyz_m": list(args.tree_offset_xyz),
                 "tree_yaw_deg": args.tree_yaw_deg,
+                "source_branch_points_tree_local": (
+                    None
+                    if source_branch_points is None
+                    else source_branch_points.tolist()
+                ),
+                "target_branch_points_tree_local": (
+                    None
+                    if target_branch_points is None
+                    else target_branch_points.tolist()
+                ),
                 "horizon": args.horizon,
                 "control_hz": 30,
             },
@@ -748,6 +890,16 @@ def main():
                     args.tree_offset_xyz, dtype=np.float32
                 ),
                 tree_yaw_deg=np.float32(args.tree_yaw_deg),
+                source_branch_points=(
+                    np.empty((0, 3), dtype=np.float32)
+                    if source_branch_points is None
+                    else source_branch_points
+                ),
+                target_branch_points=(
+                    np.empty((0, 3), dtype=np.float32)
+                    if target_branch_points is None
+                    else target_branch_points
+                ),
             )
         print(
             "JUDO_ISAACLAB_HANGMUG_KEYFRAME_MPC="

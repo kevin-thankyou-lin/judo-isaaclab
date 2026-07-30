@@ -223,3 +223,29 @@ separation between nominal and MPC.
 
 See `validation/hangmug_inserted_held_moved_tree_mpc.json` and
 `validation/hangmug_inserted_held_moved_tree_mpc_video.json`.
+
+For trees whose branch geometry differs, pass three aligned non-collinear
+points in each tree's local frame:
+
+```bash
+--source-branch-points X0 Y0 Z0 X1 Y1 Z1 X2 Y2 Z2 \
+--target-branch-points X0 Y0 Z0 X1 Y1 Z1 X2 Y2 Z2
+```
+
+The mug target is transferred from the source branch frame to the corresponding
+target branch frame. This supports, for example, a branch that is higher
+relative to the new tree root; the unit suite verifies a 20 cm local branch
+height change. Geometric errors are optimization and diagnostic signals only.
+Pass/fail uses the selected task subgoal. In particular, `hang_complete`
+requires IsaacLab's latched stage-3 success after both grippers release and the
+mug remains stable for 30 steps.
+
+The end-to-end simulator proof moves the physical tree by `(10, -5, 20)` mm and
+rotates it by `1` degree, uses explicit matched branch points, and plans from
+state 600 through stable hang state 774. All 16 sampled candidates and all six
+best-sample repeats complete the hang. The video confirms both nominal and MPC
+lanes release the mug and latch stage 3; terminal mug divergence is 1.220 mm
+and 0.0496 rad.
+
+See `validation/hangmug_corresponded_branch_hang_complete_mpc.json` and
+`validation/hangmug_corresponded_branch_hang_complete_mpc_video.json`.

@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
-from hangmug_grasp_keyframe_mpc import _objective_components
+from hangmug_grasp_keyframe_mpc import _objective_components, _subtask_reached
 from render_hangmug_mpc_comparison import _quaternion_error
 
 
@@ -30,6 +30,7 @@ def rollout_inputs():
         ("left_grasp", 2),
         ("right_grasp", 6),
         ("handover_latched", 8),
+        ("hang_complete", 9),
     ),
 )
 def test_target_success_selects_expected_sensor(
@@ -115,9 +116,53 @@ def test_tree_relative_target_is_invariant_to_tree_translation_and_yaw(
         target_name="inserted_held",
     )
 
-    assert result["target_frame"] == "mug_relative_to_tree"
+    assert result["target_frame"] == "mug_relative_to_tree_root"
     assert result["keyframe_position_error_m"][0] == pytest.approx(
         0.0, abs=1.0e-6
     )
     assert result["keyframe_rotation_error_rad"][0] == pytest.approx(0.0)
     assert result["keyframe_position_error_m"][1] == pytest.approx(0.1)
+
+
+def test_branch_correspondence_adapts_to_a_taller_branch(rollout_inputs):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    source_points = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    )
+    target_points = source_points + [0.0, 0.0, 0.2]
+    reference[:, :3] = [0.0, 0.0, 0.5]
+    states[0, :, :3] = [0.0, 0.0, 0.7]
+    states[1, :, :3] = [0.0, 0.0, 0.5]
+    sensors[:, :, 6] = 1.0
+    sensors[:, :, 8] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=0,
+        target_name="inserted_held",
+        source_branch_points=source_points,
+        target_branch_points=target_points,
+    )
+
+    assert result["target_frame"] == "mug_relative_to_corresponded_branch"
+    assert result["keyframe_position_error_m"][0] == pytest.approx(
+        0.0, abs=1.0e-6
+    )
+    assert result["keyframe_position_error_m"][1] == pytest.approx(0.2)
+
+
+def test_acceptance_depends_only_on_subtask_completion():
+    group = {
+        "count": 6,
+        "keyframe_target_success_count": 6,
+        "keyframe_position_error_m_max": 100.0,
+        "keyframe_rotation_error_rad_max": np.pi,
+    }
+
+    assert _subtask_reached(group)
+    group["keyframe_target_success_count"] = 5
+    assert not _subtask_reached(group)

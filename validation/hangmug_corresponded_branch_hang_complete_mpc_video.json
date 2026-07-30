@@ -1,0 +1,51 @@
+{
+  "status": "passed",
+  "configuration": {
+    "physics": "parallel two-clone CPU PhysX scene",
+    "left_lane": "source-demo nominal",
+    "right_lane": "Judo MPC best sample",
+    "checkpoint_state": 110,
+    "history_steps": 490,
+    "start_state": 600,
+    "target_state": 774,
+    "target_name": "hang_complete",
+    "tree_offset_xyz_m": [
+      0.01,
+      -0.005,
+      0.02
+    ],
+    "tree_yaw_deg": 1.0,
+    "candidate_horizon": 174
+  },
+  "terminal": {
+    "left_grasp": [false, false],
+    "right_grasp": [false, false],
+    "stage2": [true, true],
+    "stage3": [true, true]
+  },
+  "nominal_vs_mpc_mug_divergence": {
+    "translation_m_max": 0.004929421309006806,
+    "translation_m_terminal": 0.001220037226722664,
+    "rotation_rad_max": 0.06654127937092448,
+    "rotation_rad_terminal": 0.049580118518228404
+  },
+  "video": {
+    "path": "/tmp/hangmug_corresponded_branch_hang_complete_nominal_vs_mpc.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 480,
+    "duration_s": 11.667,
+    "frame_count": 175,
+    "size_bytes": 1012538,
+    "sha256": "9fa039144a17a574ce8a6303a6d14d1e583748f030ebba518bd03ad733329f51"
+  },
+  "checks": {
+    "h264_nonempty": true,
+    "fully_decodable": true,
+    "dynamic_frames": true,
+    "parallel_lanes": true,
+    "subtask_complete": true,
+    "visually_verified": true,
+    "both_mugs_released_and_hanging": true
+  }
+}

@@ -81,6 +81,18 @@ def _load_inputs(args, device):
         if "tree_yaw_deg" in controls.files
         else 0.0
     )
+    source_branch_points = (
+        np.asarray(controls["source_branch_points"], dtype=np.float32)
+        if "source_branch_points" in controls.files
+        and controls["source_branch_points"].size
+        else None
+    )
+    target_branch_points = (
+        np.asarray(controls["target_branch_points"], dtype=np.float32)
+        if "target_branch_points" in controls.files
+        and controls["target_branch_points"].size
+        else None
+    )
     if nominal.shape != best.shape or nominal.ndim != 2:
         raise ValueError(
             f"Control shapes must match (horizon, action_dim): "
@@ -130,6 +142,16 @@ def _load_inputs(args, device):
         "target_name": target_name,
         "tree_offset_xyz": tree_offset_xyz.tolist(),
         "tree_yaw_deg": tree_yaw_deg,
+        "source_branch_points": (
+            None
+            if source_branch_points is None
+            else source_branch_points.tolist()
+        ),
+        "target_branch_points": (
+            None
+            if target_branch_points is None
+            else target_branch_points.tolist()
+        ),
     }
 
 
@@ -150,6 +172,7 @@ def _sample(env, step):
         "left_grasp": left.detach().cpu().tolist(),
         "right_grasp": right.detach().cpu().tolist(),
         "stage2": env.stage2_success.detach().cpu().tolist(),
+        "stage3": env.stage3_success.detach().cpu().tolist(),
         "mug_pose": pose.detach().cpu().tolist(),
     }
 
@@ -182,6 +205,7 @@ def _write_frame(env, sample, frame_index, frames_dir, target_name):
                 f"right grasp: {sample['right_grasp'][env_index]}"
             ),
             f"handover latched: {sample['stage2'][env_index]}",
+            f"hang latched: {sample['stage3'][env_index]}",
         ]
         for index, line in enumerate(lines):
             color = (70, 230, 255) if index == 0 else (245, 245, 245)
@@ -418,12 +442,19 @@ def main():
                 "target_name": inputs["target_name"],
                 "tree_offset_xyz_m": inputs["tree_offset_xyz"],
                 "tree_yaw_deg": inputs["tree_yaw_deg"],
+                "source_branch_points_tree_local": inputs[
+                    "source_branch_points"
+                ],
+                "target_branch_points_tree_local": inputs[
+                    "target_branch_points"
+                ],
                 "candidate_horizon": int(inputs["candidate"].shape[1]),
             },
             "terminal": {
                 "left_grasp": traces[-1]["left_grasp"],
                 "right_grasp": traces[-1]["right_grasp"],
                 "stage2": traces[-1]["stage2"],
+                "stage3": traces[-1]["stage3"],
             },
             "nominal_vs_mpc_mug_divergence": {
                 "translation_m_max": float(translation.max()),
@@ -440,8 +471,21 @@ def main():
             },
             "video": video,
         }
+        if inputs["target_name"] == "left_grasp":
+            subtask_complete = all(traces[-1]["left_grasp"])
+        elif inputs["target_name"] == "right_grasp":
+            subtask_complete = all(traces[-1]["right_grasp"])
+        elif inputs["target_name"] == "handover_latched":
+            subtask_complete = all(traces[-1]["stage2"])
+        elif inputs["target_name"] in ("tree_approach", "inserted_held"):
+            subtask_complete = all(traces[-1]["stage2"]) and all(
+                traces[-1]["right_grasp"]
+            )
+        else:
+            subtask_complete = all(traces[-1]["stage3"])
         checks = {
             "parallel_lanes": env.num_envs == 2,
+            "subtask_complete": subtask_complete,
             "dynamic_frames": (
                 result["render"]["mean_pixel_range"][1]
                 != result["render"]["mean_pixel_range"][0]
