@@ -125,3 +125,15 @@ python examples/putpot_identical_rollout_smoke.py
 The checked-in result is
 `validation/putpot_backend_smoke.json`: all eight clones retained both grasps,
 with maximum internal pot spread of 0.848 mm and 0.002679 rad.
+
+`examples/hangmug_near_contact_smoke.py` exercises a tighter branch boundary.
+It starts from contact-free HangMug state 110, replays six shared actions, and
+forms contact, grasp, and friction assistance at action 115 in every clone.
+All eight clones retain the mug over the eight-action candidate horizon:
+
+- maximum internal mug spread: 0.172 mm and 0.001803 rad;
+- maximum mug drop relative to the gripper: 0.276 mm; and
+- maximum terminal divergence from the recorded main trajectory: 0.930 mm and
+  0.006407 rad.
+
+The exact receipt is `validation/hangmug_near_contact_smoke.json`.

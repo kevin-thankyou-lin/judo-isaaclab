@@ -10,6 +10,7 @@ from judo_isaaclab.types import BranchContext, RolloutDiagnostics
 
 Encoder = Callable[[Any], np.ndarray]
 ActionAdapter = Callable[[np.ndarray, Any], Any]
+StepObserver = Callable[[Any, str, int], None]
 
 
 def _default_action_adapter(actions: np.ndarray, env: Any) -> Any:
@@ -45,6 +46,7 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         *,
         sensor_encoder: Encoder | None = None,
         action_adapter: ActionAdapter | None = None,
+        step_observer: StepObserver | None = None,
     ) -> None:
         self.runner = runner
         self.env = runner.env
@@ -52,8 +54,13 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         self.state_encoder = state_encoder
         self.sensor_encoder = sensor_encoder
         self.action_adapter = action_adapter or _default_action_adapter
+        self.step_observer = step_observer
         self.context: BranchContext | None = None
         self.last_diagnostics: RolloutDiagnostics | None = None
+
+    def _observe(self, phase: str, step_index: int) -> None:
+        if self.step_observer is not None:
+            self.step_observer(self.env, phase, step_index)
 
     def set_branch_context(self, context: BranchContext) -> None:
         """Set the checkpoint and shared history for subsequent rollouts."""
@@ -114,15 +121,18 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
             deformable_policy=self.context.deformable_policy,
             free_body_velocity_fallback=self.context.free_body_velocity_fallback,
         )
-        for action in history:
+        self._observe("reset", -1)
+        for step, action in enumerate(history):
             self._step(
                 np.broadcast_to(action, (self.num_threads, action.size)).copy()
             )
+            self._observe("history", step)
 
         states = []
         sensors = []
         for step in range(candidates.shape[1]):
             self._step(candidates[:, step, :])
+            self._observe("candidate", step)
             states.append(self._encode(self.state_encoder, "state_encoder"))
             sensors.append(self._encode(self.sensor_encoder, "sensor_encoder"))
 

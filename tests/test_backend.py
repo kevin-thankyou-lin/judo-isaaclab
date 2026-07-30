@@ -100,3 +100,35 @@ def test_encoder_shape_is_checked():
     )
     with pytest.raises(ValueError, match="state_encoder"):
         backend.rollout(np.empty(0), np.zeros((3, 1, 1)))
+
+
+def test_step_observer_sees_reset_history_and_candidates():
+    events = []
+    runner = FakeRunner(2)
+    backend = HistoryConditionedIsaacLabBackend(
+        runner,
+        state_encoder=lambda env: env.state.copy(),
+        action_adapter=lambda actions, env: actions,
+        step_observer=lambda env, phase, step: events.append(
+            (phase, step, env.state.copy())
+        ),
+    )
+    backend.set_branch_context(
+        BranchContext(
+            checkpoint_state={"value": 4.0},
+            action_history=np.array([[1.0], [2.0]], dtype=np.float32),
+            rigid_object_states={},
+        )
+    )
+
+    backend.rollout(np.empty(0), np.zeros((2, 2, 1), dtype=np.float32))
+
+    assert [(phase, step) for phase, step, _ in events] == [
+        ("reset", -1),
+        ("history", 0),
+        ("history", 1),
+        ("candidate", 0),
+        ("candidate", 1),
+    ]
+    np.testing.assert_allclose(events[0][2], [[4.0], [4.0]])
+    np.testing.assert_allclose(events[2][2], [[7.0], [7.0]])
