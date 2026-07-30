@@ -20,8 +20,10 @@ class MPCPlan:
     action: np.ndarray
     optimized_knots: np.ndarray
     sampled_knots: np.ndarray
+    best_sampled_knots: np.ndarray
     rewards: np.ndarray
     best_rollout: int
+    best_iteration: int
     accepted_update: bool
     improvement: float
     nominal_reward_mean: float
@@ -76,8 +78,12 @@ class JudoIsaacLabMPC:
         starting_nominal = nominal.copy()
         sampled = np.empty((0, 0, 0))
         rewards = np.empty(0)
-        nominal_rewards = np.empty(0)
-        for _ in range(self.num_iterations):
+        starting_nominal_rewards = np.empty(0)
+        best_sampled_knots = starting_nominal.copy()
+        best_reward = -np.inf
+        best_rollout = 0
+        best_iteration = 0
+        for iteration in range(self.num_iterations):
             sampled = np.asarray(
                 self.optimizer.sample_control_knots(nominal), dtype=np.float64
             )
@@ -94,25 +100,37 @@ class JudoIsaacLabMPC:
                     "objective must return one reward per rollout, got "
                     f"{rewards.shape}"
                 )
-            nominal_rewards = rewards[: self.duplicate_nominal]
+            if iteration == 0:
+                starting_nominal_rewards = rewards[
+                    : self.duplicate_nominal
+                ].copy()
+            iteration_best = int(np.argmax(rewards))
+            if float(rewards[iteration_best]) > best_reward:
+                best_reward = float(rewards[iteration_best])
+                best_sampled_knots = sampled[iteration_best].copy()
+                best_rollout = iteration_best
+                best_iteration = iteration
             nominal = self.optimizer.update_nominal_knots(sampled, rewards)
 
-        best_rollout = int(np.argmax(rewards))
-        nominal_mean = float(nominal_rewards.mean())
-        nominal_std = float(nominal_rewards.std())
-        improvement = float(rewards[best_rollout] - nominal_mean)
+        nominal_mean = float(starting_nominal_rewards.mean())
+        nominal_std = float(starting_nominal_rewards.std())
+        improvement = float(best_reward - nominal_mean)
         threshold = max(
             self.min_improvement,
             self.noise_std_multiplier * nominal_std,
         )
         accepted = improvement > threshold
-        action = nominal[0] if accepted else starting_nominal[0]
+        action = (
+            best_sampled_knots[0] if accepted else starting_nominal[0]
+        )
         return MPCPlan(
             action=np.asarray(action).copy(),
             optimized_knots=np.asarray(nominal).copy(),
             sampled_knots=sampled.copy(),
+            best_sampled_knots=best_sampled_knots,
             rewards=rewards.copy(),
             best_rollout=best_rollout,
+            best_iteration=best_iteration,
             accepted_update=accepted,
             improvement=improvement,
             nominal_reward_mean=nominal_mean,

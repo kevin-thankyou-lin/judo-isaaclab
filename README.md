@@ -142,3 +142,24 @@ The same test also passes with a 32-action candidate horizon. All clones retain
 the grasp; internal spread remains 0.244 mm and 0.005684 rad, while terminal
 recorded-main divergence grows to 10.679 mm and 0.010304 rad. See
 `validation/hangmug_near_contact_h32.json`.
+
+## Keyframe MPC starter
+
+`examples/extract_hangmug_keyframes.py` replays the canonical source demo and
+extracts simulator-verified task boundaries: grasp, pick, handover, tree
+approach, release, and stable hang. The resulting timeline is checked in at
+`validation/hangmug_source_keyframes.json`.
+
+`examples/hangmug_grasp_keyframe_mpc.py` then performs actual Judo CEM sampling,
+not duplicate-action validation. The checked experiments use 16 rollouts and
+three optimizer rounds from contact-free state 110:
+
+- grasp target at state 116: all candidates grasped; the accepted best sample
+  reached 0.350 mm mean position error;
+- pick target at state 148: the accepted best sample reduced mean position
+  error from 10.602 mm to 1.015 mm while retaining the grasp in every repeat.
+
+The multi-round acceptance gate compares the best evaluated sample across all
+rounds with duplicate evaluations of the original nominal. This avoids
+incorrectly rejecting a useful accumulated CEM update merely because the final
+round has converged close to its already-improved nominal.

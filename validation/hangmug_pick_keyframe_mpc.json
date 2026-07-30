@@ -1,0 +1,76 @@
+{
+  "best_sample_reached_keyframe": true,
+  "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+  "gear_dc_study_revision": "3ac7d8f1d1745aac758192f62cebc4fba586d60a",
+  "iteration_summaries": [
+    {
+      "best_keyframe_position_error_m": 0.002598964609205723,
+      "iteration": 0,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.601555585861206
+    },
+    {
+      "best_keyframe_position_error_m": 0.0011278585297986865,
+      "iteration": 1,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.768442153930664
+    },
+    {
+      "best_keyframe_position_error_m": 0.0008989621419459581,
+      "iteration": 2,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.773732900619507
+    }
+  ],
+  "optimizer": {
+    "duplicate_nominal": 4,
+    "num_elites": 4,
+    "num_iterations": 3,
+    "num_rollouts": 16,
+    "type": "judo.optimizers.cem.CrossEntropyMethod"
+  },
+  "judo_revision": "96d6f451f482d68c903e17b223577b752319b4d1",
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 2,
+    "best_rollout": 8,
+    "first_action_delta_l2": 0.028274928329267326,
+    "improvement": 0.7656216621398926,
+    "nominal_reward_mean": 3.0081112384796143,
+    "nominal_reward_std": 0.007389937441298051
+  },
+  "repeat_evaluation": {
+    "best_sample": {
+      "action_delta_rms_mean": 0.008273031562566757,
+      "count": 6,
+      "keyframe_grasp_count": 6,
+      "keyframe_position_error_m_mean": 0.0010150214657187462,
+      "keyframe_rotation_error_rad_mean": 0.02113969437777996,
+      "post_keyframe_grasp_fraction_mean": 1.0
+    },
+    "nominal": {
+      "action_delta_rms_mean": 0.0,
+      "count": 5,
+      "keyframe_grasp_count": 5,
+      "keyframe_position_error_m_mean": 0.010602258145809174,
+      "keyframe_rotation_error_rad_mean": 0.016505103558301926,
+      "post_keyframe_grasp_fraction_mean": 1.0
+    },
+    "optimized_mean": {
+      "action_delta_rms_mean": 0.008027859963476658,
+      "count": 5,
+      "keyframe_grasp_count": 5,
+      "keyframe_position_error_m_mean": 0.0010541519150137901,
+      "keyframe_rotation_error_rad_mean": 0.021197861060500145,
+      "post_keyframe_grasp_fraction_mean": 1.0
+    }
+  },
+  "source": {
+    "control_hz": 30,
+    "horizon": 40,
+    "start_state": 110,
+    "target_name": "pick_latched",
+    "target_state": 148
+  },
+  "status": "passed"
+}

@@ -25,6 +25,23 @@ class FakeOptimizer:
         return sampled[np.argmax(rewards)]
 
 
+class ImprovingOptimizer(FakeOptimizer):
+    def __init__(self):
+        self.iteration = 0
+
+    def sample_control_knots(self, nominal):
+        offset = 1.0 if self.iteration == 0 else 2.0
+        self.iteration += 1
+        return np.array(
+            [
+                nominal,
+                nominal,
+                nominal + offset,
+                nominal - offset,
+            ]
+        )
+
+
 class FakeBackend:
     def set_branch_context(self, context):
         self.context = context
@@ -74,3 +91,23 @@ def test_rejects_update_inside_improvement_gate():
 
     assert not plan.accepted_update
     np.testing.assert_allclose(plan.action, [0.0])
+
+
+def test_multiple_iterations_compare_against_starting_nominal():
+    objective = lambda states, sensors, controls: states[:, -1, 0]
+    mpc = JudoIsaacLabMPC(
+        ImprovingOptimizer(),
+        FakeBackend(),
+        objective,
+        num_iterations=2,
+        duplicate_nominal=2,
+        min_improvement=0.5,
+    )
+
+    plan = mpc.plan(CONTEXT, np.zeros((2, 1)))
+
+    assert plan.accepted_update
+    assert plan.best_iteration == 1
+    assert plan.best_rollout == 2
+    np.testing.assert_allclose(plan.action, [3.0])
+    np.testing.assert_allclose(plan.best_sampled_knots, [[3.0], [3.0]])

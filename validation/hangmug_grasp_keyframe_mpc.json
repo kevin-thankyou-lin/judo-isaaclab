@@ -1,0 +1,66 @@
+{
+  "best_sample_reached_keyframe": true,
+  "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+  "gear_dc_study_revision": "3ac7d8f1d1745aac758192f62cebc4fba586d60a",
+  "iteration_summaries": [
+    {
+      "best_keyframe_position_error_m": 0.0005042343400418758,
+      "iteration": 0,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.9291088581085205
+    },
+    {
+      "best_keyframe_position_error_m": 0.0002939660334959626,
+      "iteration": 1,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.935847759246826
+    },
+    {
+      "best_keyframe_position_error_m": 0.00025257410015910864,
+      "iteration": 2,
+      "keyframe_grasp_count": 16,
+      "reward_max": 3.951521873474121
+    }
+  ],
+  "optimizer": {
+    "duplicate_nominal": 4,
+    "num_elites": 4,
+    "num_iterations": 3,
+    "num_rollouts": 16,
+    "type": "judo.optimizers.cem.CrossEntropyMethod"
+  },
+  "judo_revision": "96d6f451f482d68c903e17b223577b752319b4d1",
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 2,
+    "best_rollout": 0,
+    "first_action_delta_l2": 0.0020799026311489476,
+    "improvement": 0.023221254348754883,
+    "nominal_reward_mean": 3.928300619125366,
+    "nominal_reward_std": 0.0009424158826294425
+  },
+  "repeat_evaluation": {
+    "best_sample": {
+      "count": 6,
+      "keyframe_grasp_count": 6,
+      "keyframe_position_error_m_mean": 0.00034973269794136286,
+      "keyframe_rotation_error_rad_mean": 0.008203732781112194,
+      "post_keyframe_grasp_fraction_mean": 1.0
+    },
+    "nominal": {
+      "count": 5,
+      "keyframe_grasp_count": 5,
+      "keyframe_position_error_m_mean": 0.0005074565997347236,
+      "keyframe_rotation_error_rad_mean": 0.008221747353672981,
+      "post_keyframe_grasp_fraction_mean": 1.0
+    }
+  },
+  "source": {
+    "control_hz": 30,
+    "horizon": 8,
+    "start_state": 110,
+    "target_name": "left_grasp",
+    "target_state": 116
+  },
+  "status": "passed"
+}

@@ -1,0 +1,58 @@
+{
+  "control_hz": 30,
+  "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+  "episode": "demo_0",
+  "gear_dc_study_revision": "3ac7d8f1d1745aac758192f62cebc4fba586d60a",
+  "keyframes": {
+    "precontact_checkpoint": {
+      "state_index": 110,
+      "time_s": 3.6666666666666665
+    },
+    "left_contact": {
+      "action_step": 115,
+      "state_index": 116,
+      "time_s": 3.8666666666666667
+    },
+    "left_grasp": {
+      "action_step": 115,
+      "state_index": 116,
+      "time_s": 3.8666666666666667
+    },
+    "pick_latched": {
+      "action_step": 147,
+      "state_index": 148,
+      "time_s": 4.933333333333334
+    },
+    "right_contact": {
+      "action_step": 318,
+      "state_index": 319,
+      "time_s": 10.633333333333333
+    },
+    "right_grasp": {
+      "action_step": 322,
+      "state_index": 323,
+      "time_s": 10.766666666666667
+    },
+    "handover_latched": {
+      "action_step": 360,
+      "state_index": 361,
+      "time_s": 12.033333333333333
+    },
+    "tree_approach": {
+      "action_step": 638,
+      "state_index": 639,
+      "time_s": 21.3
+    },
+    "both_released": {
+      "action_step": 744,
+      "state_index": 745,
+      "time_s": 24.833333333333332
+    },
+    "hang_latched": {
+      "action_step": 773,
+      "state_index": 774,
+      "time_s": 25.8
+    }
+  },
+  "status": "passed"
+}
