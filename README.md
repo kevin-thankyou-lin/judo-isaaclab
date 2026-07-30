@@ -177,3 +177,17 @@ candidate controls branch:
 
 See `validation/hangmug_right_grasp_mpc.json` and
 `validation/hangmug_handover_mpc.json`.
+
+Pass `--controls-npz /tmp/controls.npz` to retain the nominal, optimized mean,
+and best evaluated control sequences. The comparison renderer then runs nominal
+and MPC controls concurrently in two clones of the same CPU PhysX scene:
+
+```bash
+python examples/render_hangmug_mpc_comparison.py \
+  --controls-npz /tmp/controls.npz \
+  --output /tmp/hangmug_nominal_vs_mpc.mp4 \
+  --result-json /tmp/hangmug_nominal_vs_mpc.json
+```
+
+The checked-in video receipts verify dynamic 1280x480 H.264 output, full decode,
+terminal grasp state, and origin-relative mug divergence.

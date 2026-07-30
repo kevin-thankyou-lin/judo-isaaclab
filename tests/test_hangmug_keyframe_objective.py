@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from hangmug_grasp_keyframe_mpc import _objective_components
+from render_hangmug_mpc_comparison import _quaternion_error
 
 
 @pytest.fixture
@@ -54,3 +55,9 @@ def test_target_success_selects_expected_sensor(
 
     assert result["keyframe_target_success"].tolist() == [True, False]
     assert result["rewards"][0] > result["rewards"][1]
+
+
+def test_video_quaternion_error_is_sign_invariant():
+    quaternion = np.array([0.5, 0.5, 0.5, 0.5])
+
+    assert _quaternion_error(quaternion, -quaternion) == pytest.approx(0.0)

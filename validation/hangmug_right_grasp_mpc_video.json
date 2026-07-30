@@ -1,0 +1,50 @@
+{
+  "checks": {
+    "dynamic_frames": true,
+    "fully_decodable": true,
+    "h264_nonempty": true,
+    "parallel_lanes": true
+  },
+  "configuration": {
+    "candidate_horizon": 28,
+    "checkpoint_state": 110,
+    "history_steps": 190,
+    "left_lane": "source-demo nominal",
+    "physics": "parallel two-clone CPU PhysX scene",
+    "right_lane": "Judo MPC best sample",
+    "start_state": 300,
+    "target_name": "right_grasp",
+    "target_state": 323
+  },
+  "nominal_vs_mpc_mug_divergence": {
+    "rotation_rad_max": 0.028852534759487302,
+    "rotation_rad_terminal": 0.005098477593588316,
+    "translation_m_max": 0.005092682348889027,
+    "translation_m_terminal": 0.0023993098792080766
+  },
+  "status": "passed",
+  "terminal": {
+    "left_grasp": [
+      true,
+      true
+    ],
+    "right_grasp": [
+      true,
+      true
+    ],
+    "stage2": [
+      false,
+      false
+    ]
+  },
+  "video": {
+    "codec": "h264",
+    "duration_s": 1.934,
+    "frame_count": 29,
+    "full_decode_returncode": 0,
+    "height": 480,
+    "sha256": "c8c4c99115964d4cc5bcdd78fd1c5e4a0b411a5318ab81704f127b3d0e756a0b",
+    "size_bytes": 189965,
+    "width": 1280
+  }
+}

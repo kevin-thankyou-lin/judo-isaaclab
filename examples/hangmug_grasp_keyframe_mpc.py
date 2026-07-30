@@ -64,6 +64,10 @@ def _parser():
         "--result-json",
         default="/tmp/judo_isaaclab_hangmug_grasp_keyframe_mpc.json",
     )
+    parser.add_argument(
+        "--controls-npz",
+        help="Optional nominal/optimized/best controls for replay rendering.",
+    )
     return parser.parse_args()
 
 
@@ -568,6 +572,21 @@ def main():
         }
         with open(args.result_json, "w", encoding="utf-8") as stream:
             json.dump(result, stream, indent=2, sort_keys=True)
+        if args.controls_npz:
+            np.savez_compressed(
+                args.controls_npz,
+                nominal=nominal,
+                optimized_mean=expand(plan.optimized_knots[None, ...])[0],
+                best_sample=expand(plan.best_sampled_knots[None, ...])[0],
+                checkpoint_state=np.int64(
+                    args.start_state
+                    if args.checkpoint_state is None
+                    else args.checkpoint_state
+                ),
+                start_state=np.int64(args.start_state),
+                target_state=np.int64(args.target_state),
+                target_name=np.asarray(args.target_name),
+            )
         print(
             "JUDO_ISAACLAB_HANGMUG_KEYFRAME_MPC="
             + json.dumps(result, sort_keys=True)

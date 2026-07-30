@@ -1,0 +1,440 @@
+"""Render source-demo nominal and Judo MPC controls side by side in IsaacLab."""
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import traceback
+
+import numpy as np
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+
+from hangmug_grasp_keyframe_mpc import _tensor_tree
+
+
+def _parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--gear-repo",
+        default=(
+            "/home/linke/Projects/"
+            "gear-dc-study-judo-hangmug-friction-20260730"
+        ),
+    )
+    parser.add_argument(
+        "--dataset",
+        default=(
+            "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/"
+            "teleop/hangmug_000.hdf5"
+        ),
+    )
+    parser.add_argument(
+        "--objects-root",
+        default=(
+            "/tmp/hangmug_source_demo/tasks_data/"
+            "HangMugOnTree/objects"
+        ),
+    )
+    parser.add_argument("--episode", default="demo_0")
+    parser.add_argument("--controls-npz", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--result-json", required=True)
+    parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--friction-high", type=float, default=30.0)
+    parser.add_argument("--friction-low", type=float, default=0.5)
+    parser.add_argument("--seed", type=int, default=20260730)
+    return parser.parse_args()
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _load_inputs(args, device):
+    import h5py
+    import torch
+
+    controls = np.load(args.controls_npz)
+    nominal = np.asarray(controls["nominal"], dtype=np.float32)
+    best = np.asarray(controls["best_sample"], dtype=np.float32)
+    checkpoint_state = int(controls["checkpoint_state"])
+    start_state = int(controls["start_state"])
+    target_state = int(controls["target_state"])
+    target_name = str(controls["target_name"])
+    if nominal.shape != best.shape or nominal.ndim != 2:
+        raise ValueError(
+            f"Control shapes must match (horizon, action_dim): "
+            f"{nominal.shape} versus {best.shape}"
+        )
+    with h5py.File(args.dataset, "r") as handle:
+        group = handle[f"data/{args.episode}"]
+        checkpoint = _tensor_tree(
+            group["states"], checkpoint_state, device
+        )
+        history = torch.as_tensor(
+            group["actions"][checkpoint_state:start_state],
+            dtype=torch.float32,
+            device=device,
+        )
+    candidate = torch.as_tensor(
+        np.stack((nominal, best)), dtype=torch.float32, device=device
+    )
+    return {
+        "checkpoint": checkpoint,
+        "history": history,
+        "candidate": candidate,
+        "checkpoint_state": checkpoint_state,
+        "start_state": start_state,
+        "target_state": target_state,
+        "target_name": target_name,
+    }
+
+
+def _sample(env, step):
+    import torch
+
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    left = env.robot.arms["left_arm"].end_effector.is_grasping(
+        "mug", env_ids=env_ids
+    )
+    right = env.robot.arms["right_arm"].end_effector.is_grasping(
+        "mug", env_ids=env_ids
+    )
+    pose = env.scene["mug"].data.root_pose_w.detach().clone()
+    pose[:, :3] -= env.scene.env_origins
+    return {
+        "step": int(step),
+        "left_grasp": left.detach().cpu().tolist(),
+        "right_grasp": right.detach().cpu().tolist(),
+        "stage2": env.stage2_success.detach().cpu().tolist(),
+        "mug_pose": pose.detach().cpu().tolist(),
+    }
+
+
+def _rgb_frames(env):
+    env.sim.render()
+    camera = env.scene["top_camera"]
+    camera.update(dt=0.0)
+    rgb = camera.data.output["rgb"][:, :, :, :3].detach().cpu().numpy()
+    if rgb.dtype != np.uint8:
+        scale = 255.0 if float(rgb.max()) <= 1.0 else 1.0
+        rgb = np.clip(rgb * scale, 0, 255).astype(np.uint8)
+    return rgb
+
+
+def _write_frame(env, sample, frame_index, frames_dir, target_name):
+    import cv2
+
+    images = _rgb_frames(env)
+    panels = []
+    labels = ("SOURCE-DEMO NOMINAL", "JUDO MPC BEST SAMPLE")
+    for env_index, (image, label) in enumerate(zip(images, labels)):
+        panel = image.copy()
+        lines = [
+            label,
+            f"candidate step: {sample['step']}",
+            f"target: {target_name}",
+            (
+                f"left grasp: {sample['left_grasp'][env_index]}  "
+                f"right grasp: {sample['right_grasp'][env_index]}"
+            ),
+            f"handover latched: {sample['stage2'][env_index]}",
+        ]
+        for index, line in enumerate(lines):
+            color = (70, 230, 255) if index == 0 else (245, 245, 245)
+            cv2.putText(
+                panel,
+                line,
+                (12, 30 + index * 28),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.56,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+        panels.append(panel)
+    combined = np.concatenate(panels, axis=1)
+    path = os.path.join(frames_dir, f"frame_{frame_index:06d}.png")
+    if not cv2.imwrite(path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)):
+        raise RuntimeError(f"Failed to write {path}")
+    return {
+        "mean": float(combined.mean()),
+        "std": float(combined.std()),
+        "width": int(combined.shape[1]),
+        "height": int(combined.shape[0]),
+    }
+
+
+def _encode(frames_dir, fps, output):
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            os.path.join(frames_dir, "frame_%06d.png"),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            output,
+        ],
+        check=True,
+    )
+
+
+def _probe(path):
+    completed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "format=duration,size",
+            "-show_entries",
+            "stream=codec_name,width,height,nb_read_frames",
+            "-of",
+            "json",
+            path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    decoded = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            path,
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    stream = result["streams"][0]
+    return {
+        "path": os.path.abspath(path),
+        "sha256": _sha256(path),
+        "size_bytes": int(result["format"]["size"]),
+        "duration_s": float(result["format"]["duration"]),
+        "codec": stream["codec_name"],
+        "width": int(stream["width"]),
+        "height": int(stream["height"]),
+        "frame_count": int(stream["nb_read_frames"]),
+        "full_decode_returncode": decoded.returncode,
+    }
+
+
+def _quaternion_error(left, right):
+    left = left / np.linalg.norm(left)
+    right = right / np.linalg.norm(right)
+    return float(
+        2.0 * np.arccos(np.clip(abs(float(np.dot(left, right))), 0.0, 1.0))
+    )
+
+
+def main():
+    args = _parser()
+    sys.path.insert(0, os.path.abspath(args.gear_repo))
+
+    from isaaclab.app import AppLauncher
+
+    simulation_app = AppLauncher(
+        {"headless": True, "device": "cpu", "enable_cameras": True}
+    ).app
+    runner = None
+    try:
+        import torch
+        from dc_study.planning import (
+            RigidObjectMpcState,
+            create_cpu_batched_planning_runner,
+        )
+
+        assets = {
+            "mug": os.path.join(args.objects_root, "Mug", "mug_000"),
+            "mug_tree": os.path.join(
+                args.objects_root, "MugTree", "mug_tree_000"
+            ),
+        }
+        assist_config = {
+            "left": {
+                "arm": "left_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "friction",
+                "friction": {
+                    "high": args.friction_high,
+                    "low": args.friction_low,
+                },
+            }
+        }
+        runner = create_cpu_batched_planning_runner(
+            task_name="HangMugOnTree-v0",
+            assets_instance_paths=assets,
+            num_envs=2,
+            observation_modalities=["rgb", "proprioception"],
+            enable_cameras=True,
+            grasp_assist_config=assist_config,
+            objects_randomization=None,
+            init_joint_pos_randomization=0.0,
+            enable_gripper_grasp_clamp=False,
+            planning_substep_contact_sensors=True,
+            camera_width=640,
+            camera_height=480,
+        )
+        env = runner.env
+        env.reset(warm_up=False, seed=args.seed)
+        inputs = _load_inputs(args, env.device)
+        runner.reset(
+            inputs["checkpoint"],
+            {
+                "mug": RigidObjectMpcState(False),
+                "mug_tree": RigidObjectMpcState(False),
+            },
+            is_relative=True,
+        )
+        for action in inputs["history"]:
+            repeated = action.reshape(1, -1).expand(2, -1)
+            env.step(repeated)
+
+        traces = []
+        frame_stats = []
+        with tempfile.TemporaryDirectory(
+            prefix="hangmug-mpc-comparison-"
+        ) as frames_dir:
+            sample = _sample(env, -1)
+            traces.append(sample)
+            frame_stats.append(
+                _write_frame(
+                    env,
+                    sample,
+                    0,
+                    frames_dir,
+                    inputs["target_name"],
+                )
+            )
+            for step in range(inputs["candidate"].shape[1]):
+                _, _, terminated, truncated, _ = env.step(
+                    inputs["candidate"][:, step]
+                )
+                if bool(terminated.any()) or bool(truncated.any()):
+                    raise RuntimeError(f"Unexpected done at candidate step {step}")
+                sample = _sample(env, step)
+                traces.append(sample)
+                frame_stats.append(
+                    _write_frame(
+                        env,
+                        sample,
+                        step + 1,
+                        frames_dir,
+                        inputs["target_name"],
+                    )
+                )
+            _encode(frames_dir, args.fps, args.output)
+        video = _probe(args.output)
+        positions = np.asarray(
+            [[row["mug_pose"][lane][:3] for lane in range(2)] for row in traces]
+        )
+        rotations = np.asarray(
+            [[row["mug_pose"][lane][3:7] for lane in range(2)] for row in traces]
+        )
+        translation = np.linalg.norm(positions[:, 0] - positions[:, 1], axis=1)
+        rotation = np.asarray(
+            [
+                _quaternion_error(pair[0], pair[1])
+                for pair in rotations
+            ]
+        )
+        result = {
+            "status": "passed",
+            "configuration": {
+                "physics": "parallel two-clone CPU PhysX scene",
+                "left_lane": "source-demo nominal",
+                "right_lane": "Judo MPC best sample",
+                "checkpoint_state": inputs["checkpoint_state"],
+                "history_steps": int(inputs["history"].shape[0]),
+                "start_state": inputs["start_state"],
+                "target_state": inputs["target_state"],
+                "target_name": inputs["target_name"],
+                "candidate_horizon": int(inputs["candidate"].shape[1]),
+            },
+            "terminal": {
+                "left_grasp": traces[-1]["left_grasp"],
+                "right_grasp": traces[-1]["right_grasp"],
+                "stage2": traces[-1]["stage2"],
+            },
+            "nominal_vs_mpc_mug_divergence": {
+                "translation_m_max": float(translation.max()),
+                "translation_m_terminal": float(translation[-1]),
+                "rotation_rad_max": float(rotation.max()),
+                "rotation_rad_terminal": float(rotation[-1]),
+            },
+            "render": {
+                "minimum_frame_std": min(row["std"] for row in frame_stats),
+                "mean_pixel_range": [
+                    min(row["mean"] for row in frame_stats),
+                    max(row["mean"] for row in frame_stats),
+                ],
+            },
+            "video": video,
+        }
+        checks = {
+            "parallel_lanes": env.num_envs == 2,
+            "dynamic_frames": (
+                result["render"]["mean_pixel_range"][1]
+                != result["render"]["mean_pixel_range"][0]
+            ),
+            "h264_nonempty": (
+                video["codec"] == "h264"
+                and video["frame_count"] == len(frame_stats)
+                and video["size_bytes"] > 0
+            ),
+            "fully_decodable": video["full_decode_returncode"] == 0,
+        }
+        result["checks"] = checks
+        result["status"] = "passed" if all(checks.values()) else "failed"
+        with open(args.result_json, "w", encoding="utf-8") as stream:
+            json.dump(result, stream, indent=2, sort_keys=True)
+        print(
+            "JUDO_ISAACLAB_HANGMUG_MPC_VIDEO="
+            + json.dumps(result, sort_keys=True)
+        )
+        if result["status"] != "passed":
+            raise RuntimeError(result)
+    except BaseException:
+        traceback.print_exc()
+        raise
+    finally:
+        if runner is not None:
+            runner.close()
+        simulation_app.close()
+
+
+if __name__ == "__main__":
+    main()
