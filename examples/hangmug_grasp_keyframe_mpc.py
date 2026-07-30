@@ -1,4 +1,4 @@
-"""Run multi-round Judo CEM toward the first HangMug grasp keyframe."""
+"""Run history-conditioned Judo CEM toward a HangMug keyframe."""
 
 import argparse
 import json
@@ -36,9 +36,19 @@ def _parser():
         ),
     )
     parser.add_argument("--episode", default="demo_0")
+    parser.add_argument(
+        "--checkpoint-state",
+        type=int,
+        default=None,
+        help="Contact-free reset state; defaults to --start-state.",
+    )
     parser.add_argument("--start-state", type=int, default=110)
     parser.add_argument("--target-state", type=int, default=116)
-    parser.add_argument("--target-name", default="left_grasp")
+    parser.add_argument(
+        "--target-name",
+        choices=("left_grasp", "right_grasp", "handover_latched"),
+        default="left_grasp",
+    )
     parser.add_argument("--horizon", type=int, default=8)
     parser.add_argument("--num-rollouts", type=int, default=16)
     parser.add_argument("--num-iterations", type=int, default=3)
@@ -88,10 +98,21 @@ def _state_row(group, index):
 def _load_demo(args, device):
     import h5py
 
+    checkpoint_state = (
+        args.start_state
+        if args.checkpoint_state is None
+        else args.checkpoint_state
+    )
+    if checkpoint_state > args.start_state:
+        raise ValueError("checkpoint-state must not exceed start-state")
     with h5py.File(args.dataset, "r") as handle:
         group = handle[f"data/{args.episode}"]
         states = group["states"]
-        checkpoint = _tensor_tree(states, args.start_state, device)
+        checkpoint = _tensor_tree(states, checkpoint_state, device)
+        history = np.asarray(
+            group["actions"][checkpoint_state : args.start_state],
+            dtype=np.float32,
+        )
         nominal = np.asarray(
             group["actions"][
                 args.start_state : args.start_state + args.horizon
@@ -107,7 +128,7 @@ def _load_demo(args, device):
                 )
             ]
         )
-    return checkpoint, nominal, reference
+    return checkpoint, history, nominal, reference
 
 
 def _encode_state(env):
@@ -134,17 +155,43 @@ def _encode_sensors(env):
     import torch
 
     env_ids = torch.arange(env.num_envs, device=env.device)
-    end_effector = env.robot.arms["left_arm"].end_effector
-    forces = [
+    left = env.robot.arms["left_arm"].end_effector
+    right = env.robot.arms["right_arm"].end_effector
+    left_forces = [
         finger.contact_force("mug", env_ids).reshape(-1, 1)
-        for finger in end_effector.fingers
+        for finger in left.fingers
     ]
-    grasp = end_effector.is_grasping(
+    right_forces = [
+        finger.contact_force("mug", env_ids).reshape(-1, 1)
+        for finger in right.fingers
+    ]
+    left_grasp = left.is_grasping(
         "mug", env_ids=env_ids
     ).float().reshape(-1, 1)
-    assist = env.grasp_assists["left"].engaged.float().reshape(-1, 1)
+    right_grasp = right.is_grasping(
+        "mug", env_ids=env_ids
+    ).float().reshape(-1, 1)
+    left_assist = env.grasp_assists["left"].engaged.float().reshape(-1, 1)
+    stages = [
+        stage.float().reshape(-1, 1)
+        for stage in (
+            env.stage1_success,
+            env.stage2_success,
+            env.stage3_success,
+        )
+    ]
     return (
-        torch.cat((*forces, grasp, assist), dim=1)
+        torch.cat(
+            (
+                *left_forces,
+                left_grasp,
+                left_assist,
+                *right_forces,
+                right_grasp,
+                *stages,
+            ),
+            dim=1,
+        )
         .detach()
         .cpu()
         .numpy()
@@ -166,6 +213,7 @@ def _objective_components(
     reference,
     nominal,
     keyframe_offset,
+    target_name,
 ):
     position_error = np.linalg.norm(
         states[:, :, :3] - reference[None, :, :3], axis=-1
@@ -181,35 +229,75 @@ def _objective_components(
             axis=-1,
         )
     )
+    right_joint_error = np.sqrt(
+        np.mean(
+            np.square(
+                states[:, :, 21:29] - reference[None, :, 21:29]
+            ),
+            axis=-1,
+        )
+    )
     action_delta = np.sqrt(
         np.mean(
             np.square(controls - nominal[None, :, :]),
             axis=(1, 2),
         )
     )
-    grasp = sensors[:, :, 2]
-    assist = sensors[:, :, 3]
+    left_grasp = sensors[:, :, 2]
+    left_assist = sensors[:, :, 3]
+    right_grasp = sensors[:, :, 6]
+    stage1 = sensors[:, :, 7]
+    stage2 = sensors[:, :, 8]
     post_keyframe = slice(keyframe_offset, None)
     rewards = (
         -80.0 * position_error[:, keyframe_offset]
         -4.0 * rotation_error[:, keyframe_offset]
         -1.0 * left_joint_error[:, keyframe_offset]
+        -1.0 * right_joint_error[:, keyframe_offset]
         -5.0 * position_error.mean(axis=1)
         -0.5 * rotation_error.mean(axis=1)
         -2.0 * action_delta
-        +2.0 * grasp[:, keyframe_offset]
-        +1.0 * assist[:, keyframe_offset]
-        +1.0 * grasp[:, post_keyframe].mean(axis=1)
     )
+    if target_name == "left_grasp":
+        target_success = left_grasp
+        rewards += (
+            2.0 * left_grasp[:, keyframe_offset]
+            +1.0 * left_assist[:, keyframe_offset]
+            +1.0 * left_grasp[:, post_keyframe].mean(axis=1)
+        )
+    elif target_name == "right_grasp":
+        target_success = right_grasp
+        rewards += (
+            2.0 * right_grasp[:, keyframe_offset]
+            +1.0 * left_grasp[:, keyframe_offset]
+            +1.0 * right_grasp[:, post_keyframe].mean(axis=1)
+            +0.5 * stage1[:, keyframe_offset]
+        )
+    elif target_name == "handover_latched":
+        target_success = stage2
+        rewards += (
+            3.0 * stage2[:, keyframe_offset]
+            +2.0 * right_grasp[:, keyframe_offset]
+            +1.0 * (1.0 - left_grasp[:, keyframe_offset])
+            +1.0 * right_grasp[:, post_keyframe].mean(axis=1)
+        )
+    else:
+        raise ValueError(f"Unsupported target-name: {target_name}")
     return {
         "rewards": rewards,
         "keyframe_position_error_m": position_error[:, keyframe_offset],
         "keyframe_rotation_error_rad": rotation_error[:, keyframe_offset],
         "keyframe_left_joint_rms_rad": left_joint_error[:, keyframe_offset],
+        "keyframe_right_joint_rms_rad": right_joint_error[:, keyframe_offset],
         "action_delta_rms": action_delta,
-        "keyframe_grasp": grasp[:, keyframe_offset] > 0.5,
-        "keyframe_assist": assist[:, keyframe_offset] > 0.5,
-        "post_keyframe_grasp_fraction": grasp[:, post_keyframe].mean(axis=1),
+        "keyframe_target_success": target_success[:, keyframe_offset] > 0.5,
+        "keyframe_left_grasp": left_grasp[:, keyframe_offset] > 0.5,
+        "keyframe_right_grasp": right_grasp[:, keyframe_offset] > 0.5,
+        "keyframe_left_assist": left_assist[:, keyframe_offset] > 0.5,
+        "keyframe_stage2": stage2[:, keyframe_offset] > 0.5,
+        "post_keyframe_target_fraction": target_success[
+            :, post_keyframe
+        ].mean(axis=1),
     }
 
 
@@ -218,9 +306,12 @@ def _group_summary(name, rows, components):
     position = components["keyframe_position_error_m"][rows]
     rotation = components["keyframe_rotation_error_rad"][rows]
     action_delta = components["action_delta_rms"][rows]
-    grasp = components["keyframe_grasp"][rows]
-    assist = components["keyframe_assist"][rows]
-    retention = components["post_keyframe_grasp_fraction"][rows]
+    target_success = components["keyframe_target_success"][rows]
+    left_grasp = components["keyframe_left_grasp"][rows]
+    right_grasp = components["keyframe_right_grasp"][rows]
+    left_assist = components["keyframe_left_assist"][rows]
+    stage2 = components["keyframe_stage2"][rows]
+    retention = components["post_keyframe_target_fraction"][rows]
     return {
         "name": name,
         "count": int(len(rewards)),
@@ -231,9 +322,12 @@ def _group_summary(name, rows, components):
         "keyframe_rotation_error_rad_mean": float(rotation.mean()),
         "keyframe_rotation_error_rad_max": float(rotation.max()),
         "action_delta_rms_mean": float(action_delta.mean()),
-        "keyframe_grasp_count": int(grasp.sum()),
-        "keyframe_assist_count": int(assist.sum()),
-        "post_keyframe_grasp_fraction_mean": float(retention.mean()),
+        "keyframe_target_success_count": int(target_success.sum()),
+        "keyframe_left_grasp_count": int(left_grasp.sum()),
+        "keyframe_right_grasp_count": int(right_grasp.sum()),
+        "keyframe_left_assist_count": int(left_assist.sum()),
+        "keyframe_stage2_count": int(stage2.sum()),
+        "post_keyframe_target_fraction_mean": float(retention.mean()),
     }
 
 
@@ -299,12 +393,12 @@ def main():
             planning_substep_contact_sensors=True,
         )
         runner.env.reset(warm_up=False, seed=args.seed)
-        checkpoint, nominal, reference = _load_demo(
+        checkpoint, history, nominal, reference = _load_demo(
             args, runner.env.device
         )
         context = BranchContext(
             checkpoint_state=checkpoint,
-            action_history=np.empty((0, nominal.shape[1]), dtype=np.float32),
+            action_history=history,
             rigid_object_states={
                 "mug": RigidObjectMpcState(False),
                 "mug_tree": RigidObjectMpcState(False),
@@ -348,17 +442,24 @@ def main():
                 reference=reference,
                 nominal=nominal,
                 keyframe_offset=keyframe_offset,
+                target_name=args.target_name,
             )
             iteration_summaries.append(
                 {
                     "iteration": len(iteration_summaries),
                     "reward_max": float(components["rewards"].max()),
                     "reward_mean": float(components["rewards"].mean()),
-                    "keyframe_grasp_count": int(
-                        components["keyframe_grasp"].sum()
+                    "keyframe_target_success_count": int(
+                        components["keyframe_target_success"].sum()
                     ),
-                    "keyframe_assist_count": int(
-                        components["keyframe_assist"].sum()
+                    "keyframe_left_grasp_count": int(
+                        components["keyframe_left_grasp"].sum()
+                    ),
+                    "keyframe_right_grasp_count": int(
+                        components["keyframe_right_grasp"].sum()
+                    ),
+                    "keyframe_stage2_count": int(
+                        components["keyframe_stage2"].sum()
                     ),
                     "best_keyframe_position_error_m": float(
                         components["keyframe_position_error_m"][
@@ -404,6 +505,7 @@ def main():
             reference=reference,
             nominal=nominal,
             keyframe_offset=keyframe_offset,
+            target_name=args.target_name,
         )
         groups = {
             "nominal": _group_summary(
@@ -418,8 +520,8 @@ def main():
         }
         best_group = groups["best_sample"]
         reached = (
-            best_group["keyframe_grasp_count"] == best_group["count"]
-            and best_group["keyframe_assist_count"] == best_group["count"]
+            best_group["keyframe_target_success_count"]
+            == best_group["count"]
             and best_group["keyframe_position_error_m_max"] <= 0.02
             and best_group["keyframe_rotation_error_rad_max"] <= 0.10
         )
@@ -427,6 +529,12 @@ def main():
             "status": "passed" if reached else "failed",
             "source": {
                 "episode": args.episode,
+                "checkpoint_state": (
+                    args.start_state
+                    if args.checkpoint_state is None
+                    else args.checkpoint_state
+                ),
+                "history_steps": int(history.shape[0]),
                 "start_state": args.start_state,
                 "target_state": args.target_state,
                 "target_name": args.target_name,

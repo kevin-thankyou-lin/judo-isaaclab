@@ -1,0 +1,68 @@
+{
+  "best_sample_reached_keyframe": true,
+  "dataset_sha256": "4def01042a38edd8124025dd3ab3d763d5e9466eb0dcb01737cf315fb4014ec4",
+  "gear_dc_study_revision": "3ac7d8f1d1745aac758192f62cebc4fba586d60a",
+  "iteration_summaries": [
+    {
+      "best_keyframe_position_error_m": 0.002144034020602703,
+      "iteration": 0,
+      "keyframe_stage2_count": 16
+    },
+    {
+      "best_keyframe_position_error_m": 0.0026884134858846664,
+      "iteration": 1,
+      "keyframe_stage2_count": 16
+    },
+    {
+      "best_keyframe_position_error_m": 0.0028725971933454275,
+      "iteration": 2,
+      "keyframe_stage2_count": 16
+    }
+  ],
+  "judo_revision": "96d6f451f482d68c903e17b223577b752319b4d1",
+  "optimizer": {
+    "duplicate_nominal": 4,
+    "num_elites": 4,
+    "num_iterations": 3,
+    "num_rollouts": 16,
+    "type": "judo.optimizers.cem.CrossEntropyMethod"
+  },
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 2,
+    "best_rollout": 2,
+    "improvement": 0.45375096797943115
+  },
+  "repeat_evaluation": {
+    "best_sample": {
+      "count": 6,
+      "keyframe_left_grasp_count": 0,
+      "keyframe_position_error_m_mean": 0.003129941411316395,
+      "keyframe_right_grasp_count": 6,
+      "keyframe_rotation_error_rad_mean": 0.01592172123491764,
+      "keyframe_stage2_count": 6,
+      "keyframe_target_success_count": 6,
+      "post_keyframe_target_fraction_mean": 1.0
+    },
+    "nominal": {
+      "count": 5,
+      "keyframe_left_grasp_count": 0,
+      "keyframe_position_error_m_mean": 0.00740998238325119,
+      "keyframe_right_grasp_count": 5,
+      "keyframe_rotation_error_rad_mean": 0.037860848009586334,
+      "keyframe_stage2_count": 5,
+      "keyframe_target_success_count": 5,
+      "post_keyframe_target_fraction_mean": 1.0
+    }
+  },
+  "source": {
+    "checkpoint_state": 110,
+    "control_hz": 30,
+    "history_steps": 213,
+    "horizon": 42,
+    "start_state": 323,
+    "target_name": "handover_latched",
+    "target_state": 361
+  },
+  "status": "passed"
+}

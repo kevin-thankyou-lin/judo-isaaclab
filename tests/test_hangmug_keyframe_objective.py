@@ -1,0 +1,56 @@
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
+
+from hangmug_grasp_keyframe_mpc import _objective_components
+
+
+@pytest.fixture
+def rollout_inputs():
+    states = np.zeros((2, 2, 29), dtype=np.float32)
+    reference = np.zeros((2, 29), dtype=np.float32)
+    states[:, :, 3] = 1.0
+    reference[:, 3] = 1.0
+    sensors = np.zeros((2, 2, 10), dtype=np.float32)
+    controls = np.zeros((2, 2, 14), dtype=np.float32)
+    nominal = np.zeros((2, 14), dtype=np.float32)
+    return states, sensors, controls, reference, nominal
+
+
+@pytest.mark.parametrize(
+    ("target_name", "sensor_index"),
+    (
+        ("left_grasp", 2),
+        ("right_grasp", 6),
+        ("handover_latched", 8),
+    ),
+)
+def test_target_success_selects_expected_sensor(
+    rollout_inputs, target_name, sensor_index
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    sensors[0, :, sensor_index] = 1.0
+    if target_name == "left_grasp":
+        sensors[0, :, 3] = 1.0
+    elif target_name == "right_grasp":
+        sensors[0, :, 2] = 1.0
+        sensors[0, :, 7] = 1.0
+    else:
+        sensors[0, :, 6] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=0,
+        target_name=target_name,
+    )
+
+    assert result["keyframe_target_success"].tolist() == [True, False]
+    assert result["rewards"][0] > result["rewards"][1]

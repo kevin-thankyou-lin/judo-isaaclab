@@ -163,3 +163,17 @@ The multi-round acceptance gate compares the best evaluated sample across all
 rounds with duplicate evaluations of the original nominal. This avoids
 incorrectly rejecting a useful accumulated CEM update merely because the final
 round has converged close to its already-improved nominal.
+
+The same script supports history-conditioned handover targets. Both experiments
+reset at contact-free state 110 and replay the shared source-demo prefix before
+candidate controls branch:
+
+- right grasp from state 300: 190 history actions reconstruct the left grasp;
+  the best sample reduces mean mug-position error from 7.948 mm to 2.169 mm
+  and reaches two-arm grasp in all six repeats;
+- stable handover from state 323: 213 history actions reconstruct the contact
+  history; the best sample reduces mean error from 7.410 mm to 3.130 mm and
+  reaches right-only grasp with stage 2 latched in all six repeats.
+
+See `validation/hangmug_right_grasp_mpc.json` and
+`validation/hangmug_handover_mpc.json`.
