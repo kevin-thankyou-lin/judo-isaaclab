@@ -137,3 +137,8 @@ All eight clones retain the mug over the eight-action candidate horizon:
   0.006407 rad.
 
 The exact receipt is `validation/hangmug_near_contact_smoke.json`.
+
+The same test also passes with a 32-action candidate horizon. All clones retain
+the grasp; internal spread remains 0.244 mm and 0.005684 rad, while terminal
+recorded-main divergence grows to 10.679 mm and 0.010304 rad. See
+`validation/hangmug_near_contact_h32.json`.
