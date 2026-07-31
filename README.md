@@ -260,7 +260,7 @@ the official `mug_tree_000` source at 1.2x Z scale:
 - demonstrated branch center: 48.75 mm higher in world coordinates;
 - nominal source-demo controls: 0/10 successful repeats, 175.9 mm mean terminal
   branch-relative error;
-- Judo MPC best sample: 10/10 successful repeats, 8.29 mm mean terminal error,
+- MPC best sample: 10/10 successful repeats, 8.29 mm mean terminal error,
   and a complete 30/30-step stability window.
 
 The 225-step rollout is optimized as four smooth right-arm correction knots.

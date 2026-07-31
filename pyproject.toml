@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "judo-isaaclab"
 version = "0.1.0"
-description = "History-conditioned IsaacLab rollout backend for Judo MPC"
+description = "History-conditioned IsaacLab rollout backend for MPC"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }

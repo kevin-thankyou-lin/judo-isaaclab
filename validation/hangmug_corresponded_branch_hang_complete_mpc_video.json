@@ -3,7 +3,7 @@
   "configuration": {
     "physics": "parallel two-clone CPU PhysX scene",
     "left_lane": "source-demo nominal",
-    "right_lane": "Judo MPC best sample",
+    "right_lane": "MPC best sample",
     "checkpoint_state": 110,
     "history_steps": 490,
     "start_state": 600,

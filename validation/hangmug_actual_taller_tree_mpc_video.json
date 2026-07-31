@@ -3,7 +3,7 @@
   "configuration": {
     "physics": "parallel two-clone CPU PhysX scene",
     "left_lane": "source-demo nominal",
-    "right_lane": "Judo MPC best sample",
+    "right_lane": "MPC best sample",
     "checkpoint_state": 110,
     "history_steps": 490,
     "start_state": 600,
@@ -34,9 +34,9 @@
     "frame_count": 226,
     "width": 1280,
     "height": 480,
-    "size_bytes": 1382426,
+    "size_bytes": 1383088,
     "full_decode_returncode": 0,
-    "sha256": "76a4706bf5f6935c4400ae21dc153c3f5ca6da0b91a14caf0f3d0b020fe88f13"
+    "sha256": "232f37c7fbb29750f2fa2eae162243ec4455eb28420691624e5a8e05d50b7f7d"
   },
   "visual_review": {
     "nominal": "mug drops to the table",

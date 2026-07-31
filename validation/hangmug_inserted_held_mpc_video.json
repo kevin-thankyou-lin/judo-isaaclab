@@ -11,7 +11,7 @@
     "history_steps": 590,
     "left_lane": "source-demo nominal",
     "physics": "parallel two-clone CPU PhysX scene",
-    "right_lane": "Judo MPC best sample",
+    "right_lane": "MPC best sample",
     "start_state": 700,
     "target_name": "inserted_held",
     "target_state": 744

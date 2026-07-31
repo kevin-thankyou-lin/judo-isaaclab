@@ -11,7 +11,7 @@
     "history_steps": 213,
     "left_lane": "source-demo nominal",
     "physics": "parallel two-clone CPU PhysX scene",
-    "right_lane": "Judo MPC best sample",
+    "right_lane": "MPC best sample",
     "start_state": 323,
     "target_name": "handover_latched",
     "target_state": 361

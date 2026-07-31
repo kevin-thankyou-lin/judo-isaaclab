@@ -1,4 +1,4 @@
-"""Render source-demo nominal and Judo MPC controls side by side in IsaacLab."""
+"""Render source-demo nominal and MPC controls side by side in IsaacLab."""
 
 import argparse
 import hashlib
@@ -239,7 +239,7 @@ def _write_frame(env, sample, frame_index, frames_dir, target_name):
 
     images = _rgb_frames(env)
     panels = []
-    labels = ("SOURCE-DEMO NOMINAL", "JUDO MPC BEST SAMPLE")
+    labels = ("SOURCE-DEMO NOMINAL", "MPC BEST SAMPLE")
     for env_index, (image, label) in enumerate(zip(images, labels)):
         panel = image.copy()
         lines = [
@@ -543,7 +543,7 @@ def main():
             "configuration": {
                 "physics": "parallel two-clone CPU PhysX scene",
                 "left_lane": "source-demo nominal",
-                "right_lane": "Judo MPC best sample",
+                "right_lane": "MPC best sample",
                 "checkpoint_state": inputs["checkpoint_state"],
                 "history_steps": int(inputs["history"].shape[0]),
                 "start_state": inputs["start_state"],
