@@ -426,3 +426,15 @@ release candidates use `--candidate-repeat-reducer min` so the worst duplicate,
 not a lucky mean score, determines the CEM update.
 
 See `validation/hangmug_z150_insert_primitive.json`.
+
+The same staged controller also completes a 2.0x Z-scaled tree whose matched
+branch is 243.73 mm above the source branch. Three semantic approach stages
+retain the right grasp, then the tangent insertion passes the strict held-pose
+gate in 10/10 fresh clones (7.39 mm mean, 7.95 mm maximum position error).
+Continuing those exact controls through release passes the existing 30-step
+stable-hang task check in 8/8 fresh clones with both grippers open and zero
+terminal mug speed. All-camera renders were fully decoded and visually checked:
+the handle is threaded around the branch before release and remains supported
+after both arms retract.
+
+See `validation/hangmug_z200_staged_mpc.json`.

@@ -1,0 +1,108 @@
+{
+  "status": "passed_end_to_end",
+  "geometry": {
+    "source_tree_height_m": 0.350275,
+    "target_tree_height_m": 0.70055,
+    "target_z_scale": 2.0,
+    "matched_branch_world_z_delta_m": 0.24373166263103485,
+    "target_asset": "/tmp/hangmug_taller_mugtree_z200"
+  },
+  "approach": {
+    "stages": [
+      {
+        "start_state": 550,
+        "target_state": 639,
+        "horizon_steps": 89,
+        "strict_repeat_success": "8/8",
+        "mean_position_error_m": 0.0016718478873372078,
+        "max_position_error_m": 0.0035184898879379034
+      },
+      {
+        "start_state": 639,
+        "target_state": 700,
+        "horizon_steps": 61,
+        "strict_repeat_success": "8/8",
+        "mean_position_error_m": 0.013790102675557137,
+        "max_position_error_m": 0.027248600497841835
+      },
+      {
+        "start_state": 700,
+        "target_state": 735,
+        "horizon_steps": 35,
+        "strict_repeat_success": "8/8",
+        "mean_position_error_m": 0.010639294981956482,
+        "max_position_error_m": 0.043546952307224274
+      }
+    ],
+    "right_grasp_retained": true
+  },
+  "held_insertion": {
+    "primitive": "approach 50 mm beyond branch tip, seat inward along branch tangent, then hold",
+    "start_state": 735,
+    "target_state": 774,
+    "horizon_steps": 40,
+    "candidate_repeats": 2,
+    "candidate_repeat_reducer": "min",
+    "strict_repeat_success": "10/10",
+    "mean_position_error_m": 0.007392628584057093,
+    "max_position_error_m": 0.007945198565721512,
+    "mean_rotation_error_rad": 0.05592814087867737,
+    "max_rotation_error_rad": 0.12391223758459091,
+    "right_grasp_count": "10/10",
+    "all_camera_render": {
+      "path": "/tmp/hangmug_z200_tangent_insert_all_views.mp4",
+      "codec": "h264",
+      "width": 1280,
+      "height": 1440,
+      "frame_count": 41,
+      "duration_s": 2.734,
+      "size_bytes": 1234197,
+      "sha256": "4f2dea4b0b8f9b661bb4779e4239a7baa5435ab9d6dad5fb8b352c91a8bef72d",
+      "mpc_terminal_position_error_m": 0.007782554719597101,
+      "mpc_terminal_rotation_error_rad": 0.03615127131342888,
+      "strict_insertion_complete": true,
+      "visual_review": "Top and wrist views show the handle threaded around the 2x-height branch while the right grasp remains active."
+    }
+  },
+  "release_support": {
+    "start_state": 775,
+    "target_state": 825,
+    "horizon_steps": 50,
+    "candidate_repeats": 4,
+    "candidate_repeat_reducer": "min",
+    "existing_task_stage3_success": "8/8",
+    "both_grippers_released": "8/8",
+    "mean_terminal_speed_m_s": 0.0,
+    "max_terminal_speed_m_s": 0.0,
+    "all_camera_render": {
+      "path": "/tmp/hangmug_z200_release_support_all_views.mp4",
+      "codec": "h264",
+      "width": 1280,
+      "height": 1440,
+      "frame_count": 51,
+      "duration_s": 3.4,
+      "size_bytes": 1575273,
+      "sha256": "919e758268830e9c6152e90fe8912bf690b8a207c8deb94dc8dbac658c702d78",
+      "task_stage3_terminal": [true, true],
+      "both_grippers_released": [true, true],
+      "terminal_speed_m_s": [0.0, 0.0],
+      "visual_review": "All three views show both grippers clear and the mug supported by the 2x-height branch through the terminal frame."
+    }
+  },
+  "acceptance": {
+    "held_insertion": "Stable-hang-derived branch-relative mug pose within 10 mm and 0.15 rad for three consecutive steps while right grasp is retained.",
+    "released_hang": "Existing task stage-3 latch, which already requires 30 stable steps, with both grippers released and mug speed at most 0.05 m/s."
+  },
+  "source_artifacts": {
+    "stage1_result_sha256": "c6499ab97107187aeb73271b5d02744704476bd83ba73274efd46bd205719a63",
+    "stage2_result_sha256": "e63f7839820a43515f70a7af22f1e12140c00273c5d437789758d98b7fa49277",
+    "stage3_result_sha256": "bc8db8d99a09acf92a5347f8992895dab15e8116e4b616b8fdfac4140b645f02",
+    "insertion_result_sha256": "36a1d6003bd753f02f1897183a820f7106f155ee50b40840d046849e546ecb5d",
+    "release_result_sha256": "db7a80232cd45209d7f99dcdbb4557f851061b5bdfde164eb63b8558888832ba"
+  },
+  "tests": {
+    "full": "40 passed",
+    "compileall": "passed",
+    "diff_check": "passed"
+  }
+}
