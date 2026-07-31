@@ -21,6 +21,7 @@ from hangmug_grasp_keyframe_mpc import (
     _subtask_reached,
     _task_program_knots,
     insert,
+    release,
 )
 from render_hangmug_mpc_comparison import _quaternion_error
 
@@ -429,16 +430,78 @@ def test_insert_default_backs_out_then_seats_along_branch_tangent():
         horizon=20,
     )
 
-    assert reference[6, :3] == pytest.approx(
+    assert reference[11, :3] == pytest.approx(
         target[:3] + [0.05, 0.0, 0.0]
     )
-    assert reference[15:, :3] == pytest.approx(
-        np.broadcast_to(target[:3], (5, 3))
+    assert reference[16:, :3] == pytest.approx(
+        np.broadcast_to(target[:3], (4, 3))
+    )
+
+
+def test_insert_clearance_waypoint_precedes_tip_approach():
+    target = np.array([0.5, 0.2, 0.1, 1.0, 0.0, 0.0, 0.0])
+    reference = insert(
+        np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        target,
+        np.eye(3),
+        horizon=20,
+        clearance_offset_branch=(-0.02, 0.03, 0.04),
+        clearance_fraction=0.2,
+        approach_offset_branch=(0.05, 0.0, 0.0),
+        approach_fraction=0.6,
+        seat_fraction=0.85,
+    )
+
+    assert reference[3, :3] == pytest.approx([0.48, 0.23, 0.14])
+    assert reference[11, :3] == pytest.approx([0.55, 0.2, 0.1])
+    assert reference[16:, :3] == pytest.approx(
+        np.broadcast_to(target[:3], (4, 3))
+    )
+
+
+def test_insert_applies_calibrated_branch_frame_eef_offset():
+    reference = insert(
+        np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        np.array([0.5, 0.2, 0.1, 1.0, 0.0, 0.0, 0.0]),
+        np.eye(3),
+        horizon=10,
+        target_position_offset_branch=(0.01, -0.02, 0.03),
+        target_rotation_offset_branch=(0.0, 0.0, 0.1),
+        approach_fraction=0.4,
+        seat_fraction=0.8,
+    )
+
+    assert reference[-1, :3] == pytest.approx([0.51, 0.18, 0.13])
+    assert reference[-1, 3:7] == pytest.approx(
+        [np.cos(0.05), 0.0, 0.0, np.sin(0.05)]
+    )
+
+
+def test_insert_uses_calibrated_clearance_orientation_waypoint():
+    reference = insert(
+        np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        np.array([0.5, 0.2, 0.1, 1.0, 0.0, 0.0, 0.0]),
+        np.eye(3),
+        horizon=10,
+        clearance_offset_branch=(-0.02, 0.03, 0.04),
+        clearance_rotation_offset_branch=(0.0, 0.0, 0.2),
+        clearance_fraction=0.2,
+        approach_fraction=0.6,
+        seat_fraction=0.8,
+    )
+
+    assert reference[1, 3:7] == pytest.approx(
+        [np.cos(0.1), 0.0, 0.0, np.sin(0.1)]
+    )
+    assert reference[-1, 3:7] == pytest.approx(
+        [1.0, 0.0, 0.0, 0.0]
     )
 
 
 def test_insert_rejects_invalid_phase_order():
-    with pytest.raises(ValueError, match="0 < approach < seat < 1"):
+    with pytest.raises(
+        ValueError, match="0 < clearance < approach < seat < 1"
+    ):
         insert(
             np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
             np.array([0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -446,6 +509,31 @@ def test_insert_rejects_invalid_phase_order():
             horizon=4,
             approach_fraction=0.9,
             seat_fraction=0.8,
+        )
+
+
+def test_release_smoothly_opens_then_holds():
+    controls = np.zeros((10, 14), dtype=np.float32)
+
+    released = release(
+        controls,
+        open_value=-0.0475,
+        start_fraction=0.2,
+        end_fraction=0.6,
+    )
+
+    assert released[:2, 13] == pytest.approx(0.0)
+    assert np.diff(released[:, 13]).max() <= 0.0
+    assert released[5:, 13] == pytest.approx(-0.0475)
+    assert released[:, :13] == pytest.approx(controls[:, :13])
+
+
+def test_release_rejects_invalid_phase_order():
+    with pytest.raises(ValueError, match="0 <= start < end <= 1"):
+        release(
+            np.zeros((4, 14), dtype=np.float32),
+            start_fraction=0.8,
+            end_fraction=0.2,
         )
 
 
@@ -487,6 +575,41 @@ def test_objective_accepts_task_space_control_reference(rollout_inputs):
     )
 
     assert result["action_delta_rms"] == pytest.approx(0.0)
+
+
+def test_motion_quality_cost_prefers_smooth_right_joint_trajectory(
+    rollout_inputs,
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    states = np.repeat(states[:, :1], 6, axis=1)
+    sensors = np.repeat(sensors[:, :1], 6, axis=1)
+    controls = np.repeat(controls[:, :1], 6, axis=1)
+    reference = np.repeat(reference[:1], 6, axis=0)
+    nominal = np.repeat(nominal[:1], 6, axis=0)
+    smooth = np.linspace(0.0, 1.0, 6, dtype=np.float32)
+    jerky = np.asarray([0.0, 0.8, 0.2, 1.0, 0.4, 1.0], dtype=np.float32)
+    states[0, :, 21:27] = smooth[:, None]
+    states[1, :, 21:27] = jerky[:, None]
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=5,
+        target_name="left_grasp",
+        right_joint_path_weight=0.2,
+        right_joint_accel_weight=1.0,
+        right_joint_jerk_weight=0.5,
+    )
+
+    assert result["right_joint_path_l2"][0] < result["right_joint_path_l2"][1]
+    assert result["right_joint_accel_l2"][0] < result[
+        "right_joint_accel_l2"
+    ][1]
+    assert result["right_joint_jerk_l2"][0] < result["right_joint_jerk_l2"][1]
+    assert result["rewards"][0] > result["rewards"][1]
 
 
 def test_history_controls_replace_earlier_stage(tmp_path):

@@ -18,10 +18,18 @@ TREE_INSERTION_POSITION_TOLERANCE_M = 0.01
 TREE_INSERTION_ROTATION_TOLERANCE_RAD = 0.15
 TREE_INSERTION_STABILITY_STEPS = 3
 HANGMUG_INSERT_ANCHOR_STATE = 774
+HANGMUG_INSERT_CLEARANCE_OFFSET_BRANCH_M = (-0.025, 0.025, -0.055)
 HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M = (0.05, 0.0, 0.0)
 HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M = (0.0, 0.0, 0.0)
-HANGMUG_INSERT_APPROACH_FRACTION = 0.35
-HANGMUG_INSERT_SEAT_FRACTION = 0.80
+HANGMUG_INSERT_EEF_POSITION_OFFSET_BRANCH_M = (0.0, 0.0, 0.0)
+HANGMUG_INSERT_EEF_ROTATION_OFFSET_BRANCH_RAD = (0.0, 0.0, 0.0)
+HANGMUG_INSERT_CLEARANCE_ROTATION_OFFSET_BRANCH_RAD = (0.0, 0.0, 0.0)
+HANGMUG_INSERT_CLEARANCE_FRACTION = 0.20
+HANGMUG_INSERT_APPROACH_FRACTION = 0.60
+HANGMUG_INSERT_SEAT_FRACTION = 0.85
+HANGMUG_RELEASE_OPEN_VALUE = -0.0475
+HANGMUG_RELEASE_START_FRACTION = 0.05
+HANGMUG_RELEASE_END_FRACTION = 0.20
 
 
 def _parser():
@@ -144,6 +152,41 @@ def _parser():
     parser.add_argument("--dls-max-position-step", type=float, default=0.03)
     parser.add_argument("--dls-max-rotation-step", type=float, default=0.2)
     parser.add_argument(
+        "--insert-eef-position-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_EEF_POSITION_OFFSET_BRANCH_M,
+        metavar=("X", "Y", "Z"),
+        help="Calibrated final EEF position correction in the branch frame.",
+    )
+    parser.add_argument(
+        "--insert-eef-rotation-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_EEF_ROTATION_OFFSET_BRANCH_RAD,
+        metavar=("RX", "RY", "RZ"),
+        help="Calibrated final EEF axis-angle correction in the branch frame.",
+    )
+    parser.add_argument(
+        "--insert-clearance-rotation-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_CLEARANCE_ROTATION_OFFSET_BRANCH_RAD,
+        metavar=("RX", "RY", "RZ"),
+        help=(
+            "Pre-approach EEF orientation relative to the final EEF "
+            "orientation, as branch-frame axis-angle."
+        ),
+    )
+    parser.add_argument(
+        "--insert-clearance-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_CLEARANCE_OFFSET_BRANCH_M,
+        metavar=("X", "Y", "Z"),
+        help="Collision-free pre-approach EEF offset in the branch frame.",
+    )
+    parser.add_argument(
         "--insert-approach-offset-branch",
         type=float,
         nargs=3,
@@ -158,6 +201,11 @@ def _parser():
         default=HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M,
         metavar=("X", "Y", "Z"),
         help="Final seating EEF offset in the matched target-branch frame.",
+    )
+    parser.add_argument(
+        "--insert-clearance-fraction",
+        type=float,
+        default=HANGMUG_INSERT_CLEARANCE_FRACTION,
     )
     parser.add_argument(
         "--insert-approach-fraction",
@@ -178,6 +226,32 @@ def _parser():
             "actual insertion geometry."
         ),
     )
+    parser.add_argument(
+        "--semantic-anchor-state",
+        type=int,
+        help=(
+            "Optional source-demo state supplying the semantic EEF target "
+            "independently of rollout timing."
+        ),
+    )
+    parser.add_argument(
+        "--release-open-value",
+        type=float,
+        help="Program the right gripper to this open target for hang_complete.",
+    )
+    parser.add_argument(
+        "--release-start-fraction",
+        type=float,
+        default=HANGMUG_RELEASE_START_FRACTION,
+    )
+    parser.add_argument(
+        "--release-end-fraction",
+        type=float,
+        default=HANGMUG_RELEASE_END_FRACTION,
+    )
+    parser.add_argument("--right-joint-path-weight", type=float, default=0.0)
+    parser.add_argument("--right-joint-accel-weight", type=float, default=0.0)
+    parser.add_argument("--right-joint-jerk-weight", type=float, default=0.0)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
     parser.add_argument(
@@ -403,6 +477,19 @@ def _load_demo_state_row(args, index):
         return _state_row(states, index)
 
 
+def _load_demo_actions(args, start, end):
+    import h5py
+
+    with h5py.File(args.dataset, "r") as handle:
+        actions = handle[f"data/{args.episode}/actions"]
+        if not 0 <= start <= end <= len(actions):
+            raise ValueError(
+                f"action interval [{start}, {end}) is outside "
+                f"[0, {len(actions)})"
+            )
+        return np.asarray(actions[start:end], dtype=np.float32)
+
+
 def _encode_state(env):
     import torch
 
@@ -580,27 +667,66 @@ def insert(
     branch_rotation,
     horizon,
     *,
+    target_position_offset_branch=HANGMUG_INSERT_EEF_POSITION_OFFSET_BRANCH_M,
+    target_rotation_offset_branch=(
+        HANGMUG_INSERT_EEF_ROTATION_OFFSET_BRANCH_RAD
+    ),
+    clearance_rotation_offset_branch=(
+        HANGMUG_INSERT_CLEARANCE_ROTATION_OFFSET_BRANCH_RAD
+    ),
+    clearance_offset_branch=None,
     approach_offset_branch=HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M,
     seat_offset_branch=HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M,
+    clearance_fraction=HANGMUG_INSERT_CLEARANCE_FRACTION,
     approach_fraction=HANGMUG_INSERT_APPROACH_FRACTION,
     seat_fraction=HANGMUG_INSERT_SEAT_FRACTION,
 ):
-    """Approach beyond the branch tip, seat inward, then hold.
+    """Clear the tree, approach beyond the branch tip, seat inward, and hold.
 
     The branch frame's positive X axis runs from the branch root toward its
     tip. A positive approach X offset therefore backs the mug handle beyond
     the tip; interpolation to the seated target threads it inward along the
     branch tangent.
     """
-    if not 0.0 < approach_fraction < seat_fraction < 1.0:
+    if clearance_offset_branch is None:
+        phase_order_valid = 0.0 < approach_fraction < seat_fraction < 1.0
+    else:
+        phase_order_valid = (
+            0.0
+            < clearance_fraction
+            < approach_fraction
+            < seat_fraction
+            < 1.0
+        )
+    if not phase_order_valid:
         raise ValueError(
-            "insert fractions must satisfy 0 < approach < seat < 1"
+            "insert fractions must satisfy "
+            "0 < clearance < approach < seat < 1"
         )
     start_pose = np.asarray(start_pose, dtype=np.float32)
-    target_pose = np.asarray(target_pose, dtype=np.float32)
+    target_pose = np.asarray(target_pose, dtype=np.float32).copy()
     branch_rotation = np.asarray(branch_rotation, dtype=np.float32)
     if branch_rotation.shape != (3, 3):
         raise ValueError("branch_rotation must have shape (3, 3)")
+    target_pose[:3] += branch_rotation @ np.asarray(
+        target_position_offset_branch, dtype=np.float32
+    )
+    rotation_offset = branch_rotation @ np.asarray(
+        target_rotation_offset_branch, dtype=np.float32
+    )
+    rotation_angle = np.linalg.norm(rotation_offset)
+    if rotation_angle > 0.0:
+        rotation_axis = rotation_offset / rotation_angle
+        rotation_quaternion = np.concatenate(
+            (
+                np.asarray([np.cos(rotation_angle / 2.0)]),
+                rotation_axis * np.sin(rotation_angle / 2.0),
+            )
+        )
+        target_pose[3:7] = _quat_multiply(
+            rotation_quaternion, target_pose[3:7]
+        )
+        target_pose[3:7] /= np.linalg.norm(target_pose[3:7])
 
     approach = target_pose[:3] + branch_rotation @ np.asarray(
         approach_offset_branch, dtype=np.float32
@@ -608,12 +734,18 @@ def insert(
     seated = target_pose[:3] + branch_rotation @ np.asarray(
         seat_offset_branch, dtype=np.float32
     )
-    waypoint_phase = np.asarray(
-        [0.0, approach_fraction, seat_fraction, 1.0], dtype=np.float32
-    )
-    waypoint_position = np.stack(
-        (start_pose[:3], approach, seated, seated)
-    )
+    waypoint_phase = [0.0]
+    waypoint_position = [start_pose[:3]]
+    if clearance_offset_branch is not None:
+        clearance = target_pose[:3] + branch_rotation @ np.asarray(
+            clearance_offset_branch, dtype=np.float32
+        )
+        waypoint_phase.append(clearance_fraction)
+        waypoint_position.append(clearance)
+    waypoint_phase.extend((approach_fraction, seat_fraction, 1.0))
+    waypoint_position.extend((approach, seated, seated))
+    waypoint_phase = np.asarray(waypoint_phase, dtype=np.float32)
+    waypoint_position = np.stack(waypoint_position)
     phase = np.linspace(
         1.0 / horizon, 1.0, horizon, dtype=np.float32
     )
@@ -637,25 +769,91 @@ def insert(
             )
         )
 
-    orientation_target = target_pose.copy()
-    orientation_target[:3] = start_pose[:3]
-    orientation_horizon = max(1, int(np.ceil(seat_fraction * horizon)))
-    orientation = _semantic_reference_trajectory(
-        start_pose,
-        orientation_target,
-        orientation_horizon,
-    )[:, 3:7]
-    if len(orientation) < horizon:
-        orientation = np.concatenate(
+    orientation_phase = [0.0]
+    orientation_waypoint = [start_pose[3:7]]
+    clearance_rotation = branch_rotation @ np.asarray(
+        clearance_rotation_offset_branch, dtype=np.float32
+    )
+    clearance_angle = np.linalg.norm(clearance_rotation)
+    if clearance_offset_branch is not None and clearance_angle > 0.0:
+        clearance_axis = clearance_rotation / clearance_angle
+        clearance_quaternion = np.concatenate(
             (
-                orientation,
-                np.repeat(
-                    orientation[-1:, :], horizon - len(orientation), axis=0
-                ),
-            ),
-            axis=0,
+                np.asarray([np.cos(clearance_angle / 2.0)]),
+                clearance_axis * np.sin(clearance_angle / 2.0),
+            )
         )
+        orientation_phase.append(clearance_fraction)
+        orientation_waypoint.append(
+            _quat_multiply(clearance_quaternion, target_pose[3:7])
+        )
+    orientation_phase.extend((seat_fraction, 1.0))
+    orientation_waypoint.extend((target_pose[3:7], target_pose[3:7]))
+    orientation_phase = np.asarray(orientation_phase, dtype=np.float32)
+    orientation_waypoint = np.asarray(
+        orientation_waypoint, dtype=np.float32
+    )
+    orientation_waypoint /= np.linalg.norm(
+        orientation_waypoint, axis=-1, keepdims=True
+    )
+    orientation = np.empty((horizon, 4), dtype=np.float32)
+    for index, value in enumerate(phase):
+        segment = min(
+            np.searchsorted(orientation_phase, value, side="right") - 1,
+            len(orientation_phase) - 2,
+        )
+        local = (
+            (value - orientation_phase[segment])
+            / (
+                orientation_phase[segment + 1]
+                - orientation_phase[segment]
+            )
+        )
+        smooth = local * local * (3.0 - 2.0 * local)
+        left = orientation_waypoint[segment]
+        right = orientation_waypoint[segment + 1]
+        dot = float(np.dot(left, right))
+        if dot < 0.0:
+            right = -right
+            dot = -dot
+        if dot > 0.9995:
+            quaternion = left + smooth * (right - left)
+        else:
+            angle = np.arccos(np.clip(dot, -1.0, 1.0))
+            quaternion = (
+                np.sin((1.0 - smooth) * angle) * left
+                + np.sin(smooth * angle) * right
+            ) / np.sin(angle)
+        orientation[index] = quaternion / np.linalg.norm(quaternion)
     return np.concatenate((position, orientation), axis=-1).astype(np.float32)
+
+
+def release(
+    controls,
+    *,
+    open_value=HANGMUG_RELEASE_OPEN_VALUE,
+    start_fraction=HANGMUG_RELEASE_START_FRACTION,
+    end_fraction=HANGMUG_RELEASE_END_FRACTION,
+):
+    """Smoothly open the right gripper, then hold it open."""
+    if not 0.0 <= start_fraction < end_fraction <= 1.0:
+        raise ValueError(
+            "release fractions must satisfy 0 <= start < end <= 1"
+        )
+    controls = np.asarray(controls, dtype=np.float32).copy()
+    horizon = len(controls)
+    phase = (np.arange(horizon, dtype=np.float32) + 1.0) / horizon
+    blend = np.clip(
+        (phase - start_fraction) / (end_fraction - start_fraction),
+        0.0,
+        1.0,
+    )
+    blend = blend * blend * (3.0 - 2.0 * blend)
+    closed_value = controls[0, 13]
+    controls[:, 13] = (
+        closed_value + blend * (float(open_value) - closed_value)
+    )
+    return controls
 
 
 def _semantic_base_controls(nominal, target_name):
@@ -1018,6 +1216,9 @@ def _objective_components(
     target_name,
     source_branch_points=None,
     target_branch_points=None,
+    right_joint_path_weight=0.0,
+    right_joint_accel_weight=0.0,
+    right_joint_jerk_weight=0.0,
 ):
     world_position_error = np.linalg.norm(
         states[:, :, :3] - reference[None, :, :3], axis=-1
@@ -1045,6 +1246,9 @@ def _objective_components(
             relative_rotation,
             reference_rotation[None, :, :, :],
         )
+        position_error_vector = (
+            relative_position - reference_position[None, :, :]
+        )
         target_frame = "mug_relative_to_corresponded_branch"
     elif tree_target:
         relative_position, relative_quaternion = _mug_in_tree_frame(states)
@@ -1056,10 +1260,16 @@ def _objective_components(
         rotation_error = _quaternion_error(
             relative_quaternion, reference_quaternion[None, :, :]
         )
+        position_error_vector = (
+            relative_position - reference_position[None, :, :]
+        )
         target_frame = "mug_relative_to_tree_root"
     else:
         position_error = world_position_error
         rotation_error = world_rotation_error
+        position_error_vector = (
+            states[:, :, :3] - reference[None, :, :3]
+        )
         target_frame = "environment_origin"
     left_joint_error = np.sqrt(
         np.mean(
@@ -1087,6 +1297,19 @@ def _objective_components(
             axis=(1, 2),
         )
     )
+    right_joint_positions = states[:, :, 21:27]
+    right_joint_velocity = np.diff(right_joint_positions, axis=1)
+    right_joint_acceleration = np.diff(right_joint_velocity, axis=1)
+    right_joint_jerk = np.diff(right_joint_acceleration, axis=1)
+
+    def trajectory_cost(value):
+        if value.shape[1] == 0:
+            return np.zeros(value.shape[0], dtype=np.float32)
+        return np.linalg.norm(value, axis=-1).sum(axis=1)
+
+    right_joint_path = trajectory_cost(right_joint_velocity)
+    right_joint_accel = trajectory_cost(right_joint_acceleration)
+    right_joint_jerk = trajectory_cost(right_joint_jerk)
     left_grasp = sensors[:, :, 2]
     left_assist = sensors[:, :, 3]
     right_grasp = sensors[:, :, 6]
@@ -1103,6 +1326,9 @@ def _objective_components(
         -5.0 * position_error.mean(axis=1)
         -0.5 * rotation_error.mean(axis=1)
         -2.0 * action_delta
+        -right_joint_path_weight * right_joint_path
+        -right_joint_accel_weight * right_joint_accel
+        -right_joint_jerk_weight * right_joint_jerk
     )
     if target_name == "left_grasp":
         target_success = left_grasp
@@ -1190,10 +1416,16 @@ def _objective_components(
         "rewards": rewards,
         "target_frame": target_frame,
         "keyframe_position_error_m": position_error[:, keyframe_offset],
+        "keyframe_position_error_vector_m": position_error_vector[
+            :, keyframe_offset
+        ],
         "keyframe_rotation_error_rad": rotation_error[:, keyframe_offset],
         "keyframe_left_joint_rms_rad": left_joint_error[:, keyframe_offset],
         "keyframe_right_joint_rms_rad": right_joint_error[:, keyframe_offset],
         "action_delta_rms": action_delta,
+        "right_joint_path_l2": right_joint_path,
+        "right_joint_accel_l2": right_joint_accel,
+        "right_joint_jerk_l2": right_joint_jerk,
         "keyframe_target_success": target_success[:, keyframe_offset] > 0.5,
         "keyframe_left_grasp": left_grasp[:, keyframe_offset] > 0.5,
         "keyframe_right_grasp": right_grasp[:, keyframe_offset] > 0.5,
@@ -1210,8 +1442,12 @@ def _objective_components(
 def _group_summary(name, rows, components):
     rewards = components["rewards"][rows]
     position = components["keyframe_position_error_m"][rows]
+    position_vector = components["keyframe_position_error_vector_m"][rows]
     rotation = components["keyframe_rotation_error_rad"][rows]
     action_delta = components["action_delta_rms"][rows]
+    right_joint_path = components["right_joint_path_l2"][rows]
+    right_joint_accel = components["right_joint_accel_l2"][rows]
+    right_joint_jerk = components["right_joint_jerk_l2"][rows]
     target_success = components["keyframe_target_success"][rows]
     left_grasp = components["keyframe_left_grasp"][rows]
     right_grasp = components["keyframe_right_grasp"][rows]
@@ -1227,9 +1463,18 @@ def _group_summary(name, rows, components):
         "reward_max": float(rewards.max()),
         "keyframe_position_error_m_mean": float(position.mean()),
         "keyframe_position_error_m_max": float(position.max()),
+        "keyframe_position_error_vector_m_mean": (
+            position_vector.mean(axis=0).tolist()
+        ),
         "keyframe_rotation_error_rad_mean": float(rotation.mean()),
         "keyframe_rotation_error_rad_max": float(rotation.max()),
         "action_delta_rms_mean": float(action_delta.mean()),
+        "right_joint_path_l2_mean": float(right_joint_path.mean()),
+        "right_joint_path_l2_max": float(right_joint_path.max()),
+        "right_joint_accel_l2_mean": float(right_joint_accel.mean()),
+        "right_joint_accel_l2_max": float(right_joint_accel.max()),
+        "right_joint_jerk_l2_mean": float(right_joint_jerk.mean()),
+        "right_joint_jerk_l2_max": float(right_joint_jerk.max()),
         "keyframe_target_success_count": int(target_success.sum()),
         "keyframe_left_grasp_count": int(left_grasp.sum()),
         "keyframe_right_grasp_count": int(right_grasp.sum()),
@@ -1275,13 +1520,31 @@ def main():
         raise ValueError("control-knots must be within [1, horizon]")
     if not (
         0.0
+        < args.insert_clearance_fraction
         < args.insert_approach_fraction
         < args.insert_seat_fraction
         < 1.0
     ):
         raise ValueError(
-            "insert fractions must satisfy 0 < approach < seat < 1"
+            "insert fractions must satisfy "
+            "0 < clearance < approach < seat < 1"
         )
+    if not (
+        0.0
+        <= args.release_start_fraction
+        < args.release_end_fraction
+        <= 1.0
+    ):
+        raise ValueError(
+            "release fractions must satisfy 0 <= start < end <= 1"
+        )
+    motion_weights = (
+        args.right_joint_path_weight,
+        args.right_joint_accel_weight,
+        args.right_joint_jerk_weight,
+    )
+    if any(weight < 0.0 for weight in motion_weights):
+        raise ValueError("right-joint motion weights must be nonnegative")
     sys.path.insert(0, os.path.abspath(args.gear_repo))
 
     from isaaclab.app import AppLauncher
@@ -1411,8 +1674,15 @@ def main():
                         target_mug_pose,
                     )
                 else:
+                    semantic_nominal = nominal
+                    if args.semantic_anchor_state is not None:
+                        semantic_nominal = _load_demo_actions(
+                            args,
+                            args.start_state,
+                            args.semantic_anchor_state,
+                        )
                     target_eef_pose = _record_right_eef_keyframe(
-                        runner, reference_context, nominal
+                        runner, reference_context, semantic_nominal
                     )
                     _replay_context(runner, context)
                     current_eef_pose = _right_eef_pose_relative(runner.env)
@@ -1445,10 +1715,23 @@ def main():
                         target_eef_pose,
                         branch_rotation_world,
                         args.horizon,
+                        target_position_offset_branch=(
+                            args.insert_eef_position_offset_branch
+                        ),
+                        target_rotation_offset_branch=(
+                            args.insert_eef_rotation_offset_branch
+                        ),
+                        clearance_rotation_offset_branch=(
+                            args.insert_clearance_rotation_offset_branch
+                        ),
+                        clearance_offset_branch=(
+                            args.insert_clearance_offset_branch
+                        ),
                         approach_offset_branch=(
                             args.insert_approach_offset_branch
                         ),
                         seat_offset_branch=args.insert_seat_offset_branch,
+                        clearance_fraction=args.insert_clearance_fraction,
                         approach_fraction=args.insert_approach_fraction,
                         seat_fraction=args.insert_seat_fraction,
                     )
@@ -1461,6 +1744,16 @@ def main():
                 base_controls = _semantic_base_controls(
                     nominal, args.target_name
                 )
+                if (
+                    args.target_name == "hang_complete"
+                    and args.release_open_value is not None
+                ):
+                    base_controls = release(
+                        base_controls,
+                        open_value=args.release_open_value,
+                        start_fraction=args.release_start_fraction,
+                        end_fraction=args.release_end_fraction,
+                    )
             else:
                 reference_eef_poses = _record_right_eef_reference(
                     runner, reference_context, nominal
@@ -1550,6 +1843,9 @@ def main():
                 target_name=args.target_name,
                 source_branch_points=source_branch_points,
                 target_branch_points=target_branch_points,
+                right_joint_path_weight=args.right_joint_path_weight,
+                right_joint_accel_weight=args.right_joint_accel_weight,
+                right_joint_jerk_weight=args.right_joint_jerk_weight,
             )
             iteration_summaries.append(
                 {
@@ -1618,6 +1914,9 @@ def main():
             target_name=args.target_name,
             source_branch_points=source_branch_points,
             target_branch_points=target_branch_points,
+            right_joint_path_weight=args.right_joint_path_weight,
+            right_joint_accel_weight=args.right_joint_accel_weight,
+            right_joint_jerk_weight=args.right_joint_jerk_weight,
         )
         groups = {
             "nominal": _group_summary(
@@ -1660,6 +1959,7 @@ def main():
                     if args.target_name == "inserted_held"
                     else None
                 ),
+                "semantic_anchor_state": args.semantic_anchor_state,
                 "target_frame": evaluation["target_frame"],
                 "acceptance": "strict_geometric_subtask_success",
                 "hang_acceptance": {
@@ -1743,6 +2043,11 @@ def main():
                 "max_task_rotation_delta_rad": (
                     args.max_task_rotation_delta
                 ),
+                "right_joint_motion_weights": {
+                    "path": args.right_joint_path_weight,
+                    "acceleration": args.right_joint_accel_weight,
+                    "jerk": args.right_joint_jerk_weight,
+                },
                 "dls_damping": args.dls_damping,
                 "dls_max_joint_delta_rad": args.dls_max_joint_delta,
                 "dls_max_position_step_m": args.dls_max_position_step,
@@ -1753,14 +2058,36 @@ def main():
                         and args.target_name == "inserted_held"
                         and target_branch_points is not None
                     ),
+                    "clearance_offset_branch_m": list(
+                        args.insert_clearance_offset_branch
+                    ),
+                    "clearance_rotation_offset_branch_rad": list(
+                        args.insert_clearance_rotation_offset_branch
+                    ),
+                    "eef_position_offset_branch_m": list(
+                        args.insert_eef_position_offset_branch
+                    ),
+                    "eef_rotation_offset_branch_rad": list(
+                        args.insert_eef_rotation_offset_branch
+                    ),
                     "approach_offset_branch_m": list(
                         args.insert_approach_offset_branch
                     ),
                     "seat_offset_branch_m": list(
                         args.insert_seat_offset_branch
                     ),
+                    "clearance_fraction": args.insert_clearance_fraction,
                     "approach_fraction": args.insert_approach_fraction,
                     "seat_fraction": args.insert_seat_fraction,
+                },
+                "release": {
+                    "enabled": (
+                        args.target_name == "hang_complete"
+                        and args.release_open_value is not None
+                    ),
+                    "open_value": args.release_open_value,
+                    "start_fraction": args.release_start_fraction,
+                    "end_fraction": args.release_end_fraction,
                 },
             },
             "iteration_summaries": iteration_summaries,
@@ -1816,14 +2143,44 @@ def main():
                 insert_approach_offset_branch=np.asarray(
                     args.insert_approach_offset_branch, dtype=np.float32
                 ),
+                insert_clearance_offset_branch=np.asarray(
+                    args.insert_clearance_offset_branch, dtype=np.float32
+                ),
+                insert_clearance_rotation_offset_branch=np.asarray(
+                    args.insert_clearance_rotation_offset_branch,
+                    dtype=np.float32,
+                ),
+                insert_eef_position_offset_branch=np.asarray(
+                    args.insert_eef_position_offset_branch, dtype=np.float32
+                ),
+                insert_eef_rotation_offset_branch=np.asarray(
+                    args.insert_eef_rotation_offset_branch, dtype=np.float32
+                ),
                 insert_seat_offset_branch=np.asarray(
                     args.insert_seat_offset_branch, dtype=np.float32
+                ),
+                insert_clearance_fraction=np.float32(
+                    args.insert_clearance_fraction
                 ),
                 insert_approach_fraction=np.float32(
                     args.insert_approach_fraction
                 ),
                 insert_seat_fraction=np.float32(args.insert_seat_fraction),
                 insert_anchor_state=np.int64(args.insert_anchor_state),
+                semantic_anchor_state=(
+                    np.int64(-1)
+                    if args.semantic_anchor_state is None
+                    else np.int64(args.semantic_anchor_state)
+                ),
+                release_open_value=(
+                    np.float32(np.nan)
+                    if args.release_open_value is None
+                    else np.float32(args.release_open_value)
+                ),
+                release_start_fraction=np.float32(
+                    args.release_start_fraction
+                ),
+                release_end_fraction=np.float32(args.release_end_fraction),
                 insert_anchor_reference=(
                     np.empty((0, 36), dtype=np.float32)
                     if insert_anchor_reference is None
