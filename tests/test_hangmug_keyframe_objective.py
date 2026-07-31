@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from hangmug_grasp_keyframe_mpc import (
+    _apply_history_control_overrides,
     _expand_control_corrections,
     _objective_components,
     _subtask_reached,
@@ -209,3 +210,24 @@ def test_smooth_corrections_interpolate_and_preserve_grippers():
     assert controls[0, :, :7] == pytest.approx(1.0)
     assert controls[0, :, 13] == pytest.approx(1.0)
     assert controls[0, :, 7:13].max() == pytest.approx(1.1)
+
+
+def test_history_controls_replace_earlier_stage(tmp_path):
+    path = tmp_path / "stage.npz"
+    replacement = np.full((2, 14), 7.0, dtype=np.float32)
+    np.savez_compressed(
+        path,
+        best_sample=replacement,
+        start_state=np.int64(12),
+    )
+
+    result = _apply_history_control_overrides(
+        np.zeros((6, 14), dtype=np.float32),
+        checkpoint_state=10,
+        start_state=16,
+        controls_paths=[path],
+    )
+
+    assert result[:2] == pytest.approx(0.0)
+    assert result[2:4] == pytest.approx(7.0)
+    assert result[4:] == pytest.approx(0.0)

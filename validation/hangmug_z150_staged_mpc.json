@@ -1,0 +1,72 @@
+{
+  "status": "failed",
+  "asset": {
+    "source_height_m": 0.350275,
+    "target_height_m": 0.5254125148057938,
+    "z_scale": 1.5,
+    "target_branch_world_height_delta_m": 0.1218658287
+  },
+  "protocol": {
+    "checkpoint_state": 110,
+    "history_conditioning": "source controls followed by accepted earlier-stage controls",
+    "candidate_repeats": 2,
+    "repeat_evaluation_count": 10,
+    "state_teleports_between_stages": 0
+  },
+  "stages": [
+    {
+      "name": "lift_to_transformed_approach",
+      "start_state": 550,
+      "target_state": 639,
+      "status": "passed",
+      "successful_repeats": 10,
+      "position_error_m_mean": 0.03345987945795059,
+      "position_error_m_max": 0.03927392512559891
+    },
+    {
+      "name": "approach_replan",
+      "start_state": 639,
+      "target_state": 700,
+      "status": "passed",
+      "successful_repeats": 10,
+      "position_error_m_mean": 0.02098616398870945,
+      "position_error_m_max": 0.0227116197347641
+    },
+    {
+      "name": "approach_replan",
+      "start_state": 700,
+      "target_state": 720,
+      "status": "passed",
+      "successful_repeats": 10,
+      "position_error_m_mean": 0.03709743171930313,
+      "position_error_m_max": 0.041474077850580215
+    },
+    {
+      "name": "approach_replan",
+      "start_state": 720,
+      "target_state": 735,
+      "status": "passed",
+      "successful_repeats": 10,
+      "position_error_m_mean": 0.0464928038418293,
+      "position_error_m_max": 0.05743265151977539
+    },
+    {
+      "name": "inserted_held",
+      "start_state": 735,
+      "target_state": 744,
+      "status": "failed",
+      "successful_repeats": 0,
+      "position_error_m_mean": 0.042595792561769485,
+      "position_error_m_max": 0.07234694808721542
+    },
+    {
+      "name": "release_and_stabilize",
+      "start_state": 744,
+      "target_state": 825,
+      "status": "failed",
+      "successful_repeats": 0,
+      "acceptance_window_fraction_mean": 0.0,
+      "position_error_m_mean": 0.28085091710090637
+    }
+  ]
+}

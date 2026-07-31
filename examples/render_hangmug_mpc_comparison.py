@@ -165,6 +165,17 @@ def _load_inputs(args, device):
             dtype=torch.float32,
             device=device,
         )
+        if "history_actions" in controls.files:
+            history = torch.as_tensor(
+                controls["history_actions"],
+                dtype=torch.float32,
+                device=device,
+            )
+            if history.shape[0] != start_state - checkpoint_state:
+                raise ValueError(
+                    "Recorded history_actions length does not match "
+                    "checkpoint/start states"
+                )
         target_reference = _state_row(group["states"], target_state)
     candidate = torch.as_tensor(
         np.stack((nominal, best)), dtype=torch.float32, device=device
@@ -172,6 +183,11 @@ def _load_inputs(args, device):
     return {
         "checkpoint": checkpoint,
         "history": history,
+        "history_control_overrides": (
+            controls["history_control_overrides"].tolist()
+            if "history_control_overrides" in controls.files
+            else []
+        ),
         "candidate": candidate,
         "checkpoint_state": checkpoint_state,
         "start_state": start_state,
@@ -546,6 +562,9 @@ def main():
                 "right_lane": "MPC best sample",
                 "checkpoint_state": inputs["checkpoint_state"],
                 "history_steps": int(inputs["history"].shape[0]),
+                "history_control_overrides": inputs[
+                    "history_control_overrides"
+                ],
                 "start_state": inputs["start_state"],
                 "target_state": inputs["target_state"],
                 "target_name": inputs["target_name"],

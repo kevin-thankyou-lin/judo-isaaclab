@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 HANG_POSITION_TOLERANCE_M = 0.03
 HANG_SPEED_TOLERANCE_M_S = 0.05
 HANG_STABILITY_STEPS = 30
+TREE_APPROACH_POSITION_TOLERANCE_M = 0.06
+TREE_INSERTION_POSITION_TOLERANCE_M = 0.03
 
 
 def _parser():
@@ -47,6 +49,15 @@ def _parser():
         ),
     )
     parser.add_argument("--episode", default="demo_0")
+    parser.add_argument(
+        "--history-controls-npz",
+        nargs="*",
+        default=(),
+        help=(
+            "Earlier-stage controls whose best samples replace matching "
+            "segments of the source action history."
+        ),
+    )
     parser.add_argument(
         "--checkpoint-state",
         type=int,
@@ -195,6 +206,36 @@ def _state_row(group, index):
     ).astype(np.float32)
 
 
+def _apply_history_control_overrides(
+    history,
+    *,
+    checkpoint_state,
+    start_state,
+    controls_paths,
+):
+    history = np.asarray(history, dtype=np.float32).copy()
+    for path in controls_paths:
+        with np.load(path) as controls:
+            override = np.asarray(
+                controls["best_sample"], dtype=np.float32
+            )
+            override_start = int(controls["start_state"])
+        override_end = override_start + len(override)
+        if not checkpoint_state <= override_start < override_end <= start_state:
+            raise ValueError(
+                f"History override {path} spans [{override_start}, "
+                f"{override_end}), outside [{checkpoint_state}, {start_state})"
+            )
+        if override.shape[1:] != history.shape[1:]:
+            raise ValueError(
+                f"History override {path} has action shape "
+                f"{override.shape[1:]}, expected {history.shape[1:]}"
+            )
+        begin = override_start - checkpoint_state
+        history[begin : begin + len(override)] = override
+    return history
+
+
 def _load_demo(args, device):
     import h5py
     import torch
@@ -235,6 +276,12 @@ def _load_demo(args, device):
         history = np.asarray(
             group["actions"][checkpoint_state : args.start_state],
             dtype=np.float32,
+        )
+        history = _apply_history_control_overrides(
+            history,
+            checkpoint_state=checkpoint_state,
+            start_state=args.start_state,
+            controls_paths=args.history_controls_npz,
         )
         nominal = np.asarray(
             group["actions"][
@@ -599,7 +646,16 @@ def _objective_components(
             +1.0 * right_grasp[:, post_keyframe].mean(axis=1)
         )
     elif target_name in ("tree_approach", "inserted_held"):
-        target_success = stage2 * right_grasp
+        position_tolerance = (
+            TREE_APPROACH_POSITION_TOLERANCE_M
+            if target_name == "tree_approach"
+            else TREE_INSERTION_POSITION_TOLERANCE_M
+        )
+        target_success = (
+            stage2
+            * right_grasp
+            * (position_error <= position_tolerance)
+        )
         rewards += (
             3.0 * stage2[:, keyframe_offset]
             +3.0 * right_grasp[:, keyframe_offset]
@@ -922,6 +978,9 @@ def main():
                     else args.checkpoint_state
                 ),
                 "history_steps": int(history.shape[0]),
+                "history_control_overrides": list(
+                    args.history_controls_npz
+                ),
                 "start_state": args.start_state,
                 "target_state": args.target_state,
                 "target_name": args.target_name,
@@ -931,6 +990,14 @@ def main():
                     "position_tolerance_m": HANG_POSITION_TOLERANCE_M,
                     "speed_tolerance_m_s": HANG_SPEED_TOLERANCE_M_S,
                     "consecutive_steps": HANG_STABILITY_STEPS,
+                },
+                "tree_acceptance": {
+                    "approach_position_tolerance_m": (
+                        TREE_APPROACH_POSITION_TOLERANCE_M
+                    ),
+                    "insertion_position_tolerance_m": (
+                        TREE_INSERTION_POSITION_TOLERANCE_M
+                    ),
                 },
                 "right_gripper_held_through_target": (
                     args.target_name == "inserted_held"
@@ -991,6 +1058,10 @@ def main():
                 nominal=nominal,
                 optimized_mean=expand(plan.optimized_knots[None, ...])[0],
                 best_sample=expand(plan.best_sampled_knots[None, ...])[0],
+                history_actions=history,
+                history_control_overrides=np.asarray(
+                    args.history_controls_npz
+                ),
                 checkpoint_state=np.int64(
                     args.start_state
                     if args.checkpoint_state is None

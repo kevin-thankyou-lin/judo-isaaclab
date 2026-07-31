@@ -272,3 +272,23 @@ releases it on the taller branch. Independent render-time acceptance reports
 
 See `validation/hangmug_actual_taller_tree_mpc.json` and
 `validation/hangmug_actual_taller_tree_mpc_video.json`.
+
+### 1.5x geometry boundary
+
+The same one-shot budget fails when the full tree geometry is scaled to 1.5x Z:
+the matched branch is 121.9 mm higher and also physically thicker/steeper.
+History-conditioned staged MPC improves the trajectory without teleporting:
+
+- lift/approach at state 639: 10/10 within the 60 mm capture region;
+- replans at states 700, 720, and 735: each 10/10 with the grasp retained;
+- held insertion at state 744: fails the 30 mm gate, with 42.6 mm mean error;
+- release/stabilization: 0/10 stable hangs; the mug drops.
+
+`--history-controls-npz` replays accepted earlier-stage controls before a later
+branch. `examples/compose_hangmug_staged_controls.py` composes contiguous stages
+for a full side-by-side render. This result is a tested failure boundary, not
+evidence that 1.5x is unreachable with a redesigned target asset, controller,
+or insertion objective.
+
+See `validation/hangmug_z150_staged_mpc.json` and
+`validation/hangmug_z150_staged_mpc_video.json`.

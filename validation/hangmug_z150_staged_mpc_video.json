@@ -1,0 +1,39 @@
+{
+  "status": "failed",
+  "configuration": {
+    "physics": "parallel two-clone CPU PhysX scene",
+    "left_lane": "source-demo nominal",
+    "right_lane": "MPC staged best samples",
+    "checkpoint_state": 110,
+    "start_state": 550,
+    "target_state": 825,
+    "candidate_horizon": 275,
+    "stage_count": 6
+  },
+  "subtask_complete": {
+    "nominal": false,
+    "mpc": false
+  },
+  "hang_acceptance": {
+    "acceptance_fraction": [0.0, 0.0],
+    "terminal_position_error_m": [
+      0.25003278255462646,
+      0.24915316700935364
+    ]
+  },
+  "video": {
+    "codec": "h264",
+    "duration_s": 18.4,
+    "frame_count": 276,
+    "width": 1280,
+    "height": 480,
+    "size_bytes": 1801061,
+    "full_decode_returncode": 0,
+    "sha256": "66d842dd2a51c18b418cb070e7955de61c1dcec4fb21bd59519bbb82b7a68927"
+  },
+  "visual_review": {
+    "transport": "MPC tracks the elevated branch more closely than nominal",
+    "insertion": "mug handle does not seat around the scaled branch",
+    "release": "both lanes drop the mug"
+  }
+}
