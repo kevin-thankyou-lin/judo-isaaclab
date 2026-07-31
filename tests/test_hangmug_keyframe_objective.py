@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from hangmug_grasp_keyframe_mpc import (
     _apply_history_control_overrides,
     _expand_control_corrections,
+    _expand_task_space_program,
     _objective_components,
     _subtask_reached,
+    _task_program_knots,
 )
 from render_hangmug_mpc_comparison import _quaternion_error
 
@@ -158,6 +160,7 @@ def test_branch_correspondence_adapts_to_a_taller_branch(rollout_inputs):
         0.0, abs=1.0e-6
     )
     assert result["keyframe_position_error_m"][1] == pytest.approx(0.2)
+    assert result["rewards"][0] - result["rewards"][1] > 10.0
 
 
 def test_acceptance_depends_only_on_subtask_completion():
@@ -210,6 +213,76 @@ def test_smooth_corrections_interpolate_and_preserve_grippers():
     assert controls[0, :, :7] == pytest.approx(1.0)
     assert controls[0, :, 13] == pytest.approx(1.0)
     assert controls[0, :, 7:13].max() == pytest.approx(1.1)
+
+
+def test_task_program_smoothly_interpolates_between_stage_offsets():
+    knots = _task_program_knots(
+        5,
+        translation_start=[0.0, 0.0, 0.04],
+        translation_goal=[0.0, 0.0, 0.12],
+    )
+
+    assert knots.shape == (5, 6)
+    assert knots[0, :3] == pytest.approx([0.0, 0.0, 0.04])
+    assert knots[-1, :3] == pytest.approx([0.0, 0.0, 0.12])
+    assert np.diff(knots[:, 2]).min() >= 0.0
+    assert knots[:, 3:] == pytest.approx(0.0)
+
+
+def test_single_task_knot_uses_goal_offset():
+    knots = _task_program_knots(
+        1,
+        translation_start=[0.0, 0.0, 0.0],
+        translation_goal=[0.0, 0.0, 0.12],
+    )
+
+    assert knots[0, :3] == pytest.approx([0.0, 0.0, 0.12])
+
+
+def test_task_program_preserves_base_actions_and_clips_search_delta():
+    nominal = np.arange(56, dtype=np.float32).reshape(4, 14)
+    program = _task_program_knots(
+        2,
+        translation_start=[0.0, 0.0, 0.0],
+        translation_goal=[0.0, 0.0, 0.1],
+    )
+    candidates = np.stack((program, program))
+    candidates[1, :, 0] += 1.0
+    candidates[1, :, 3] += 1.0
+
+    controls = _expand_task_space_program(
+        candidates,
+        nominal,
+        program,
+        max_translation_delta=0.02,
+        max_rotation_delta=0.1,
+    )
+
+    assert controls.shape == (2, 4, 20)
+    assert controls[:, :, :14] == pytest.approx(
+        np.broadcast_to(nominal, (2, *nominal.shape))
+    )
+    assert controls[1, :, 14] - controls[0, :, 14] == pytest.approx(0.02)
+    assert controls[1, :, 17] - controls[0, :, 17] == pytest.approx(0.1)
+
+
+def test_objective_accepts_task_space_control_reference(rollout_inputs):
+    states, sensors, _, reference, nominal = rollout_inputs
+    controls = np.zeros((2, 2, 20), dtype=np.float32)
+    control_reference = np.zeros((2, 20), dtype=np.float32)
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        control_reference=control_reference,
+        keyframe_offset=0,
+        target_name="left_grasp",
+    )
+
+    assert result["action_delta_rms"] == pytest.approx(0.0)
 
 
 def test_history_controls_replace_earlier_stage(tmp_path):

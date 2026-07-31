@@ -46,6 +46,7 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         *,
         sensor_encoder: Encoder | None = None,
         action_adapter: ActionAdapter | None = None,
+        candidate_action_adapter: ActionAdapter | None = None,
         step_observer: StepObserver | None = None,
     ) -> None:
         self.runner = runner
@@ -54,9 +55,11 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         self.state_encoder = state_encoder
         self.sensor_encoder = sensor_encoder
         self.action_adapter = action_adapter or _default_action_adapter
+        self.candidate_action_adapter = candidate_action_adapter
         self.step_observer = step_observer
         self.context: BranchContext | None = None
         self.last_diagnostics: RolloutDiagnostics | None = None
+        self.last_executed_candidate_actions: np.ndarray | None = None
 
     def _observe(self, phase: str, step_index: int) -> None:
         if self.step_observer is not None:
@@ -75,14 +78,21 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         """Drop the current branch context."""
         self.context = None
 
-    def _step(self, actions: np.ndarray) -> None:
-        adapted = self.action_adapter(actions, self.env)
+    def _step(self, actions: np.ndarray, phase: str) -> Any:
+        adapter = (
+            self.candidate_action_adapter
+            if phase == "candidate"
+            and self.candidate_action_adapter is not None
+            else self.action_adapter
+        )
+        adapted = adapter(actions, self.env)
         _, _, terminated, truncated, _ = self.env.step(adapted)
         if bool(np.asarray(terminated).any()) or bool(np.asarray(truncated).any()):
             raise RuntimeError(
                 "IsaacLab planning environment produced a done signal; "
                 "auto-reset must be disabled for MPC rollouts"
             )
+        return adapted
 
     def _encode(self, encoder: Encoder | None, label: str) -> np.ndarray:
         if encoder is None:
@@ -107,7 +117,10 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
                 f"({self.num_threads}, horizon, action_dim), got {candidates.shape}"
             )
         history = np.asarray(self.context.action_history, dtype=np.float32)
-        if history.shape[1] != candidates.shape[2]:
+        if (
+            self.candidate_action_adapter is None
+            and history.shape[1] != candidates.shape[2]
+        ):
             raise ValueError(
                 "History and candidate action dimensions differ: "
                 f"{history.shape[1]} != {candidates.shape[2]}"
@@ -124,14 +137,19 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         self._observe("reset", -1)
         for step, action in enumerate(history):
             self._step(
-                np.broadcast_to(action, (self.num_threads, action.size)).copy()
+                np.broadcast_to(action, (self.num_threads, action.size)).copy(),
+                "history",
             )
             self._observe("history", step)
 
         states = []
         sensors = []
+        executed_actions = []
         for step in range(candidates.shape[1]):
-            self._step(candidates[:, step, :])
+            adapted = self._step(candidates[:, step, :], "candidate")
+            if hasattr(adapted, "detach"):
+                adapted = adapted.detach().cpu().numpy()
+            executed_actions.append(np.asarray(adapted, dtype=np.float32))
             self._observe("candidate", step)
             states.append(self._encode(self.state_encoder, "state_encoder"))
             sensors.append(self._encode(self.sensor_encoder, "sensor_encoder"))
@@ -142,6 +160,9 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
             horizon_steps=candidates.shape[1],
             action_dim=candidates.shape[2],
             reset_completed=True,
+        )
+        self.last_executed_candidate_actions = np.stack(
+            executed_actions, axis=1
         )
         return (
             np.stack(states, axis=1),

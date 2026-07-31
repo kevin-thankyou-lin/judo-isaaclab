@@ -132,3 +132,30 @@ def test_step_observer_sees_reset_history_and_candidates():
     ]
     np.testing.assert_allclose(events[0][2], [[4.0], [4.0]])
     np.testing.assert_allclose(events[2][2], [[7.0], [7.0]])
+
+
+def test_candidate_adapter_can_change_action_dimension():
+    runner = FakeRunner(2)
+    backend = HistoryConditionedIsaacLabBackend(
+        runner,
+        state_encoder=lambda env: env.state.copy(),
+        action_adapter=lambda actions, env: actions,
+        candidate_action_adapter=lambda controls, env: controls[:, :1] * 2.0,
+    )
+    backend.set_branch_context(
+        BranchContext(
+            checkpoint_state={"value": 0.0},
+            action_history=np.array([[1.0]], dtype=np.float32),
+            rigid_object_states={},
+        )
+    )
+
+    states, _, _ = backend.rollout(
+        np.empty(0),
+        np.array([[[2.0, 9.0]], [[3.0, 9.0]]], dtype=np.float32),
+    )
+
+    np.testing.assert_allclose(states[:, 0, 0], [5.0, 7.0])
+    np.testing.assert_allclose(
+        backend.last_executed_candidate_actions[:, 0, 0], [4.0, 6.0]
+    )

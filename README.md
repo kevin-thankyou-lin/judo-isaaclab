@@ -292,3 +292,36 @@ or insertion objective.
 
 See `validation/hangmug_z150_staged_mpc.json` and
 `validation/hangmug_z150_staged_mpc_video.json`.
+
+### Hierarchical task-space MPC
+
+The environment consumes 14-D absolute joint-position targets. The original
+HangMug search therefore optimized smooth joint-target corrections. J-PARSE is
+not on this rollout path: it is only used by the MimicGen end-effector-to-action
+adapter, so its SVD cannot explain MPC wall time.
+
+`--search-space task` adds a hierarchical alternative:
+
+1. an outer semantic program interpolates a six-dimensional right-end-effector
+   residual between stage offsets;
+2. CEM searches local Cartesian residuals around that program;
+3. a batched damped-least-squares adapter maps all candidate residuals to the
+   14-D joint targets required by IsaacLab, using `torch.linalg.solve` rather
+   than an SVD;
+4. later stages replay the exact executed joint actions from accepted earlier
+   stages before branching.
+
+On the fully Z-scaled 1.5x tree, the approach stages at states 639, 700, and
+735 each passed all six fresh-clone repeats, with mean matched-branch errors of
+13.56, 19.54, and 33.49 mm. The strict inserted/held stage found one sampled
+28.49 mm success, but the identical program reproduced at 39.14 mm mean and
+0/8 successes in fresh clones. Release/stabilization remained 0/6. Thus the
+hierarchy improves long-range adaptation substantially, but does not make the
+thicker/steeper 1.5x contact geometry robustly insertable under this physics
+and action interface.
+
+The dominant runtime is still repeated CPU PhysX history reconstruction and
+candidate simulation, not task-space conversion. Retaining or checkpointing a
+history-conditioned planning scene is the next meaningful speed optimization.
+
+See `validation/hangmug_z150_hierarchical_task_mpc.json`.

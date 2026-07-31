@@ -1,0 +1,71 @@
+{
+  "status": "partial_success",
+  "asset": {
+    "path": "/tmp/hangmug_taller_mugtree_z150",
+    "z_scale": 1.5,
+    "matched_branch_world_z_offset_m": 0.1218658
+  },
+  "controller": {
+    "outer_program": "staged Cartesian right-end-effector residual",
+    "inner_optimizer": "Judo CEM",
+    "search_dimension": 6,
+    "execution_dimension": 14,
+    "task_to_joint_mapping": "batched damped least squares",
+    "uses_jparse": false,
+    "uses_svd": false
+  },
+  "stages": [
+    {
+      "start_state": 550,
+      "target_state": 639,
+      "target": "tree_approach",
+      "repeat_success": "6/6",
+      "mean_position_error_m": 0.0135608166,
+      "max_position_error_m": 0.0151728187
+    },
+    {
+      "start_state": 639,
+      "target_state": 700,
+      "target": "tree_approach",
+      "repeat_success": "6/6",
+      "mean_position_error_m": 0.0195382014,
+      "max_position_error_m": 0.0209309794
+    },
+    {
+      "start_state": 700,
+      "target_state": 735,
+      "target": "tree_approach",
+      "repeat_success": "6/6",
+      "mean_position_error_m": 0.0334872454,
+      "max_position_error_m": 0.0352793001
+    },
+    {
+      "start_state": 735,
+      "target_state": 744,
+      "target": "inserted_held",
+      "sampled_success_position_error_m": 0.0284851808,
+      "repeat_success": "0/8",
+      "repeat_mean_position_error_m": 0.0391434208,
+      "repeat_max_position_error_m": 0.0411954485
+    },
+    {
+      "start_state": 744,
+      "target_state": 825,
+      "target": "hang_complete",
+      "repeat_success": "0/6",
+      "repeat_mean_position_error_m": 0.3054891229
+    }
+  ],
+  "video": {
+    "path": "/tmp/hangmug_z150_hierarchical_task_mpc.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 480,
+    "frame_count": 276,
+    "duration_s": 18.4,
+    "size_bytes": 1781233,
+    "sha256": "f0bfb1c8432c98762ddf451da91dd46eeb61fe1ba3d5ec5eab0872d527b7d7e7",
+    "full_decode_returncode": 0,
+    "visual_review": "dynamic side-by-side trajectory; MPC raises the mug to the transformed branch but strict insertion and stable-hang predicates do not pass"
+  }
+}

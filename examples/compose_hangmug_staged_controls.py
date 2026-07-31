@@ -18,7 +18,14 @@ def main():
     try:
         starts = [int(stage["start_state"]) for stage in loaded]
         controls = [
-            np.asarray(stage["best_sample"], dtype=np.float32)
+            np.asarray(
+                stage[
+                    "best_executed_actions"
+                    if "best_executed_actions" in stage.files
+                    else "best_sample"
+                ],
+                dtype=np.float32,
+            )
             for stage in loaded
         ]
         ends = [start + len(control) for start, control in zip(starts, controls)]
@@ -47,6 +54,7 @@ def main():
             args.output,
             nominal=nominal,
             best_sample=best,
+            best_executed_actions=best,
             optimized_mean=best,
             checkpoint_state=np.int64(first["checkpoint_state"]),
             start_state=np.int64(starts[0]),

@@ -80,6 +80,12 @@ def _parser():
     )
     parser.add_argument("--horizon", type=int, default=8)
     parser.add_argument(
+        "--search-space",
+        choices=("joint", "task"),
+        default="joint",
+        help="Optimize smooth joint corrections or Cartesian right-EEF residuals.",
+    )
+    parser.add_argument(
         "--control-knots",
         type=int,
         help=(
@@ -95,6 +101,25 @@ def _parser():
     parser.add_argument("--sigma-min", type=float, default=0.002)
     parser.add_argument("--sigma-max", type=float, default=0.03)
     parser.add_argument("--max-action-delta", type=float, default=0.08)
+    parser.add_argument(
+        "--task-translation-goal",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        help="World-frame Cartesian warm-start offset at the target keyframe.",
+    )
+    parser.add_argument(
+        "--task-translation-start",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("X", "Y", "Z"),
+        help="World-frame Cartesian warm-start offset at the stage start.",
+    )
+    parser.add_argument("--max-task-translation-delta", type=float, default=0.08)
+    parser.add_argument("--max-task-rotation-delta", type=float, default=0.3)
+    parser.add_argument("--dls-damping", type=float, default=0.05)
+    parser.add_argument("--dls-max-joint-delta", type=float, default=0.35)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
     parser.add_argument(
@@ -217,7 +242,12 @@ def _apply_history_control_overrides(
     for path in controls_paths:
         with np.load(path) as controls:
             override = np.asarray(
-                controls["best_sample"], dtype=np.float32
+                controls[
+                    "best_executed_actions"
+                    if "best_executed_actions" in controls.files
+                    else "best_sample"
+                ],
+                dtype=np.float32,
             )
             override_start = int(controls["start_state"])
         override_end = override_start + len(override)
@@ -386,9 +416,21 @@ def _expand_control_corrections(
     """Interpolate smooth joint-target corrections onto the rollout horizon."""
     knots = np.asarray(knots, dtype=np.float32)
     nominal = np.asarray(nominal, dtype=np.float32)
+    corrections = _interpolate_knots(knots, nominal.shape[0])
+    corrections = np.clip(
+        corrections, -max_action_delta, max_action_delta
+    )
+    corrections[:, :, (6, 13)] = 0.0
+    if right_arm_only:
+        corrections[:, :, :7] = 0.0
+    return nominal[None, :, :] + corrections
+
+
+def _interpolate_knots(knots, horizon):
+    knots = np.asarray(knots, dtype=np.float32)
     source = np.linspace(0.0, 1.0, knots.shape[1])
-    target = np.linspace(0.0, 1.0, nominal.shape[0])
-    corrections = np.stack(
+    target = np.linspace(0.0, 1.0, horizon)
+    return np.stack(
         [
             np.stack(
                 [
@@ -400,13 +442,50 @@ def _expand_control_corrections(
             for rollout in knots
         ]
     )
-    corrections = np.clip(
-        corrections, -max_action_delta, max_action_delta
+
+
+def _task_program_knots(num_knots, translation_start, translation_goal):
+    phase = (
+        np.ones(1, dtype=np.float32)
+        if num_knots == 1
+        else np.linspace(0.0, 1.0, num_knots, dtype=np.float32)
     )
-    corrections[:, :, (6, 13)] = 0.0
-    if right_arm_only:
-        corrections[:, :, :7] = 0.0
-    return nominal[None, :, :] + corrections
+    smooth = phase * phase * (3.0 - 2.0 * phase)
+    knots = np.zeros((num_knots, 6), dtype=np.float32)
+    start = np.asarray(translation_start, dtype=np.float32)
+    goal = np.asarray(translation_goal, dtype=np.float32)
+    knots[:, :3] = start + smooth[:, None] * (goal - start)
+    return knots
+
+
+def _expand_task_space_program(
+    knots,
+    nominal,
+    program_nominal,
+    *,
+    max_translation_delta,
+    max_rotation_delta,
+):
+    knots = np.asarray(knots, dtype=np.float32)
+    delta = knots - program_nominal[None, :, :]
+    delta[:, :, :3] = np.clip(
+        delta[:, :, :3],
+        -max_translation_delta,
+        max_translation_delta,
+    )
+    delta[:, :, 3:] = np.clip(
+        delta[:, :, 3:],
+        -max_rotation_delta,
+        max_rotation_delta,
+    )
+    residuals = _interpolate_knots(
+        program_nominal[None, :, :] + delta, nominal.shape[0]
+    )
+    base = np.broadcast_to(
+        nominal[None, :, :],
+        (knots.shape[0], *nominal.shape),
+    )
+    return np.concatenate((base, residuals), axis=-1)
 
 
 def _torch_quat_multiply(left, right):
@@ -536,6 +615,7 @@ def _objective_components(
     *,
     reference,
     nominal,
+    control_reference=None,
     keyframe_offset,
     target_name,
     source_branch_points=None,
@@ -599,9 +679,13 @@ def _objective_components(
             axis=-1,
         )
     )
+    if control_reference is None:
+        control_reference = nominal
     action_delta = np.sqrt(
         np.mean(
-            np.square(controls - nominal[None, :, :]),
+            np.square(
+                controls - np.asarray(control_reference)[None, :, :]
+            ),
             axis=(1, 2),
         )
     )
@@ -666,6 +750,8 @@ def _objective_components(
             rewards += (
                 -40.0 * position_error[:, keyframe_offset]
                 -4.0 * rotation_error[:, keyframe_offset]
+                +12.0 * target_success[:, keyframe_offset]
+                +4.0 * target_success[:, post_keyframe].mean(axis=1)
             )
     elif target_name == "hang_complete":
         target_success = (
@@ -797,6 +883,7 @@ def main():
         )
         from judo_isaaclab import (
             BranchContext,
+            DampedLeastSquaresTaskSpaceAdapter,
             HistoryConditionedIsaacLabBackend,
             JudoIsaacLabMPC,
         )
@@ -843,11 +930,31 @@ def main():
             },
             is_relative=True,
         )
+        task_translation_goal = args.task_translation_goal
+        if args.search_space == "task" and task_translation_goal is None:
+            task_translation_goal = np.asarray(
+                args.tree_offset_xyz, dtype=np.float32
+            )
+            task_translation_goal[2] += _tree_root_z_adjustment(args)
+            if source_branch_points is not None:
+                task_translation_goal += (
+                    target_branch_points[0] - source_branch_points[0]
+                )
+        task_adapter = (
+            DampedLeastSquaresTaskSpaceAdapter(
+                damping=args.dls_damping,
+                max_joint_delta=args.dls_max_joint_delta,
+            )
+            if args.search_space == "task"
+            else None
+        )
         backend = HistoryConditionedIsaacLabBackend(
             runner,
             state_encoder=_encode_state,
             sensor_encoder=_encode_sensors,
+            candidate_action_adapter=task_adapter,
         )
+        optimizer_dim = 6 if task_adapter is not None else nominal.shape[1]
         optimizer = CrossEntropyMethod(
             CrossEntropyMethodConfig(
                 num_rollouts=args.num_rollouts,
@@ -856,25 +963,44 @@ def main():
                 sigma_max=args.sigma_max,
                 num_elites=args.num_elites,
             ),
-            nu=nominal.shape[1],
+            nu=optimizer_dim,
         )
 
-        correction_nominal = np.zeros(
-            (num_control_knots, nominal.shape[1]), dtype=np.float32
-        )
+        if task_adapter is None:
+            correction_nominal = np.zeros(
+                (num_control_knots, nominal.shape[1]), dtype=np.float32
+            )
+        else:
+            correction_nominal = _task_program_knots(
+                num_control_knots,
+                args.task_translation_start,
+                task_translation_goal,
+            )
 
         def expand(knots):
-            controls = _expand_control_corrections(
-                knots,
-                nominal,
-                max_action_delta=args.max_action_delta,
-                right_arm_only=args.target_name
-                in ("tree_approach", "inserted_held", "hang_complete"),
-            )
+            if task_adapter is None:
+                controls = _expand_control_corrections(
+                    knots,
+                    nominal,
+                    max_action_delta=args.max_action_delta,
+                    right_arm_only=args.target_name
+                    in ("tree_approach", "inserted_held", "hang_complete"),
+                )
+            else:
+                controls = _expand_task_space_program(
+                    knots,
+                    nominal,
+                    correction_nominal,
+                    max_translation_delta=args.max_task_translation_delta,
+                    max_rotation_delta=args.max_task_rotation_delta,
+                )
             if args.target_name == "inserted_held":
                 controls[:, : keyframe_offset + 1, 13] = nominal[0, 13]
             return controls
 
+        objective_control_reference = expand(
+            correction_nominal[None, ...]
+        )[0]
         iteration_summaries = []
 
         def objective(states, sensors, controls):
@@ -884,6 +1010,7 @@ def main():
                 controls,
                 reference=reference,
                 nominal=nominal,
+                control_reference=objective_control_reference,
                 keyframe_offset=keyframe_offset,
                 target_name=args.target_name,
                 source_branch_points=source_branch_points,
@@ -934,7 +1061,7 @@ def main():
         optimized_rows = slice(group_size, 2 * group_size)
         best_rows = slice(2 * group_size, args.num_rollouts)
         evaluation_knots = np.empty(
-            (args.num_rollouts, num_control_knots, nominal.shape[1]),
+            (args.num_rollouts, num_control_knots, optimizer_dim),
             dtype=np.float64,
         )
         evaluation_knots[nominal_rows] = correction_nominal
@@ -950,6 +1077,7 @@ def main():
             evaluation_controls,
             reference=reference,
             nominal=nominal,
+            control_reference=objective_control_reference,
             keyframe_offset=keyframe_offset,
             target_name=args.target_name,
             source_branch_points=source_branch_points,
@@ -966,6 +1094,13 @@ def main():
                 "best_sample", best_rows, evaluation
             ),
         }
+        executed_evaluation_controls = (
+            backend.last_executed_candidate_actions
+        )
+        optimized_executed_actions = executed_evaluation_controls[
+            optimized_rows.start
+        ]
+        best_executed_actions = executed_evaluation_controls[best_rows.start]
         best_group = groups["best_sample"]
         reached = _subtask_reached(best_group)
         result = {
@@ -1023,6 +1158,7 @@ def main():
             },
             "optimizer": {
                 "type": "judo.optimizers.cem.CrossEntropyMethod",
+                "search_space": args.search_space,
                 "num_rollouts": args.num_rollouts,
                 "num_iterations": args.num_iterations,
                 "num_elites": args.num_elites,
@@ -1031,6 +1167,22 @@ def main():
                 "sigma_min": args.sigma_min,
                 "sigma_max": args.sigma_max,
                 "max_action_delta": args.max_action_delta,
+                "task_translation_start_m": list(
+                    args.task_translation_start
+                ),
+                "task_translation_goal_m": (
+                    None
+                    if task_translation_goal is None
+                    else np.asarray(task_translation_goal).tolist()
+                ),
+                "max_task_translation_delta_m": (
+                    args.max_task_translation_delta
+                ),
+                "max_task_rotation_delta_rad": (
+                    args.max_task_rotation_delta
+                ),
+                "dls_damping": args.dls_damping,
+                "dls_max_joint_delta_rad": args.dls_max_joint_delta,
             },
             "iteration_summaries": iteration_summaries,
             "plan": {
@@ -1042,8 +1194,7 @@ def main():
                 "nominal_reward_std": float(plan.nominal_reward_std),
                 "first_action_delta_l2": float(
                     np.linalg.norm(
-                        expand(plan.best_sampled_knots[None, ...])[0, 0]
-                        - nominal[0]
+                        best_executed_actions[0] - nominal[0]
                     )
                 ),
             },
@@ -1058,6 +1209,19 @@ def main():
                 nominal=nominal,
                 optimized_mean=expand(plan.optimized_knots[None, ...])[0],
                 best_sample=expand(plan.best_sampled_knots[None, ...])[0],
+                optimized_executed_actions=optimized_executed_actions,
+                best_executed_actions=best_executed_actions,
+                search_space=np.asarray(args.search_space),
+                task_translation_start=np.asarray(
+                    args.task_translation_start, dtype=np.float32
+                ),
+                task_translation_goal=(
+                    np.empty((0,), dtype=np.float32)
+                    if task_translation_goal is None
+                    else np.asarray(
+                        task_translation_goal, dtype=np.float32
+                    )
+                ),
                 history_actions=history,
                 history_control_overrides=np.asarray(
                     args.history_controls_npz

@@ -77,7 +77,14 @@ def _load_inputs(args, device):
 
     controls = np.load(args.controls_npz)
     nominal = np.asarray(controls["nominal"], dtype=np.float32)
-    best = np.asarray(controls["best_sample"], dtype=np.float32)
+    best = np.asarray(
+        controls[
+            "best_executed_actions"
+            if "best_executed_actions" in controls.files
+            else "best_sample"
+        ],
+        dtype=np.float32,
+    )
     checkpoint_state = int(controls["checkpoint_state"])
     start_state = int(controls["start_state"])
     target_state = int(controls["target_state"])
