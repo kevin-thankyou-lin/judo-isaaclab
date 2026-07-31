@@ -382,3 +382,33 @@ for approach and insertion. Stable release remains a separate contact-planning
 problem.
 
 See `validation/hangmug_z150_semantic_task_mpc.json`.
+
+#### Editable insertion primitive and frame diagnostics
+
+For `semantic_pose` plus `inserted_held`, the planner now calls an explicit
+`insert()` primitive instead of using one straight Cartesian interpolation.
+Its editable defaults are expressed in the matched target-branch frame:
+
+```text
+pre-insert offset: (+4, -11, +18) mm
+seat offset:       ( 0,   0,  -4) mm
+phase fractions:   approach=0.45, seat=0.80, hold=0.20
+```
+
+The corresponding CLI overrides are
+`--insert-approach-offset-branch`,
+`--insert-seat-offset-branch`, `--insert-approach-fraction`, and
+`--insert-seat-fraction`. This makes small geometry-specific corrections easy
+to revise without binding the controller to the source joint path.
+
+`render_hangmug_mpc_comparison.py --draw-coordinate-axes` draws RGB=`XYZ`
+frames for the matched branch (5 cm), desired EEF (3.5 cm), and live EEF
+(2 cm). The three-point correspondence transfers the full desired EEF pose
+(position and orientation), not only a world-space offset. On the 1.5x tree,
+this corrected the target by 11.2 mm and 10.77 degrees relative to the old
+translation-only mapping. The approach passed 6/6 repeats at 22.81 mm mean
+error, and `insert()` passed 8/8 at 22.61 mm mean and 27.19 mm maximum error.
+Both rendered lanes retained the right grasp and completed the held-insertion
+subtask; the axes make their different terminal poses directly inspectable.
+
+See `validation/hangmug_z150_insert_primitive.json`.

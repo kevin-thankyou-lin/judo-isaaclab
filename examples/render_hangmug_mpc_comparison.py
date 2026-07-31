@@ -18,7 +18,9 @@ from hangmug_grasp_keyframe_mpc import (
     HANG_POSITION_TOLERANCE_M,
     HANG_SPEED_TOLERANCE_M_S,
     HANG_STABILITY_STEPS,
+    _branch_frame,
     _mug_in_branch_frame,
+    _quat_to_matrix,
     _state_row,
     _tensor_tree,
     _torch_quat_multiply,
@@ -59,6 +61,11 @@ def _parser():
     parser.add_argument("--fps", type=int, default=15)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
+    parser.add_argument(
+        "--draw-coordinate-axes",
+        action="store_true",
+        help="Draw matched branch, desired EEF, and live EEF RGB axes.",
+    )
     parser.add_argument("--seed", type=int, default=20260730)
     return parser.parse_args()
 
@@ -138,6 +145,12 @@ def _load_inputs(args, device):
         np.asarray(controls["target_branch_points"], dtype=np.float32)
         if "target_branch_points" in controls.files
         and controls["target_branch_points"].size
+        else None
+    )
+    target_eef_pose = (
+        np.asarray(controls["reference_eef_poses"][-1], dtype=np.float32)
+        if "reference_eef_poses" in controls.files
+        and controls["reference_eef_poses"].size
         else None
     )
     if nominal.shape != best.shape or nominal.ndim != 2:
@@ -221,6 +234,7 @@ def _load_inputs(args, device):
             if target_branch_points is None
             else target_branch_points.tolist()
         ),
+        "target_eef_pose": target_eef_pose,
         "target_reference": target_reference,
     }
 
@@ -263,9 +277,68 @@ def _rgb_frames(env):
     return rgb
 
 
-def _write_frame(env, sample, frame_index, frames_dir, target_name):
+def _draw_coordinate_axes(env, inputs, draw):
+    if (
+        draw is None
+        or inputs["target_branch_points"] is None
+        or inputs["target_eef_pose"] is None
+    ):
+        return
+    draw.clear_lines()
+    branch_origin, branch_rotation = _branch_frame(
+        inputs["target_branch_points"]
+    )
+    tree_pose = env.scene["mug_tree"].data.root_pose_w.detach().cpu().numpy()
+    eef_pose = (
+        env.scene["right_arm"].data.body_pose_w[:, -1]
+        .detach()
+        .cpu()
+        .numpy()
+    )
+    env_origins = env.scene.env_origins.detach().cpu().numpy()
+    target_pose = np.asarray(inputs["target_eef_pose"], dtype=np.float32)
+    starts = []
+    ends = []
+    colors = []
+    sizes = []
+    rgb = ((1.0, 0.1, 0.1, 1.0), (0.1, 1.0, 0.1, 1.0), (0.1, 0.4, 1.0, 1.0))
+    for env_index in range(env.num_envs):
+        tree_rotation = _quat_to_matrix(tree_pose[env_index, 3:7])
+        branch_origin_w = (
+            tree_pose[env_index, :3] + tree_rotation @ branch_origin
+        )
+        branch_rotation_w = tree_rotation @ branch_rotation
+        target_origin_w = target_pose[:3] + env_origins[env_index]
+        target_rotation_w = _quat_to_matrix(target_pose[3:7])
+        live_origin_w = eef_pose[env_index, :3]
+        live_rotation_w = _quat_to_matrix(eef_pose[env_index, 3:7])
+        for origin, rotation, length, size in (
+            (branch_origin_w, branch_rotation_w, 0.050, 5.0),
+            (target_origin_w, target_rotation_w, 0.035, 3.0),
+            (live_origin_w, live_rotation_w, 0.020, 1.5),
+        ):
+            for axis, color in enumerate(rgb):
+                starts.append(tuple(float(value) for value in origin))
+                end = origin + length * rotation[:, axis]
+                ends.append(tuple(float(value) for value in end))
+                colors.append(color)
+                sizes.append(size)
+    draw.draw_lines(starts, ends, colors, sizes)
+
+
+def _write_frame(
+    env,
+    sample,
+    frame_index,
+    frames_dir,
+    target_name,
+    *,
+    inputs,
+    coordinate_draw=None,
+):
     import cv2
 
+    _draw_coordinate_axes(env, inputs, coordinate_draw)
     images = _rgb_frames(env)
     panels = []
     labels = ("SOURCE-DEMO NOMINAL", "MPC BEST SAMPLE")
@@ -282,6 +355,10 @@ def _write_frame(env, sample, frame_index, frames_dir, target_name):
             f"handover latched: {sample['stage2'][env_index]}",
             f"hang latched: {sample['stage3'][env_index]}",
         ]
+        if coordinate_draw is not None:
+            lines.append(
+                "RGB=XYZ axes: branch 5cm / target 3.5cm / live 2cm"
+            )
         for index, line in enumerate(lines):
             color = (70, 230, 255) if index == 0 else (245, 245, 245)
             cv2.putText(
@@ -507,6 +584,15 @@ def main():
         env = runner.env
         env.reset(warm_up=False, seed=args.seed)
         inputs = _load_inputs(args, env.device)
+        coordinate_draw = None
+        if args.draw_coordinate_axes:
+            from isaacsim.core.utils.extensions import enable_extension
+
+            if not enable_extension("isaacsim.util.debug_draw"):
+                raise RuntimeError("Could not enable isaacsim.util.debug_draw")
+            import isaacsim.util.debug_draw._debug_draw as _debug_draw
+
+            coordinate_draw = _debug_draw.acquire_debug_draw_interface()
         runner.reset(
             inputs["checkpoint"],
             {
@@ -533,6 +619,8 @@ def main():
                     0,
                     frames_dir,
                     inputs["target_name"],
+                    inputs=inputs,
+                    coordinate_draw=coordinate_draw,
                 )
             )
             for step in range(inputs["candidate"].shape[1]):
@@ -550,6 +638,8 @@ def main():
                         step + 1,
                         frames_dir,
                         inputs["target_name"],
+                        inputs=inputs,
+                        coordinate_draw=coordinate_draw,
                     )
                 )
             _encode(frames_dir, args.fps, args.output)
@@ -596,6 +686,7 @@ def main():
                     "target_branch_points"
                 ],
                 "candidate_horizon": int(inputs["candidate"].shape[1]),
+                "coordinate_axes": args.draw_coordinate_axes,
             },
             "terminal": {
                 "left_grasp": traces[-1]["left_grasp"],

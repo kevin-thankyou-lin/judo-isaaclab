@@ -8,13 +8,16 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from hangmug_grasp_keyframe_mpc import (
     _apply_history_control_overrides,
+    _correspond_pose_between_branches,
     _expand_control_corrections,
     _expand_task_space_program,
     _objective_components,
+    _quat_to_matrix,
     _semantic_base_controls,
     _semantic_reference_trajectory,
     _subtask_reached,
     _task_program_knots,
+    insert,
 )
 from render_hangmug_mpc_comparison import _quaternion_error
 
@@ -165,6 +168,59 @@ def test_branch_correspondence_adapts_to_a_taller_branch(rollout_inputs):
     assert result["rewards"][0] - result["rewards"][1] > 10.0
 
 
+def test_pose_correspondence_preserves_branch_relative_pose_and_orientation():
+    source_points = np.array(
+        [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]
+    )
+    target_points = np.array(
+        [[0.0, 0.0, 0.2], [0.0, 1.0, 1.2], [1.0, 0.0, 0.2]]
+    )
+    tree_pose = np.array([0.5, -0.3, 0.8, 1.0, 0.0, 0.0, 0.0])
+    pose = np.array([0.52, -0.2, 0.84, 1.0, 0.0, 0.0, 0.0])
+
+    mapped = _correspond_pose_between_branches(
+        pose,
+        tree_pose,
+        tree_pose,
+        source_points,
+        target_points,
+    )
+
+    source_origin, source_rotation = (
+        source_points[0],
+        np.stack(
+            (
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ),
+            axis=-1,
+        ),
+    )
+    target_origin, target_rotation = (
+        target_points[0],
+        np.stack(
+            (
+                [0.0, np.sqrt(0.5), np.sqrt(0.5)],
+                [1.0, 0.0, 0.0],
+                [0.0, np.sqrt(0.5), -np.sqrt(0.5)],
+            ),
+            axis=-1,
+        ),
+    )
+    source_coordinates = source_rotation.T @ (
+        pose[:3] - tree_pose[:3] - source_origin
+    )
+    expected_position = (
+        tree_pose[:3] + target_origin + target_rotation @ source_coordinates
+    )
+
+    assert mapped[:3] == pytest.approx(expected_position)
+    mapped_rotation = _quat_to_matrix(mapped[3:7])
+    expected_rotation = target_rotation @ source_rotation.T
+    assert mapped_rotation == pytest.approx(expected_rotation, abs=1.0e-6)
+
+
 def test_acceptance_depends_only_on_subtask_completion():
     group = {
         "count": 6,
@@ -282,6 +338,46 @@ def test_semantic_reference_starts_from_live_pose_and_ends_at_keyframe():
         target[:3] - start[:3]
     )
     assert np.linalg.norm(reference[:, 3:7], axis=-1) == pytest.approx(1.0)
+
+
+def test_insert_uses_branch_frame_offsets_and_holds_seated_pose():
+    start = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = np.array([0.5, 0.2, 0.1, 1.0, 0.0, 0.0, 0.0])
+    branch_rotation = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+
+    reference = insert(
+        start,
+        target,
+        branch_rotation,
+        horizon=10,
+        approach_offset_branch=(0.1, 0.0, 0.0),
+        seat_offset_branch=(0.0, 0.0, -0.02),
+        approach_fraction=0.4,
+        seat_fraction=0.8,
+    )
+
+    assert reference.shape == (10, 7)
+    assert reference[3, :3] == pytest.approx([0.5, 0.3, 0.1])
+    assert reference[7:, :3] == pytest.approx(
+        np.broadcast_to([0.5, 0.2, 0.08], (3, 3))
+    )
+    assert reference[:, 3:7] == pytest.approx(
+        np.broadcast_to([1.0, 0.0, 0.0, 0.0], (10, 4))
+    )
+
+
+def test_insert_rejects_invalid_phase_order():
+    with pytest.raises(ValueError, match="0 < approach < seat < 1"):
+        insert(
+            np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            np.array([0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            np.eye(3),
+            horizon=4,
+            approach_fraction=0.9,
+            seat_fraction=0.8,
+        )
 
 
 @pytest.mark.parametrize(

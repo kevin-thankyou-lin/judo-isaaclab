@@ -1,0 +1,57 @@
+{
+  "status": "passed",
+  "primitive": {
+    "name": "insert",
+    "frame": "matched target branch",
+    "approach_offset_branch_m": [0.004, -0.011, 0.018],
+    "seat_offset_branch_m": [0.0, 0.0, -0.004],
+    "approach_fraction": 0.45,
+    "seat_fraction": 0.8,
+    "terminal_behavior": "hold seated pose"
+  },
+  "simulator_validation": {
+    "target_asset": "1.5x Z-scaled MugTree",
+    "start_state": 735,
+    "target_state": 744,
+    "candidate_repeats": 2,
+    "full_pose_correspondence_target_shift_m": 0.011170,
+    "full_pose_correspondence_target_shift_rad": 0.188039,
+    "approach_repeat_success": "6/6",
+    "approach_mean_position_error_m": 0.022809909656643867,
+    "approach_max_position_error_m": 0.03206630051136017,
+    "repeat_success": "8/8",
+    "mean_position_error_m": 0.022609518840909004,
+    "max_position_error_m": 0.027193907648324966,
+    "mean_rotation_error_rad": 0.11523164808750153,
+    "max_rotation_error_rad": 0.17498008906841278,
+    "right_grasp_count": "8/8",
+    "mean_mug_speed_m_s": 0.10801561176776886,
+    "max_mug_speed_m_s": 0.20154081284999847
+  },
+  "tests": {
+    "host": "36 passed",
+    "isaac_environment": "15 passed"
+  },
+  "video": {
+    "path": "/tmp/hangmug_z150_corresponded_insert_axes.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 480,
+    "frame_count": 10,
+    "duration_s": 0.667,
+    "size_bytes": 108279,
+    "sha256": "9e1fbd9fca392c4b80910c6054a1b173a6a7f60b052220e378323d5e04054d6c",
+    "full_decode_returncode": 0,
+    "coordinate_axes": true,
+    "terminal_right_grasp": [true, true],
+    "subtask_complete": {
+      "nominal": true,
+      "mpc": true
+    },
+    "max_translation_divergence_m": 0.12311461711231088,
+    "terminal_translation_divergence_m": 0.12311461711231088,
+    "max_rotation_divergence_rad": 0.34205887296064724,
+    "terminal_rotation_divergence_rad": 0.2773857461838576,
+    "visual_review": "branch, desired EEF, and live EEF axes are visible; both lanes retain the right grasp and complete held insertion"
+  }
+}

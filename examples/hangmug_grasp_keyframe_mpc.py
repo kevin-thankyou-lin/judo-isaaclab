@@ -16,6 +16,10 @@ HANG_SPEED_TOLERANCE_M_S = 0.05
 HANG_STABILITY_STEPS = 30
 TREE_APPROACH_POSITION_TOLERANCE_M = 0.06
 TREE_INSERTION_POSITION_TOLERANCE_M = 0.03
+HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M = (0.004, -0.011, 0.018)
+HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M = (0.0, 0.0, -0.004)
+HANGMUG_INSERT_APPROACH_FRACTION = 0.45
+HANGMUG_INSERT_SEAT_FRACTION = 0.80
 
 
 def _parser():
@@ -131,6 +135,32 @@ def _parser():
     parser.add_argument("--dls-max-joint-delta", type=float, default=0.35)
     parser.add_argument("--dls-max-position-step", type=float, default=0.03)
     parser.add_argument("--dls-max-rotation-step", type=float, default=0.2)
+    parser.add_argument(
+        "--insert-approach-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M,
+        metavar=("X", "Y", "Z"),
+        help="Pre-insert EEF offset in the matched target-branch frame.",
+    )
+    parser.add_argument(
+        "--insert-seat-offset-branch",
+        type=float,
+        nargs=3,
+        default=HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M,
+        metavar=("X", "Y", "Z"),
+        help="Final seating EEF offset in the matched target-branch frame.",
+    )
+    parser.add_argument(
+        "--insert-approach-fraction",
+        type=float,
+        default=HANGMUG_INSERT_APPROACH_FRACTION,
+    )
+    parser.add_argument(
+        "--insert-seat-fraction",
+        type=float,
+        default=HANGMUG_INSERT_SEAT_FRACTION,
+    )
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
     parser.add_argument(
@@ -435,6 +465,12 @@ def _right_eef_pose_relative(env):
     return pose.cpu().numpy()
 
 
+def _tree_pose_relative(env):
+    pose = env.scene["mug_tree"].data.root_pose_w[0].detach().clone()
+    pose[:3] -= env.scene.env_origins[0]
+    return pose.cpu().numpy()
+
+
 def _record_right_eef_reference(runner, context, nominal):
     """Replay source controls once and record the environment-relative EEF pose."""
     import torch
@@ -499,6 +535,84 @@ def _semantic_reference_trajectory(start_pose, target_pose, horizon):
             + np.sin(smooth * angle)[:, None] * right[None, :]
         ) / np.sin(angle)
     return np.concatenate((position, quaternion), axis=-1).astype(np.float32)
+
+
+def insert(
+    start_pose,
+    target_pose,
+    branch_rotation,
+    horizon,
+    *,
+    approach_offset_branch=HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M,
+    seat_offset_branch=HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M,
+    approach_fraction=HANGMUG_INSERT_APPROACH_FRACTION,
+    seat_fraction=HANGMUG_INSERT_SEAT_FRACTION,
+):
+    """Generate approach, seating, and unload-hold poses in a branch frame."""
+    if not 0.0 < approach_fraction < seat_fraction < 1.0:
+        raise ValueError(
+            "insert fractions must satisfy 0 < approach < seat < 1"
+        )
+    start_pose = np.asarray(start_pose, dtype=np.float32)
+    target_pose = np.asarray(target_pose, dtype=np.float32)
+    branch_rotation = np.asarray(branch_rotation, dtype=np.float32)
+    if branch_rotation.shape != (3, 3):
+        raise ValueError("branch_rotation must have shape (3, 3)")
+
+    approach = target_pose[:3] + branch_rotation @ np.asarray(
+        approach_offset_branch, dtype=np.float32
+    )
+    seated = target_pose[:3] + branch_rotation @ np.asarray(
+        seat_offset_branch, dtype=np.float32
+    )
+    waypoint_phase = np.asarray(
+        [0.0, approach_fraction, seat_fraction, 1.0], dtype=np.float32
+    )
+    waypoint_position = np.stack(
+        (start_pose[:3], approach, seated, seated)
+    )
+    phase = np.linspace(
+        1.0 / horizon, 1.0, horizon, dtype=np.float32
+    )
+    position = np.empty((horizon, 3), dtype=np.float32)
+    for index, value in enumerate(phase):
+        segment = min(
+            np.searchsorted(waypoint_phase, value, side="right") - 1,
+            len(waypoint_phase) - 2,
+        )
+        local = (
+            (value - waypoint_phase[segment])
+            / (waypoint_phase[segment + 1] - waypoint_phase[segment])
+        )
+        smooth = local * local * (3.0 - 2.0 * local)
+        position[index] = (
+            waypoint_position[segment]
+            + smooth
+            * (
+                waypoint_position[segment + 1]
+                - waypoint_position[segment]
+            )
+        )
+
+    orientation_target = target_pose.copy()
+    orientation_target[:3] = start_pose[:3]
+    orientation_horizon = max(1, int(np.ceil(seat_fraction * horizon)))
+    orientation = _semantic_reference_trajectory(
+        start_pose,
+        orientation_target,
+        orientation_horizon,
+    )[:, 3:7]
+    if len(orientation) < horizon:
+        orientation = np.concatenate(
+            (
+                orientation,
+                np.repeat(
+                    orientation[-1:, :], horizon - len(orientation), axis=0
+                ),
+            ),
+            axis=0,
+        )
+    return np.concatenate((position, orientation), axis=-1).astype(np.float32)
 
 
 def _semantic_base_controls(nominal, target_name):
@@ -664,6 +778,58 @@ def _quat_to_matrix(quaternion):
     ).reshape(quaternion.shape[:-1] + (3, 3))
 
 
+def _matrix_to_quat(matrix):
+    matrix = np.asarray(matrix, dtype=np.float32)
+    trace = float(np.trace(matrix))
+    if trace > 0.0:
+        scale = np.sqrt(trace + 1.0) * 2.0
+        quaternion = np.asarray(
+            (
+                0.25 * scale,
+                (matrix[2, 1] - matrix[1, 2]) / scale,
+                (matrix[0, 2] - matrix[2, 0]) / scale,
+                (matrix[1, 0] - matrix[0, 1]) / scale,
+            )
+        )
+    else:
+        axis = int(np.argmax(np.diag(matrix)))
+        first = axis
+        second = (axis + 1) % 3
+        third = (axis + 2) % 3
+        scale = np.sqrt(
+            1.0
+            + matrix[first, first]
+            - matrix[second, second]
+            - matrix[third, third]
+        ) * 2.0
+        vector = np.zeros(3, dtype=np.float32)
+        vector[first] = 0.25 * scale
+        vector[second] = (
+            matrix[second, first] + matrix[first, second]
+        ) / scale
+        vector[third] = (
+            matrix[third, first] + matrix[first, third]
+        ) / scale
+        quaternion = np.concatenate(
+            (
+                np.asarray(
+                    [
+                        (
+                            matrix[third, second]
+                            - matrix[second, third]
+                        )
+                        / scale
+                    ]
+                ),
+                vector,
+            )
+        )
+    quaternion /= np.linalg.norm(quaternion)
+    if quaternion[0] < 0.0:
+        quaternion = -quaternion
+    return quaternion.astype(np.float32)
+
+
 def _rotation_matrix_error(actual, target):
     relative = np.einsum("...ji,...jk->...ik", actual, target)
     cosine = (np.trace(relative, axis1=-2, axis2=-1) - 1.0) / 2.0
@@ -684,6 +850,54 @@ def _branch_frame(points):
     z_axis /= z_norm
     y_axis = np.cross(z_axis, x_axis)
     return points[0], np.stack((x_axis, y_axis, z_axis), axis=-1)
+
+
+def _correspond_pose_between_branches(
+    pose,
+    source_tree_pose,
+    target_tree_pose,
+    source_branch_points,
+    target_branch_points,
+):
+    """Transport a world-relative pose through aligned branch frames."""
+    pose = np.asarray(pose, dtype=np.float32)
+    source_tree_pose = np.asarray(source_tree_pose, dtype=np.float32)
+    target_tree_pose = np.asarray(target_tree_pose, dtype=np.float32)
+    source_origin, source_branch_rotation = _branch_frame(
+        source_branch_points
+    )
+    target_origin, target_branch_rotation = _branch_frame(
+        target_branch_points
+    )
+    source_tree_rotation = _quat_to_matrix(source_tree_pose[3:7])
+    target_tree_rotation = _quat_to_matrix(target_tree_pose[3:7])
+    source_branch_rotation_w = (
+        source_tree_rotation @ source_branch_rotation
+    )
+    target_branch_rotation_w = (
+        target_tree_rotation @ target_branch_rotation
+    )
+    source_branch_origin_w = (
+        source_tree_pose[:3] + source_tree_rotation @ source_origin
+    )
+    target_branch_origin_w = (
+        target_tree_pose[:3] + target_tree_rotation @ target_origin
+    )
+    position_branch = source_branch_rotation_w.T @ (
+        pose[:3] - source_branch_origin_w
+    )
+    rotation_branch = (
+        source_branch_rotation_w.T @ _quat_to_matrix(pose[3:7])
+    )
+    target_pose = np.empty(7, dtype=np.float32)
+    target_pose[:3] = (
+        target_branch_origin_w
+        + target_branch_rotation_w @ position_branch
+    )
+    target_pose[3:7] = _matrix_to_quat(
+        target_branch_rotation_w @ rotation_branch
+    )
+    return target_pose
 
 
 def _mug_in_tree_frame(rows):
@@ -976,6 +1190,15 @@ def main():
     num_control_knots = args.control_knots or args.horizon
     if not 1 <= num_control_knots <= args.horizon:
         raise ValueError("control-knots must be within [1, horizon]")
+    if not (
+        0.0
+        < args.insert_approach_fraction
+        < args.insert_seat_fraction
+        < 1.0
+    ):
+        raise ValueError(
+            "insert fractions must satisfy 0 < approach < seat < 1"
+        )
     sys.path.insert(0, os.path.abspath(args.gear_repo))
 
     from isaaclab.app import AppLauncher
@@ -1071,14 +1294,48 @@ def main():
                 )
                 _replay_context(runner, context)
                 current_eef_pose = _right_eef_pose_relative(runner.env)
-                target_eef_pose[:3] += np.asarray(
-                    task_translation_goal, dtype=np.float32
-                )
-                reference_eef_poses = _semantic_reference_trajectory(
-                    current_eef_pose,
-                    target_eef_pose,
-                    args.horizon,
-                )
+                target_tree_pose = _tree_pose_relative(runner.env)
+                if target_branch_points is not None:
+                    target_eef_pose = _correspond_pose_between_branches(
+                        target_eef_pose,
+                        reference[-1, 29:36],
+                        target_tree_pose,
+                        source_branch_points,
+                        target_branch_points,
+                    )
+                else:
+                    target_eef_pose[:3] += np.asarray(
+                        task_translation_goal, dtype=np.float32
+                    )
+                if (
+                    args.target_name == "inserted_held"
+                    and target_branch_points is not None
+                ):
+                    target_branch_rotation = _branch_frame(
+                        target_branch_points
+                    )[1]
+                    branch_rotation_world = (
+                        _quat_to_matrix(target_tree_pose[3:7])
+                        @ target_branch_rotation
+                    )
+                    reference_eef_poses = insert(
+                        current_eef_pose,
+                        target_eef_pose,
+                        branch_rotation_world,
+                        args.horizon,
+                        approach_offset_branch=(
+                            args.insert_approach_offset_branch
+                        ),
+                        seat_offset_branch=args.insert_seat_offset_branch,
+                        approach_fraction=args.insert_approach_fraction,
+                        seat_fraction=args.insert_seat_fraction,
+                    )
+                else:
+                    reference_eef_poses = _semantic_reference_trajectory(
+                        current_eef_pose,
+                        target_eef_pose,
+                        args.horizon,
+                    )
                 base_controls = _semantic_base_controls(
                     nominal, args.target_name
                 )
@@ -1351,6 +1608,21 @@ def main():
                 "dls_max_joint_delta_rad": args.dls_max_joint_delta,
                 "dls_max_position_step_m": args.dls_max_position_step,
                 "dls_max_rotation_step_rad": args.dls_max_rotation_step,
+                "insert": {
+                    "enabled": (
+                        args.task_controller == "semantic_pose"
+                        and args.target_name == "inserted_held"
+                        and target_branch_points is not None
+                    ),
+                    "approach_offset_branch_m": list(
+                        args.insert_approach_offset_branch
+                    ),
+                    "seat_offset_branch_m": list(
+                        args.insert_seat_offset_branch
+                    ),
+                    "approach_fraction": args.insert_approach_fraction,
+                    "seat_fraction": args.insert_seat_fraction,
+                },
             },
             "iteration_summaries": iteration_summaries,
             "plan": {
@@ -1397,6 +1669,16 @@ def main():
                     if reference_eef_poses is None
                     else reference_eef_poses
                 ),
+                insert_approach_offset_branch=np.asarray(
+                    args.insert_approach_offset_branch, dtype=np.float32
+                ),
+                insert_seat_offset_branch=np.asarray(
+                    args.insert_seat_offset_branch, dtype=np.float32
+                ),
+                insert_approach_fraction=np.float32(
+                    args.insert_approach_fraction
+                ),
+                insert_seat_fraction=np.float32(args.insert_seat_fraction),
                 history_actions=history,
                 history_control_overrides=np.asarray(
                     args.history_controls_npz
