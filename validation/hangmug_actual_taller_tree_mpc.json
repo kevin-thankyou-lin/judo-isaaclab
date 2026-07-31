@@ -1,0 +1,54 @@
+{
+  "status": "passed",
+  "asset": {
+    "kind": "physical USD visual and collision Z scale",
+    "source_height_m": 0.350275,
+    "target_height_m": 0.420330011844635,
+    "z_scale": 1.2,
+    "target_branch_world_height_delta_m": 0.0487463316,
+    "wrapper_sha256": "ffb2f69500d9a54d69917ca58d1a8d34b6706fbf1b43312fc79596ca2cd51710"
+  },
+  "source": {
+    "checkpoint_state": 110,
+    "start_state": 600,
+    "target_state": 825,
+    "horizon": 225,
+    "control_hz": 30,
+    "target_name": "hang_complete",
+    "target_frame": "mug_relative_to_corresponded_branch"
+  },
+  "optimizer": {
+    "type": "judo.optimizers.cem.CrossEntropyMethod",
+    "num_rollouts": 30,
+    "num_iterations": 8,
+    "num_elites": 6,
+    "candidate_repeats": 2,
+    "control_knots": 4,
+    "optimized_dimensions": 24
+  },
+  "acceptance": {
+    "position_tolerance_m": 0.03,
+    "speed_tolerance_m_s": 0.05,
+    "consecutive_steps": 30
+  },
+  "nominal": {
+    "successful_repeats": 0,
+    "repeat_count": 10,
+    "acceptance_window_fraction_mean": 0.0,
+    "terminal_position_error_m_mean": 0.1759050041437149
+  },
+  "best_sample": {
+    "successful_repeats": 10,
+    "repeat_count": 10,
+    "acceptance_window_fraction_mean": 1.0,
+    "terminal_position_error_m_mean": 0.008287407457828522,
+    "terminal_position_error_m_max": 0.009644960053265095,
+    "action_delta_rms_mean": 0.019681496563175516
+  },
+  "plan": {
+    "accepted_update": true,
+    "best_iteration": 5,
+    "best_rollout": 2,
+    "improvement": 43.97630596160889
+  }
+}

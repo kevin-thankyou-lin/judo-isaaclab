@@ -11,6 +11,10 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
+HANG_POSITION_TOLERANCE_M = 0.03
+HANG_SPEED_TOLERANCE_M_S = 0.05
+HANG_STABILITY_STEPS = 30
+
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -35,6 +39,13 @@ def _parser():
             "HangMugOnTree/objects"
         ),
     )
+    parser.add_argument(
+        "--target-mug-tree",
+        help=(
+            "Target MugTree instance directory. Defaults to the source "
+            "mug_tree_000 asset."
+        ),
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument(
         "--checkpoint-state",
@@ -57,6 +68,14 @@ def _parser():
         default="left_grasp",
     )
     parser.add_argument("--horizon", type=int, default=8)
+    parser.add_argument(
+        "--control-knots",
+        type=int,
+        help=(
+            "Number of smooth correction knots. Defaults to one knot per "
+            "control step."
+        ),
+    )
     parser.add_argument("--num-rollouts", type=int, default=16)
     parser.add_argument("--num-iterations", type=int, default=3)
     parser.add_argument("--num-elites", type=int, default=4)
@@ -144,6 +163,26 @@ def _tensor_tree(group, index, device):
     return result
 
 
+def _source_tree_path(args):
+    return os.path.join(args.objects_root, "MugTree", "mug_tree_000")
+
+
+def _target_tree_path(args):
+    return args.target_mug_tree or _source_tree_path(args)
+
+
+def _asset_height(path):
+    with open(os.path.join(path, "asset_size.json"), encoding="utf-8") as stream:
+        return float(json.load(stream)["size"]["z"])
+
+
+def _tree_root_z_adjustment(args):
+    return (
+        _asset_height(_target_tree_path(args))
+        - _asset_height(_source_tree_path(args))
+    ) / 2.0
+
+
 def _state_row(group, index):
     return np.concatenate(
         (
@@ -172,6 +211,7 @@ def _load_demo(args, device):
         states = group["states"]
         checkpoint = _tensor_tree(states, checkpoint_state, device)
         tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
+        tree_pose[:, 2] += _tree_root_z_adjustment(args)
         tree_pose[:, :3] += torch.as_tensor(
             args.tree_offset_xyz,
             dtype=tree_pose.dtype,
@@ -287,6 +327,39 @@ def _quaternion_error(actual, target):
     target = target / np.linalg.norm(target, axis=-1, keepdims=True)
     dots = np.abs(np.sum(actual * target, axis=-1))
     return 2.0 * np.arccos(np.clip(dots, 0.0, 1.0))
+
+
+def _expand_control_corrections(
+    knots,
+    nominal,
+    *,
+    max_action_delta,
+    right_arm_only=False,
+):
+    """Interpolate smooth joint-target corrections onto the rollout horizon."""
+    knots = np.asarray(knots, dtype=np.float32)
+    nominal = np.asarray(nominal, dtype=np.float32)
+    source = np.linspace(0.0, 1.0, knots.shape[1])
+    target = np.linspace(0.0, 1.0, nominal.shape[0])
+    corrections = np.stack(
+        [
+            np.stack(
+                [
+                    np.interp(target, source, rollout[:, action])
+                    for action in range(knots.shape[2])
+                ],
+                axis=-1,
+            )
+            for rollout in knots
+        ]
+    )
+    corrections = np.clip(
+        corrections, -max_action_delta, max_action_delta
+    )
+    corrections[:, :, (6, 13)] = 0.0
+    if right_arm_only:
+        corrections[:, :, :7] = 0.0
+    return nominal[None, :, :] + corrections
 
 
 def _torch_quat_multiply(left, right):
@@ -491,6 +564,7 @@ def _objective_components(
     stage1 = sensors[:, :, 7]
     stage2 = sensors[:, :, 8]
     stage3 = sensors[:, :, 9]
+    mug_linear_speed = np.linalg.norm(states[:, :, 7:10], axis=-1)
     post_keyframe = slice(keyframe_offset, None)
     rewards = (
         -80.0 * position_error[:, keyframe_offset]
@@ -538,7 +612,13 @@ def _objective_components(
                 -4.0 * rotation_error[:, keyframe_offset]
             )
     elif target_name == "hang_complete":
-        target_success = stage3
+        target_success = (
+            stage3
+            * (position_error <= HANG_POSITION_TOLERANCE_M)
+            * (mug_linear_speed <= HANG_SPEED_TOLERANCE_M_S)
+            * (1.0 - left_grasp)
+            * (1.0 - right_grasp)
+        )
         rewards += (
             8.0 * stage3[:, keyframe_offset]
             +4.0 * stage3[:, post_keyframe].mean(axis=1)
@@ -546,6 +626,15 @@ def _objective_components(
         )
     else:
         raise ValueError(f"Unsupported target-name: {target_name}")
+    if target_name == "hang_complete":
+        acceptance_window = slice(
+            max(0, keyframe_offset - HANG_STABILITY_STEPS + 1),
+            keyframe_offset + 1,
+        )
+        acceptance_fraction = target_success[:, acceptance_window].mean(axis=1)
+        rewards += 12.0 * acceptance_fraction
+    else:
+        acceptance_fraction = target_success[:, keyframe_offset]
     return {
         "rewards": rewards,
         "target_frame": target_frame,
@@ -562,6 +651,8 @@ def _objective_components(
         "post_keyframe_target_fraction": target_success[
             :, post_keyframe
         ].mean(axis=1),
+        "acceptance_window_fraction": acceptance_fraction,
+        "keyframe_mug_linear_speed_m_s": mug_linear_speed[:, keyframe_offset],
     }
 
 
@@ -576,6 +667,8 @@ def _group_summary(name, rows, components):
     left_assist = components["keyframe_left_assist"][rows]
     stage2 = components["keyframe_stage2"][rows]
     retention = components["post_keyframe_target_fraction"][rows]
+    acceptance = components["acceptance_window_fraction"][rows]
+    speed = components["keyframe_mug_linear_speed_m_s"][rows]
     return {
         "name": name,
         "count": int(len(rewards)),
@@ -592,11 +685,15 @@ def _group_summary(name, rows, components):
         "keyframe_left_assist_count": int(left_assist.sum()),
         "keyframe_stage2_count": int(stage2.sum()),
         "post_keyframe_target_fraction_mean": float(retention.mean()),
+        "acceptance_window_fraction_mean": float(acceptance.mean()),
+        "acceptance_success_count": int((acceptance >= 1.0).sum()),
+        "keyframe_mug_linear_speed_m_s_mean": float(speed.mean()),
+        "keyframe_mug_linear_speed_m_s_max": float(speed.max()),
     }
 
 
 def _subtask_reached(group):
-    return group["keyframe_target_success_count"] == group["count"]
+    return group["acceptance_success_count"] == group["count"]
 
 
 def main():
@@ -622,6 +719,9 @@ def main():
         raise ValueError("target-state must fall inside the rollout horizon")
     if args.num_rollouts < 3:
         raise ValueError("num-rollouts must be at least three")
+    num_control_knots = args.control_knots or args.horizon
+    if not 1 <= num_control_knots <= args.horizon:
+        raise ValueError("control-knots must be within [1, horizon]")
     sys.path.insert(0, os.path.abspath(args.gear_repo))
 
     from isaaclab.app import AppLauncher
@@ -648,9 +748,7 @@ def main():
         np.random.seed(args.seed)
         assets = {
             "mug": os.path.join(args.objects_root, "Mug", "mug_000"),
-            "mug_tree": os.path.join(
-                args.objects_root, "MugTree", "mug_tree_000"
-            ),
+            "mug_tree": _target_tree_path(args),
         }
         assist_config = {
             "left": {
@@ -697,7 +795,7 @@ def main():
         optimizer = CrossEntropyMethod(
             CrossEntropyMethodConfig(
                 num_rollouts=args.num_rollouts,
-                num_nodes=args.horizon,
+                num_nodes=num_control_knots,
                 sigma_min=args.sigma_min,
                 sigma_max=args.sigma_max,
                 num_elites=args.num_elites,
@@ -705,15 +803,18 @@ def main():
             nu=nominal.shape[1],
         )
 
+        correction_nominal = np.zeros(
+            (num_control_knots, nominal.shape[1]), dtype=np.float32
+        )
+
         def expand(knots):
-            controls = np.asarray(knots, dtype=np.float32).copy()
-            delta = np.clip(
-                controls - nominal[None, :, :],
-                -args.max_action_delta,
-                args.max_action_delta,
+            controls = _expand_control_corrections(
+                knots,
+                nominal,
+                max_action_delta=args.max_action_delta,
+                right_arm_only=args.target_name
+                in ("tree_approach", "inserted_held", "hang_complete"),
             )
-            controls = nominal[None, :, :] + delta
-            controls[:, :, (6, 13)] = nominal[None, :, (6, 13)]
             if args.target_name == "inserted_held":
                 controls[:, : keyframe_offset + 1, 13] = nominal[0, 13]
             return controls
@@ -769,7 +870,7 @@ def main():
             noise_std_multiplier=2.0,
             control_expander=expand,
         )
-        plan = mpc.plan(context, nominal)
+        plan = mpc.plan(context, correction_nominal)
 
         best_sample = plan.best_sampled_knots
         group_size = args.num_rollouts // 3
@@ -777,10 +878,10 @@ def main():
         optimized_rows = slice(group_size, 2 * group_size)
         best_rows = slice(2 * group_size, args.num_rollouts)
         evaluation_knots = np.empty(
-            (args.num_rollouts, args.horizon, nominal.shape[1]),
+            (args.num_rollouts, num_control_knots, nominal.shape[1]),
             dtype=np.float64,
         )
-        evaluation_knots[nominal_rows] = nominal
+        evaluation_knots[nominal_rows] = correction_nominal
         evaluation_knots[optimized_rows] = plan.optimized_knots
         evaluation_knots[best_rows] = best_sample
         evaluation_controls = expand(evaluation_knots)
@@ -826,11 +927,19 @@ def main():
                 "target_name": args.target_name,
                 "target_frame": evaluation["target_frame"],
                 "acceptance": "task_subtask_success",
+                "hang_acceptance": {
+                    "position_tolerance_m": HANG_POSITION_TOLERANCE_M,
+                    "speed_tolerance_m_s": HANG_SPEED_TOLERANCE_M_S,
+                    "consecutive_steps": HANG_STABILITY_STEPS,
+                },
                 "right_gripper_held_through_target": (
                     args.target_name == "inserted_held"
                 ),
                 "tree_offset_xyz_m": list(args.tree_offset_xyz),
                 "tree_yaw_deg": args.tree_yaw_deg,
+                "source_mug_tree": _source_tree_path(args),
+                "target_mug_tree": _target_tree_path(args),
+                "tree_root_z_adjustment_m": _tree_root_z_adjustment(args),
                 "source_branch_points_tree_local": (
                     None
                     if source_branch_points is None
@@ -842,6 +951,7 @@ def main():
                     else target_branch_points.tolist()
                 ),
                 "horizon": args.horizon,
+                "control_knots": num_control_knots,
                 "control_hz": 30,
             },
             "optimizer": {
@@ -864,7 +974,10 @@ def main():
                 "nominal_reward_mean": float(plan.nominal_reward_mean),
                 "nominal_reward_std": float(plan.nominal_reward_std),
                 "first_action_delta_l2": float(
-                    np.linalg.norm(plan.action - nominal[0])
+                    np.linalg.norm(
+                        expand(plan.best_sampled_knots[None, ...])[0, 0]
+                        - nominal[0]
+                    )
                 ),
             },
             "repeat_evaluation": groups,
@@ -890,6 +1003,11 @@ def main():
                     args.tree_offset_xyz, dtype=np.float32
                 ),
                 tree_yaw_deg=np.float32(args.tree_yaw_deg),
+                source_mug_tree=np.asarray(_source_tree_path(args)),
+                target_mug_tree=np.asarray(_target_tree_path(args)),
+                tree_root_z_adjustment=np.float32(
+                    _tree_root_z_adjustment(args)
+                ),
                 source_branch_points=(
                     np.empty((0, 3), dtype=np.float32)
                     if source_branch_points is None

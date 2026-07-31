@@ -235,17 +235,40 @@ points in each tree's local frame:
 The mug target is transferred from the source branch frame to the corresponding
 target branch frame. This supports, for example, a branch that is higher
 relative to the new tree root; the unit suite verifies a 20 cm local branch
-height change. Geometric errors are optimization and diagnostic signals only.
-Pass/fail uses the selected task subgoal. In particular, `hang_complete`
-requires IsaacLab's latched stage-3 success after both grippers release and the
-mug remains stable for 30 steps.
+height change. For `hang_complete`, pass/fail requires stage-3 success, both
+grippers released, at most 30 mm branch-relative position error, at most
+50 mm/s mug speed, and all conditions retained for 30 consecutive control
+steps.
 
-The end-to-end simulator proof moves the physical tree by `(10, -5, 20)` mm and
+The translation/rotation simulator proof moves the tree by `(10, -5, 20)` mm and
 rotates it by `1` degree, uses explicit matched branch points, and plans from
 state 600 through stable hang state 774. All 16 sampled candidates and all six
 best-sample repeats complete the hang. The video confirms both nominal and MPC
 lanes release the mug and latch stage 3; terminal mug divergence is 1.220 mm
-and 0.0496 rad.
+and 0.0496 rad. This checks target-frame equivariance, not changed geometry.
 
 See `validation/hangmug_corresponded_branch_hang_complete_mpc.json` and
 `validation/hangmug_corresponded_branch_hang_complete_mpc_video.json`.
+
+## Actual taller-tree adaptation
+
+`examples/create_taller_mugtree_asset.py` creates a real USD variant whose
+visual and collision geometry are both scaled in Z. The checked experiment uses
+the official `mug_tree_000` source at 1.2x Z scale:
+
+- asset height: 350.275 mm to 420.330 mm;
+- demonstrated branch center: 48.75 mm higher in world coordinates;
+- nominal source-demo controls: 0/10 successful repeats, 175.9 mm mean terminal
+  branch-relative error;
+- Judo MPC best sample: 10/10 successful repeats, 8.29 mm mean terminal error,
+  and a complete 30/30-step stability window.
+
+The 225-step rollout is optimized as four smooth right-arm correction knots.
+This searches 24 coherent variables instead of perturbing 1,350 independent
+joint targets. The side-by-side video runs nominal and MPC controls concurrently
+in the same two-clone CPU PhysX scene. The nominal mug drops to the table; MPC
+releases it on the taller branch. Independent render-time acceptance reports
+0/30 stable frames for nominal and 30/30 for MPC.
+
+See `validation/hangmug_actual_taller_tree_mpc.json` and
+`validation/hangmug_actual_taller_tree_mpc_video.json`.

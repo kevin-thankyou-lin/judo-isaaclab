@@ -145,9 +145,13 @@ class JudoIsaacLabMPC:
             self.noise_std_multiplier * nominal_std,
         )
         accepted = improvement > threshold
-        action = (
-            best_sampled_knots[0] if accepted else starting_nominal[0]
+        selected_knots = (
+            best_sampled_knots if accepted else starting_nominal
         )
+        selected_controls = np.asarray(
+            self.control_expander(selected_knots[None]), dtype=np.float32
+        )
+        action = selected_controls[0, 0]
         return MPCPlan(
             action=np.asarray(action).copy(),
             optimized_knots=np.asarray(nominal).copy(),

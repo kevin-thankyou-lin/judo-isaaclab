@@ -14,7 +14,15 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from hangmug_grasp_keyframe_mpc import _tensor_tree, _torch_quat_multiply
+from hangmug_grasp_keyframe_mpc import (
+    HANG_POSITION_TOLERANCE_M,
+    HANG_SPEED_TOLERANCE_M_S,
+    HANG_STABILITY_STEPS,
+    _mug_in_branch_frame,
+    _state_row,
+    _tensor_tree,
+    _torch_quat_multiply,
+)
 
 
 def _parser():
@@ -41,6 +49,10 @@ def _parser():
         ),
     )
     parser.add_argument("--episode", default="demo_0")
+    parser.add_argument(
+        "--target-mug-tree",
+        help="Override the target MugTree instance recorded with the controls.",
+    )
     parser.add_argument("--controls-npz", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--result-json", required=True)
@@ -70,6 +82,29 @@ def _load_inputs(args, device):
     start_state = int(controls["start_state"])
     target_state = int(controls["target_state"])
     target_name = str(controls["target_name"])
+    source_mug_tree = str(
+        controls["source_mug_tree"]
+        if "source_mug_tree" in controls.files
+        else os.path.join(args.objects_root, "MugTree", "mug_tree_000")
+    )
+    recorded_target_mug_tree = str(
+        controls["target_mug_tree"]
+        if "target_mug_tree" in controls.files
+        else source_mug_tree
+    )
+    target_mug_tree = args.target_mug_tree or recorded_target_mug_tree
+    if (
+        args.target_mug_tree is not None
+        and args.target_mug_tree != recorded_target_mug_tree
+    ):
+        raise ValueError(
+            "target-mug-tree does not match the asset recorded with the controls"
+        )
+    tree_root_z_adjustment = float(
+        controls["tree_root_z_adjustment"]
+        if "tree_root_z_adjustment" in controls.files
+        else 0.0
+    )
     tree_offset_xyz = np.asarray(
         controls["tree_offset_xyz"]
         if "tree_offset_xyz" in controls.files
@@ -104,6 +139,7 @@ def _load_inputs(args, device):
             group["states"], checkpoint_state, device
         )
         tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
+        tree_pose[:, 2] += tree_root_z_adjustment
         tree_pose[:, :3] += torch.as_tensor(
             tree_offset_xyz,
             dtype=tree_pose.dtype,
@@ -129,6 +165,7 @@ def _load_inputs(args, device):
             dtype=torch.float32,
             device=device,
         )
+        target_reference = _state_row(group["states"], target_state)
     candidate = torch.as_tensor(
         np.stack((nominal, best)), dtype=torch.float32, device=device
     )
@@ -140,6 +177,9 @@ def _load_inputs(args, device):
         "start_state": start_state,
         "target_state": target_state,
         "target_name": target_name,
+        "source_mug_tree": source_mug_tree,
+        "target_mug_tree": target_mug_tree,
+        "tree_root_z_adjustment": tree_root_z_adjustment,
         "tree_offset_xyz": tree_offset_xyz.tolist(),
         "tree_yaw_deg": tree_yaw_deg,
         "source_branch_points": (
@@ -152,6 +192,7 @@ def _load_inputs(args, device):
             if target_branch_points is None
             else target_branch_points.tolist()
         ),
+        "target_reference": target_reference,
     }
 
 
@@ -167,6 +208,9 @@ def _sample(env, step):
     )
     pose = env.scene["mug"].data.root_pose_w.detach().clone()
     pose[:, :3] -= env.scene.env_origins
+    velocity = env.scene["mug"].data.root_vel_w.detach().clone()
+    tree_pose = env.scene["mug_tree"].data.root_pose_w.detach().clone()
+    tree_pose[:, :3] -= env.scene.env_origins
     return {
         "step": int(step),
         "left_grasp": left.detach().cpu().tolist(),
@@ -174,6 +218,8 @@ def _sample(env, step):
         "stage2": env.stage2_success.detach().cpu().tolist(),
         "stage3": env.stage3_success.detach().cpu().tolist(),
         "mug_pose": pose.detach().cpu().tolist(),
+        "mug_velocity": velocity.detach().cpu().tolist(),
+        "tree_pose": tree_pose.detach().cpu().tolist(),
     }
 
 
@@ -317,6 +363,64 @@ def _quaternion_error(left, right):
     )
 
 
+def _subtask_complete(sample, lane, target_name):
+    if target_name == "left_grasp":
+        return sample["left_grasp"][lane]
+    if target_name == "right_grasp":
+        return sample["right_grasp"][lane]
+    if target_name == "handover_latched":
+        return sample["stage2"][lane]
+    if target_name in ("tree_approach", "inserted_held"):
+        return sample["stage2"][lane] and sample["right_grasp"][lane]
+    return sample["stage3"][lane]
+
+
+def _hang_acceptance(traces, inputs):
+    rows = np.zeros((len(traces), 2, 36), dtype=np.float32)
+    rows[:, :, :7] = np.asarray([row["mug_pose"] for row in traces])
+    rows[:, :, 7:13] = np.asarray(
+        [row["mug_velocity"] for row in traces]
+    )
+    rows[:, :, 29:36] = np.asarray(
+        [row["tree_pose"] for row in traces]
+    )
+    target_points = np.asarray(
+        inputs["target_branch_points"], dtype=np.float32
+    )
+    source_points = np.asarray(
+        inputs["source_branch_points"], dtype=np.float32
+    )
+    actual_position, _ = _mug_in_branch_frame(rows, target_points)
+    reference_position, _ = _mug_in_branch_frame(
+        np.asarray(inputs["target_reference"])[None, :], source_points
+    )
+    error = np.linalg.norm(
+        actual_position - reference_position[None, :, :], axis=-1
+    )
+    speed = np.linalg.norm(rows[:, :, 7:10], axis=-1)
+    success = np.asarray(
+        [
+            [
+                row["stage3"][lane]
+                and not row["left_grasp"][lane]
+                and not row["right_grasp"][lane]
+                for lane in range(2)
+            ]
+            for row in traces
+        ],
+        dtype=bool,
+    )
+    success &= error <= HANG_POSITION_TOLERANCE_M
+    success &= speed <= HANG_SPEED_TOLERANCE_M_S
+    window = success[-HANG_STABILITY_STEPS:]
+    return {
+        "complete": window.all(axis=0).tolist(),
+        "acceptance_fraction": window.mean(axis=0).tolist(),
+        "terminal_position_error_m": error[-1].tolist(),
+        "terminal_speed_m_s": speed[-1].tolist(),
+    }
+
+
 def main():
     args = _parser()
     sys.path.insert(0, os.path.abspath(args.gear_repo))
@@ -334,11 +438,16 @@ def main():
             create_cpu_batched_planning_runner,
         )
 
+        controls = np.load(args.controls_npz)
+        recorded_tree = str(
+            controls["target_mug_tree"]
+            if "target_mug_tree" in controls.files
+            else os.path.join(args.objects_root, "MugTree", "mug_tree_000")
+        )
+        target_tree = args.target_mug_tree or recorded_tree
         assets = {
             "mug": os.path.join(args.objects_root, "Mug", "mug_000"),
-            "mug_tree": os.path.join(
-                args.objects_root, "MugTree", "mug_tree_000"
-            ),
+            "mug_tree": target_tree,
         }
         assist_config = {
             "left": {
@@ -440,6 +549,11 @@ def main():
                 "start_state": inputs["start_state"],
                 "target_state": inputs["target_state"],
                 "target_name": inputs["target_name"],
+                "source_mug_tree": inputs["source_mug_tree"],
+                "target_mug_tree": inputs["target_mug_tree"],
+                "tree_root_z_adjustment_m": inputs[
+                    "tree_root_z_adjustment"
+                ],
                 "tree_offset_xyz_m": inputs["tree_offset_xyz"],
                 "tree_yaw_deg": inputs["tree_yaw_deg"],
                 "source_branch_points_tree_local": inputs[
@@ -471,21 +585,28 @@ def main():
             },
             "video": video,
         }
-        if inputs["target_name"] == "left_grasp":
-            subtask_complete = all(traces[-1]["left_grasp"])
-        elif inputs["target_name"] == "right_grasp":
-            subtask_complete = all(traces[-1]["right_grasp"])
-        elif inputs["target_name"] == "handover_latched":
-            subtask_complete = all(traces[-1]["stage2"])
-        elif inputs["target_name"] in ("tree_approach", "inserted_held"):
-            subtask_complete = all(traces[-1]["stage2"]) and all(
-                traces[-1]["right_grasp"]
+        hang_acceptance = (
+            _hang_acceptance(traces, inputs)
+            if inputs["target_name"] == "hang_complete"
+            and inputs["source_branch_points"] is not None
+            else None
+        )
+        subtask_complete = {
+            name: bool(
+                hang_acceptance["complete"][lane]
+                if hang_acceptance is not None
+                else _subtask_complete(
+                    traces[-1], lane, inputs["target_name"]
+                )
             )
-        else:
-            subtask_complete = all(traces[-1]["stage3"])
+            for lane, name in enumerate(("nominal", "mpc"))
+        }
+        result["subtask_complete"] = subtask_complete
+        if hang_acceptance is not None:
+            result["hang_acceptance"] = hang_acceptance
         checks = {
             "parallel_lanes": env.num_envs == 2,
-            "subtask_complete": subtask_complete,
+            "mpc_subtask_complete": subtask_complete["mpc"],
             "dynamic_frames": (
                 result["render"]["mean_pixel_range"][1]
                 != result["render"]["mean_pixel_range"][0]

@@ -6,7 +6,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
-from hangmug_grasp_keyframe_mpc import _objective_components, _subtask_reached
+from hangmug_grasp_keyframe_mpc import (
+    _expand_control_corrections,
+    _objective_components,
+    _subtask_reached,
+)
 from render_hangmug_mpc_comparison import _quaternion_error
 
 
@@ -43,7 +47,7 @@ def test_target_success_selects_expected_sensor(
     elif target_name == "right_grasp":
         sensors[0, :, 2] = 1.0
         sensors[0, :, 7] = 1.0
-    else:
+    elif target_name == "handover_latched":
         sensors[0, :, 6] = 1.0
 
     result = _objective_components(
@@ -158,11 +162,50 @@ def test_branch_correspondence_adapts_to_a_taller_branch(rollout_inputs):
 def test_acceptance_depends_only_on_subtask_completion():
     group = {
         "count": 6,
-        "keyframe_target_success_count": 6,
+        "acceptance_success_count": 6,
         "keyframe_position_error_m_max": 100.0,
         "keyframe_rotation_error_rad_max": np.pi,
     }
 
     assert _subtask_reached(group)
-    group["keyframe_target_success_count"] = 5
+    group["acceptance_success_count"] = 5
     assert not _subtask_reached(group)
+
+
+def test_hang_completion_rejects_latched_but_misaligned_mug(rollout_inputs):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    states[1, :, :3] = [0.1, 0.0, 0.0]
+    sensors[:, :, 8:10] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=1,
+        target_name="hang_complete",
+    )
+
+    assert result["keyframe_target_success"].tolist() == [True, False]
+    assert result["acceptance_window_fraction"].tolist() == [1.0, 0.0]
+
+
+def test_smooth_corrections_interpolate_and_preserve_grippers():
+    nominal = np.ones((5, 14), dtype=np.float32)
+    knots = np.zeros((1, 2, 14), dtype=np.float32)
+    knots[0, 1, 7:13] = 0.2
+    knots[0, 1, :6] = 0.3
+    knots[0, :, (6, 13)] = 1.0
+
+    controls = _expand_control_corrections(
+        knots,
+        nominal,
+        max_action_delta=0.1,
+        right_arm_only=True,
+    )
+
+    assert controls.shape == (1, 5, 14)
+    assert controls[0, :, :7] == pytest.approx(1.0)
+    assert controls[0, :, 13] == pytest.approx(1.0)
+    assert controls[0, :, 7:13].max() == pytest.approx(1.1)

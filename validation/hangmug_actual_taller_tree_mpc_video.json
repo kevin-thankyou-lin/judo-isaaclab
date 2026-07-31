@@ -1,0 +1,45 @@
+{
+  "status": "passed",
+  "configuration": {
+    "physics": "parallel two-clone CPU PhysX scene",
+    "left_lane": "source-demo nominal",
+    "right_lane": "Judo MPC best sample",
+    "checkpoint_state": 110,
+    "history_steps": 490,
+    "start_state": 600,
+    "candidate_horizon": 225,
+    "target_name": "hang_complete"
+  },
+  "subtask_complete": {
+    "nominal": false,
+    "mpc": true
+  },
+  "hang_acceptance": {
+    "acceptance_fraction": [0.0, 1.0],
+    "terminal_position_error_m": [
+      0.17458337545394897,
+      0.007526961620897055
+    ],
+    "terminal_speed_m_s": [0.0, 0.0]
+  },
+  "nominal_vs_mpc_mug_divergence": {
+    "translation_m_max": 0.17127595423050412,
+    "translation_m_terminal": 0.1712733143990332,
+    "rotation_rad_max": 1.864414271534416,
+    "rotation_rad_terminal": 1.6361112197986576
+  },
+  "video": {
+    "codec": "h264",
+    "duration_s": 15.067,
+    "frame_count": 226,
+    "width": 1280,
+    "height": 480,
+    "size_bytes": 1382426,
+    "full_decode_returncode": 0,
+    "sha256": "76a4706bf5f6935c4400ae21dc153c3f5ca6da0b91a14caf0f3d0b020fe88f13"
+  },
+  "visual_review": {
+    "nominal": "mug drops to the table",
+    "mpc": "mug releases onto the taller branch and remains through the final frame"
+  }
+}

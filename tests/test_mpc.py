@@ -128,3 +128,24 @@ def test_candidate_repeats_average_clone_scores():
 
     np.testing.assert_allclose(plan.rewards, [1.0, 1.0, 3.0, 3.0])
     np.testing.assert_allclose(plan.action, [1.0])
+
+
+def test_action_is_first_expanded_control():
+    objective = lambda states, sensors, controls: states[:, -1, 0]
+
+    def expand(knots):
+        return np.repeat(knots + 10.0, 3, axis=1)
+
+    mpc = JudoIsaacLabMPC(
+        FakeOptimizer(),
+        FakeBackend(),
+        objective,
+        control_expander=expand,
+        duplicate_nominal=2,
+        min_improvement=0.5,
+    )
+
+    plan = mpc.plan(CONTEXT, np.zeros((2, 1)))
+
+    assert plan.accepted_update
+    np.testing.assert_allclose(plan.action, [11.0])
