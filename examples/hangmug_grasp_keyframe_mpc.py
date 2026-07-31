@@ -17,8 +17,9 @@ TREE_APPROACH_POSITION_TOLERANCE_M = 0.06
 TREE_INSERTION_POSITION_TOLERANCE_M = 0.01
 TREE_INSERTION_ROTATION_TOLERANCE_RAD = 0.15
 TREE_INSERTION_STABILITY_STEPS = 3
+TREE_INSERTION_TANGENT_MARGIN_M = 0.005
 HANGMUG_INSERT_ANCHOR_STATE = 774
-HANGMUG_INSERT_CLEARANCE_OFFSET_BRANCH_M = (-0.025, 0.025, -0.055)
+HANGMUG_INSERT_CLEARANCE_OFFSET_BRANCH_M = None
 HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M = (0.05, 0.0, 0.0)
 HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M = (0.0, 0.0, 0.0)
 HANGMUG_INSERT_EEF_POSITION_OFFSET_BRANCH_M = (0.0, 0.0, 0.0)
@@ -30,6 +31,9 @@ HANGMUG_INSERT_SEAT_FRACTION = 0.85
 HANGMUG_RELEASE_OPEN_VALUE = -0.0475
 HANGMUG_RELEASE_START_FRACTION = 0.05
 HANGMUG_RELEASE_END_FRACTION = 0.20
+HANGMUG_GRASP_PREGRASP_OFFSET_OBJECT_M = (0.05, 0.0, 0.0)
+HANGMUG_GRASP_APPROACH_FRACTION = 0.75
+HANGMUG_GRASP_CONTACT_FRACTION = 0.95
 
 
 def _parser():
@@ -69,6 +73,67 @@ def _parser():
             "mug_000 asset."
         ),
     )
+    parser.add_argument(
+        "--mug-offset-xyz",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("X", "Y", "Z"),
+        help="Translate the live target mug at the contact-free checkpoint.",
+    )
+    parser.add_argument(
+        "--mug-yaw-deg",
+        type=float,
+        default=0.0,
+        help="Rotate the live target mug about world Z at the checkpoint.",
+    )
+    parser.add_argument(
+        "--source-grasp-eef-pose",
+        type=float,
+        nargs=7,
+        metavar=("X", "Y", "Z", "QW", "QX", "QY", "QZ"),
+        help=(
+            "Persisted source left-EEF grasp keyframe. Supplying it avoids "
+            "replaying source contact inside the target planning scene."
+        ),
+    )
+    parser.add_argument(
+        "--source-grasp-contact-pose",
+        type=float,
+        nargs=7,
+        metavar=("X", "Y", "Z", "QW", "QX", "QY", "QZ"),
+        help=(
+            "Persisted source pinch-center pose. With the source EEF pose, "
+            "this keeps the robot tool transform rigid while adapting the "
+            "object-relative contact point."
+        ),
+    )
+    parser.add_argument(
+        "--grasp-pregrasp-offset-object",
+        type=float,
+        nargs=3,
+        default=HANGMUG_GRASP_PREGRASP_OFFSET_OBJECT_M,
+        metavar=("X", "Y", "Z"),
+        help="Contact-free pregrasp offset in the live mug frame.",
+    )
+    parser.add_argument(
+        "--grasp-target-offset-object",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("X", "Y", "Z"),
+        help="Small tuning offset applied to the mapped grasp in mug axes.",
+    )
+    parser.add_argument(
+        "--grasp-approach-fraction",
+        type=float,
+        default=HANGMUG_GRASP_APPROACH_FRACTION,
+    )
+    parser.add_argument(
+        "--grasp-contact-fraction",
+        type=float,
+        default=HANGMUG_GRASP_CONTACT_FRACTION,
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument(
         "--history-controls-npz",
@@ -84,6 +149,17 @@ def _parser():
         type=int,
         default=None,
         help="Contact-free reset state; defaults to --start-state.",
+    )
+    parser.add_argument(
+        "--initial-task-stage",
+        type=int,
+        choices=(0, 1, 2),
+        default=0,
+        help=(
+            "Explicit task phase for an isolated suffix experiment. Use 2 "
+            "only when the checkpoint is already physically right-held after "
+            "handover; this restores task latches, not contacts or poses."
+        ),
     )
     parser.add_argument("--start-state", type=int, default=110)
     parser.add_argument("--target-state", type=int, default=116)
@@ -191,7 +267,11 @@ def _parser():
         nargs=3,
         default=HANGMUG_INSERT_CLEARANCE_OFFSET_BRANCH_M,
         metavar=("X", "Y", "Z"),
-        help="Collision-free pre-approach EEF offset in the branch frame.",
+        help=(
+            "Optional collision-clearance waypoint in the branch frame. "
+            "Omit it to align the mug handle beyond the branch tip first, "
+            "then seat inward along the branch tangent."
+        ),
     )
     parser.add_argument(
         "--insert-approach-offset-branch",
@@ -232,6 +312,38 @@ def _parser():
             "Stable released-hang state whose mug-to-branch transform defines "
             "actual insertion geometry."
         ),
+    )
+    parser.add_argument(
+        "--left-visibility-anchor-state",
+        type=int,
+        help=(
+            "Source-demo action whose left-arm target provides the insertion "
+            "camera pose. The left arm moves there smoothly, then holds."
+        ),
+    )
+    parser.add_argument(
+        "--left-visibility-reach-fraction",
+        type=float,
+        default=0.35,
+        help="Fraction of the insertion horizon used to reach the camera pose.",
+    )
+    parser.add_argument(
+        "--left-visibility-retreat-anchor-state",
+        type=int,
+        help=(
+            "Optional later source-demo left-arm target used to pull the "
+            "camera back during seating and reduce gripper/mug occlusion."
+        ),
+    )
+    parser.add_argument(
+        "--left-visibility-retreat-start-fraction",
+        type=float,
+        default=0.65,
+    )
+    parser.add_argument(
+        "--left-visibility-retreat-end-fraction",
+        type=float,
+        default=0.90,
     )
     parser.add_argument(
         "--semantic-anchor-state",
@@ -309,6 +421,20 @@ def _parser():
         ),
         help="The three corresponding target-tree-local branch points.",
     )
+    parser.add_argument(
+        "--source-handle-point-mug",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        help="Source mug-local handle landmark used by the insertion target.",
+    )
+    parser.add_argument(
+        "--target-handle-point-mug",
+        type=float,
+        nargs=3,
+        metavar=("X", "Y", "Z"),
+        help="Corresponding target mug-local handle landmark.",
+    )
     parser.add_argument("--seed", type=int, default=20260730)
     parser.add_argument(
         "--result-json",
@@ -354,9 +480,14 @@ def _target_mug_path(args):
     return args.target_mug or _source_mug_path(args)
 
 
-def _asset_height(path):
+def _asset_size(path):
     with open(os.path.join(path, "asset_size.json"), encoding="utf-8") as stream:
-        return float(json.load(stream)["size"]["z"])
+        value = json.load(stream)["size"]
+    return np.asarray([value[axis] for axis in "xyz"], dtype=np.float32)
+
+
+def _asset_height(path):
+    return float(_asset_size(path)[2])
 
 
 def _tree_root_z_adjustment(args):
@@ -428,6 +559,20 @@ def _load_demo(args, device):
         group = handle[f"data/{args.episode}"]
         states = group["states"]
         checkpoint = _tensor_tree(states, checkpoint_state, device)
+        mug_pose = checkpoint["rigid_object"]["mug"]["root_pose"]
+        mug_pose[:, :3] += torch.as_tensor(
+            args.mug_offset_xyz,
+            dtype=mug_pose.dtype,
+            device=mug_pose.device,
+        )
+        if args.mug_yaw_deg:
+            half_yaw = np.deg2rad(args.mug_yaw_deg) / 2.0
+            yaw = torch.tensor(
+                [np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)],
+                dtype=mug_pose.dtype,
+                device=mug_pose.device,
+            ).reshape(1, 4)
+            mug_pose[:, 3:7] = _torch_quat_multiply(yaw, mug_pose[:, 3:7])
         tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
         tree_pose[:, 2] += _tree_root_z_adjustment(args)
         tree_pose[:, :3] += torch.as_tensor(
@@ -475,6 +620,17 @@ def _load_demo(args, device):
                 )
             ]
         )
+        reference[:, :3] += np.asarray(args.mug_offset_xyz, dtype=np.float32)
+        if args.mug_yaw_deg:
+            half_yaw = np.deg2rad(args.mug_yaw_deg) / 2.0
+            yaw = np.asarray(
+                [np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)],
+                dtype=np.float32,
+            )
+            reference[:, 3:7] = _quat_multiply(
+                np.broadcast_to(yaw, reference[:, 3:7].shape),
+                reference[:, 3:7],
+            )
     return checkpoint, history, nominal, reference, source_history
 
 
@@ -592,10 +748,43 @@ def _replay_context(runner, context):
         env.step(repeated)
 
 
-def _right_eef_pose_relative(env):
-    pose = env.scene["right_arm"].data.body_pose_w[0, -1].detach().clone()
+def _initialize_task_stage(env, stage):
+    """Restore explicit task-phase latches for a suffix-only experiment."""
+    if stage not in (0, 1, 2):
+        raise ValueError("initial task stage must be 0, 1, or 2")
+    stage1 = stage >= 1
+    stage2 = stage >= 2
+    env.stage1_success.fill_(stage1)
+    env.stage2_success.fill_(stage2)
+    env.stage3_success.fill_(False)
+    for name, value in (
+        ("_prev_stage1_success", stage1),
+        ("_prev_stage2_success", stage2),
+        ("_prev_stage3_success", False),
+        ("_stage2_reward_given", stage2),
+        ("_stage3_reward_given", False),
+    ):
+        tensor = getattr(env, name, None)
+        if tensor is not None:
+            tensor.fill_(value)
+
+
+def _eef_pose_relative(env, arm_name):
+    from judo_isaaclab import resolve_end_effector_body_index
+
+    arm = env.scene[arm_name]
+    body_index = resolve_end_effector_body_index(env, arm_name)
+    pose = arm.data.body_pose_w[0, body_index].detach().clone()
     pose[:3] -= env.scene.env_origins[0]
     return pose.cpu().numpy()
+
+
+def _left_eef_pose_relative(env):
+    return _eef_pose_relative(env, "left_arm")
+
+
+def _right_eef_pose_relative(env):
+    return _eef_pose_relative(env, "right_arm")
 
 
 def _tree_pose_relative(env):
@@ -610,7 +799,19 @@ def _mug_pose_relative(env):
     return pose.cpu().numpy()
 
 
-def _record_right_eef_reference(runner, context, nominal):
+def _grasp_contact_pose_relative(env, arm_name):
+    """Approximate the pinch center from the two live finger-link origins."""
+    arm = env.scene[arm_name]
+    links = env.robot.arms[arm_name].end_effector.finger_link_names
+    indices = [arm.data.body_names.index(name) for name in links]
+    poses = arm.data.body_link_pose_w[0, indices].detach().clone()
+    result = _eef_pose_relative(env, arm_name)
+    result[:3] = poses[:, :3].mean(dim=0).cpu().numpy()
+    result[:3] -= env.scene.env_origins[0].cpu().numpy()
+    return result
+
+
+def _record_eef_reference(runner, context, nominal, arm_name):
     """Replay source controls once and record the environment-relative EEF pose."""
     import torch
 
@@ -624,11 +825,15 @@ def _record_right_eef_reference(runner, context, nominal):
         _, _, terminated, truncated, _ = env.step(repeated)
         if bool(terminated.any()) or bool(truncated.any()):
             raise RuntimeError("Reference EEF replay produced a done signal")
-        poses.append(_right_eef_pose_relative(env))
+        poses.append(_eef_pose_relative(env, arm_name))
     return np.stack(poses)
 
 
-def _record_right_eef_keyframe(runner, context, nominal):
+def _record_right_eef_reference(runner, context, nominal):
+    return _record_eef_reference(runner, context, nominal, "right_arm")
+
+
+def _record_eef_keyframe(runner, context, nominal, arm_name):
     """Replay the demo only to extract its final semantic EEF keyframe."""
     import torch
 
@@ -641,7 +846,30 @@ def _record_right_eef_keyframe(runner, context, nominal):
         _, _, terminated, truncated, _ = env.step(repeated)
         if bool(terminated.any()) or bool(truncated.any()):
             raise RuntimeError("Semantic keyframe replay produced a done signal")
-    return _right_eef_pose_relative(env)
+    return _eef_pose_relative(env, arm_name)
+
+
+def _record_grasp_keyframe(runner, context, nominal, arm_name):
+    """Record both wrist and pinch-center poses from one source replay."""
+    import torch
+
+    env = runner.env
+    _replay_context(runner, context)
+    for action in nominal:
+        repeated = torch.as_tensor(
+            action, dtype=torch.float32, device=env.device
+        ).reshape(1, -1).expand(env.num_envs, -1)
+        _, _, terminated, truncated, _ = env.step(repeated)
+        if bool(terminated.any()) or bool(truncated.any()):
+            raise RuntimeError("Semantic grasp replay produced a done signal")
+    return (
+        _eef_pose_relative(env, arm_name),
+        _grasp_contact_pose_relative(env, arm_name),
+    )
+
+
+def _record_right_eef_keyframe(runner, context, nominal):
+    return _record_eef_keyframe(runner, context, nominal, "right_arm")
 
 
 def _semantic_reference_trajectory(start_pose, target_pose, horizon):
@@ -676,6 +904,80 @@ def _semantic_reference_trajectory(start_pose, target_pose, horizon):
     return np.concatenate((position, quaternion), axis=-1).astype(np.float32)
 
 
+def _semantic_reference_to_keyframe(
+    start_pose, target_pose, horizon, keyframe_offset
+):
+    """Reach the semantic pose at its acceptance step, then hold it."""
+    reach_steps = keyframe_offset + 1
+    if not 1 <= reach_steps <= horizon:
+        raise ValueError("keyframe_offset must fall inside the horizon")
+    reach = _semantic_reference_trajectory(start_pose, target_pose, reach_steps)
+    if reach_steps == horizon:
+        return reach
+    hold = np.broadcast_to(
+        np.asarray(target_pose, dtype=np.float32),
+        (horizon - reach_steps, 7),
+    )
+    return np.concatenate((reach, hold), axis=0)
+
+
+def grasp(
+    start_pose,
+    target_pose,
+    object_rotation,
+    horizon,
+    *,
+    pregrasp_offset_object=HANGMUG_GRASP_PREGRASP_OFFSET_OBJECT_M,
+    approach_fraction=HANGMUG_GRASP_APPROACH_FRACTION,
+    contact_fraction=HANGMUG_GRASP_CONTACT_FRACTION,
+):
+    """Approach a grasp from outside the object, then move inward and hold."""
+    if not 0.0 < approach_fraction < contact_fraction < 1.0:
+        raise ValueError(
+            "grasp fractions must satisfy 0 < approach < contact < 1"
+        )
+    start_pose = np.asarray(start_pose, dtype=np.float32)
+    target_pose = np.asarray(target_pose, dtype=np.float32)
+    object_rotation = np.asarray(object_rotation, dtype=np.float32)
+    if object_rotation.shape != (3, 3):
+        raise ValueError("object_rotation must have shape (3, 3)")
+    pregrasp = target_pose[:3] + object_rotation @ np.asarray(
+        pregrasp_offset_object, dtype=np.float32
+    )
+    waypoint_phase = np.asarray(
+        [0.0, approach_fraction, contact_fraction, 1.0], dtype=np.float32
+    )
+    waypoint_position = np.stack(
+        [start_pose[:3], pregrasp, target_pose[:3], target_pose[:3]]
+    )
+    phase = np.linspace(1.0 / horizon, 1.0, horizon, dtype=np.float32)
+    position = np.empty((horizon, 3), dtype=np.float32)
+    for index, value in enumerate(phase):
+        segment = min(
+            np.searchsorted(waypoint_phase, value, side="right") - 1,
+            len(waypoint_phase) - 2,
+        )
+        local = (
+            (value - waypoint_phase[segment])
+            / (waypoint_phase[segment + 1] - waypoint_phase[segment])
+        )
+        smooth = local * local * (3.0 - 2.0 * local)
+        position[index] = waypoint_position[segment] + smooth * (
+            waypoint_position[segment + 1] - waypoint_position[segment]
+        )
+    contact_step = min(
+        horizon - 1,
+        max(0, int(np.ceil(contact_fraction * horizon)) - 1),
+    )
+    orientation = _semantic_reference_to_keyframe(
+        start_pose,
+        target_pose,
+        horizon,
+        contact_step,
+    )[:, 3:7]
+    return np.concatenate((position, orientation), axis=-1)
+
+
 def insert(
     start_pose,
     target_pose,
@@ -696,7 +998,7 @@ def insert(
     approach_fraction=HANGMUG_INSERT_APPROACH_FRACTION,
     seat_fraction=HANGMUG_INSERT_SEAT_FRACTION,
 ):
-    """Clear the tree, approach beyond the branch tip, seat inward, and hold.
+    """Align beyond the branch tip, seat inward along its tangent, and hold.
 
     The branch frame's positive X axis runs from the branch root toward its
     tip. A positive approach X offset therefore backs the mug handle beyond
@@ -802,7 +1104,9 @@ def insert(
         orientation_waypoint.append(
             _quat_multiply(clearance_quaternion, target_pose[3:7])
         )
-    orientation_phase.extend((seat_fraction, 1.0))
+    # Finish handle/branch orientation alignment at the tip-approach waypoint.
+    # Seating then changes only translation along the branch tangent.
+    orientation_phase.extend((approach_fraction, 1.0))
     orientation_waypoint.extend((target_pose[3:7], target_pose[3:7]))
     orientation_phase = np.asarray(orientation_phase, dtype=np.float32)
     orientation_waypoint = np.asarray(
@@ -874,10 +1178,76 @@ def release(
 def _semantic_base_controls(nominal, target_name):
     """Keep only stage-level hold/release intent from the demonstration."""
     controls = np.asarray(nominal, dtype=np.float32).copy()
-    controls[:, :6] = controls[0, :6]
-    controls[:, 6] = controls[0, 6]
-    if target_name != "hang_complete":
+    if target_name == "left_grasp":
+        controls[:, 7:13] = controls[0, 7:13]
         controls[:, 13] = controls[0, 13]
+    else:
+        if target_name != "handover_latched":
+            controls[:, :6] = controls[0, :6]
+        if target_name != "handover_latched":
+            controls[:, 6] = controls[0, 6]
+        if target_name not in (
+            "right_grasp",
+            "handover_latched",
+            "hang_complete",
+        ):
+            controls[:, 13] = controls[0, 13]
+    return controls
+
+
+def _apply_left_visibility_pose(
+    controls,
+    target_left_action,
+    *,
+    reach_fraction=0.35,
+    retreat_left_action=None,
+    retreat_start_fraction=0.65,
+    retreat_end_fraction=0.90,
+):
+    """Move the left wrist to a source observer pose, optionally pulling back."""
+    if not 0.0 < reach_fraction <= 1.0:
+        raise ValueError("left visibility reach fraction must be in (0, 1]")
+    controls = np.asarray(controls, dtype=np.float32).copy()
+    target = np.asarray(target_left_action, dtype=np.float32)
+    if controls.ndim != 2 or controls.shape[1] < 7:
+        raise ValueError("controls must have shape (horizon, >=7)")
+    if target.shape != (7,):
+        raise ValueError("target left action must have shape (7,)")
+    reach_steps = max(1, int(np.ceil(len(controls) * reach_fraction)))
+    phase = np.minimum(
+        (np.arange(len(controls), dtype=np.float32) + 1.0) / reach_steps,
+        1.0,
+    )
+    blend = phase * phase * (3.0 - 2.0 * phase)
+    start = controls[0, :7].copy()
+    controls[:, :7] = start + blend[:, None] * (target - start)
+    if retreat_left_action is not None:
+        retreat = np.asarray(retreat_left_action, dtype=np.float32)
+        if retreat.shape != (7,):
+            raise ValueError("retreat left action must have shape (7,)")
+        if not (
+            0.0
+            <= retreat_start_fraction
+            < retreat_end_fraction
+            <= 1.0
+        ):
+            raise ValueError(
+                "left visibility retreat fractions must satisfy "
+                "0 <= start < end <= 1"
+            )
+        phase = (np.arange(len(controls), dtype=np.float32) + 1.0) / len(
+            controls
+        )
+        retreat_blend = np.clip(
+            (phase - retreat_start_fraction)
+            / (retreat_end_fraction - retreat_start_fraction),
+            0.0,
+            1.0,
+        )
+        retreat_blend = retreat_blend * retreat_blend * (
+            3.0 - 2.0 * retreat_blend
+        )
+        controls[:, :7] += retreat_blend[:, None] * (retreat - target)
     return controls
 
 
@@ -1040,6 +1410,18 @@ def _eef_target_for_mug_target(current_eef_pose, current_mug_pose, target_mug_po
         _pose_inverse(current_eef_pose), current_mug_pose
     )
     return _pose_compose(target_mug_pose, _pose_inverse(eef_to_mug))
+
+
+def _align_corresponding_handle_point(
+    target_mug_pose, source_handle_point_mug, target_handle_point_mug
+):
+    """Shift a mapped mug pose so corresponding handle landmarks coincide."""
+    target_mug_pose = np.asarray(target_mug_pose, dtype=np.float32).copy()
+    offset_mug = np.asarray(source_handle_point_mug, dtype=np.float32) - np.asarray(
+        target_handle_point_mug, dtype=np.float32
+    )
+    target_mug_pose[:3] += _quat_to_matrix(target_mug_pose[3:7]) @ offset_mug
+    return target_mug_pose
 
 
 def _quat_to_matrix(quaternion):
@@ -1231,6 +1613,8 @@ def _objective_components(
     target_name,
     source_branch_points=None,
     target_branch_points=None,
+    source_handle_point_mug=None,
+    target_handle_point_mug=None,
     right_joint_path_weight=0.0,
     right_joint_accel_weight=0.0,
     right_joint_jerk_weight=0.0,
@@ -1265,6 +1649,51 @@ def _objective_components(
             relative_position - reference_position[None, :, :]
         )
         target_frame = "mug_relative_to_corresponded_branch"
+        insertion_depth_supported = np.ones_like(
+            position_error, dtype=bool
+        )
+        if (
+            target_name == "inserted_held"
+            and source_handle_point_mug is not None
+            and target_handle_point_mug is not None
+        ):
+            source_handle = np.asarray(
+                source_handle_point_mug, dtype=np.float32
+            )
+            target_handle = np.asarray(
+                target_handle_point_mug, dtype=np.float32
+            )
+            actual_handle = relative_position + np.einsum(
+                "...ij,j->...i", relative_rotation, target_handle
+            )
+            reference_handle = reference_position + np.einsum(
+                "...ij,j->...i", reference_rotation, source_handle
+            )
+            position_error_vector = (
+                actual_handle - reference_handle[None, :, :]
+            )
+            # Seating depth may legitimately differ across handle/tree
+            # instances. Require the handle center to stay radially aligned
+            # with the source-supported branch axis and within the matched
+            # branch segment, rather than copying the source depth exactly.
+            position_error = np.linalg.norm(
+                position_error_vector[..., 1:], axis=-1
+            )
+            branch_length = float(
+                np.linalg.norm(
+                    np.asarray(target_branch_points, dtype=np.float32)[1]
+                    - np.asarray(target_branch_points, dtype=np.float32)[0]
+                )
+            )
+            insertion_depth_supported = (
+                actual_handle[..., 0]
+                >= reference_handle[None, :, 0]
+                - TREE_INSERTION_TANGENT_MARGIN_M
+            ) & (
+                actual_handle[..., 0]
+                <= branch_length + TREE_INSERTION_TANGENT_MARGIN_M
+            )
+            target_frame = "handle_hole_relative_to_corresponded_branch"
     elif tree_target:
         relative_position, relative_quaternion = _mug_in_tree_frame(states)
         reference_position, reference_quaternion = _mug_in_tree_frame(reference)
@@ -1279,6 +1708,9 @@ def _objective_components(
             relative_position - reference_position[None, :, :]
         )
         target_frame = "mug_relative_to_tree_root"
+        insertion_depth_supported = np.ones_like(
+            position_error, dtype=bool
+        )
     else:
         position_error = world_position_error
         rotation_error = world_rotation_error
@@ -1286,6 +1718,9 @@ def _objective_components(
             states[:, :, :3] - reference[None, :, :3]
         )
         target_frame = "environment_origin"
+        insertion_depth_supported = np.ones_like(
+            position_error, dtype=bool
+        )
     left_joint_error = np.sqrt(
         np.mean(
             np.square(
@@ -1361,7 +1796,10 @@ def _objective_components(
             +0.5 * stage1[:, keyframe_offset]
         )
     elif target_name == "handover_latched":
-        target_success = stage2
+        # Stage 2 is latched by the task and can remain true after the mug has
+        # fallen out of the right gripper.  A branchable handover must retain
+        # the active right grasp at the keyframe and during the hold window.
+        target_success = stage2 * right_grasp
         rewards += (
             3.0 * stage2[:, keyframe_offset]
             +2.0 * right_grasp[:, keyframe_offset]
@@ -1383,6 +1821,7 @@ def _objective_components(
             target_success *= (
                 rotation_error <= TREE_INSERTION_ROTATION_TOLERANCE_RAD
             )
+            target_success *= insertion_depth_supported
         rewards += (
             3.0 * stage2[:, keyframe_offset]
             +3.0 * right_grasp[:, keyframe_offset]
@@ -1435,6 +1874,9 @@ def _objective_components(
             :, keyframe_offset
         ],
         "keyframe_rotation_error_rad": rotation_error[:, keyframe_offset],
+        "keyframe_insertion_depth_supported": insertion_depth_supported[
+            :, keyframe_offset
+        ],
         "keyframe_left_joint_rms_rad": left_joint_error[:, keyframe_offset],
         "keyframe_right_joint_rms_rad": right_joint_error[:, keyframe_offset],
         "action_delta_rms": action_delta,
@@ -1459,6 +1901,7 @@ def _group_summary(name, rows, components):
     position = components["keyframe_position_error_m"][rows]
     position_vector = components["keyframe_position_error_vector_m"][rows]
     rotation = components["keyframe_rotation_error_rad"][rows]
+    depth_supported = components["keyframe_insertion_depth_supported"][rows]
     action_delta = components["action_delta_rms"][rows]
     right_joint_path = components["right_joint_path_l2"][rows]
     right_joint_accel = components["right_joint_accel_l2"][rows]
@@ -1483,6 +1926,9 @@ def _group_summary(name, rows, components):
         ),
         "keyframe_rotation_error_rad_mean": float(rotation.mean()),
         "keyframe_rotation_error_rad_max": float(rotation.max()),
+        "keyframe_insertion_depth_supported_count": int(
+            depth_supported.sum()
+        ),
         "action_delta_rms_mean": float(action_delta.mean()),
         "right_joint_path_l2_mean": float(right_joint_path.mean()),
         "right_joint_path_l2_max": float(right_joint_path.max()),
@@ -1524,6 +1970,22 @@ def main():
         None
         if args.target_branch_points is None
         else np.asarray(args.target_branch_points, dtype=np.float32).reshape(3, 3)
+    )
+    if (args.source_handle_point_mug is None) != (
+        args.target_handle_point_mug is None
+    ):
+        raise ValueError(
+            "source and target handle points must be supplied together"
+        )
+    source_handle_point_mug = (
+        None
+        if args.source_handle_point_mug is None
+        else np.asarray(args.source_handle_point_mug, dtype=np.float32)
+    )
+    target_handle_point_mug = (
+        None
+        if args.target_handle_point_mug is None
+        else np.asarray(args.target_handle_point_mug, dtype=np.float32)
     )
     keyframe_offset = args.target_state - args.start_state - 1
     if not 0 <= keyframe_offset < args.horizon:
@@ -1583,6 +2045,7 @@ def main():
             DampedLeastSquaresTaskSpaceAdapter,
             HistoryConditionedIsaacLabBackend,
             JudoIsaacLabMPC,
+            asset_relative_grasp_pose,
         )
 
         np.random.seed(args.seed)
@@ -1613,6 +2076,7 @@ def main():
             init_joint_pos_randomization=0.0,
             enable_gripper_grasp_clamp=False,
             planning_substep_contact_sensors=True,
+            replicate_physics=True,
         )
         runner.env.reset(warm_up=False, seed=args.seed)
         checkpoint, history, nominal, reference, source_history = _load_demo(
@@ -1648,6 +2112,10 @@ def main():
                 )
         reference_eef_poses = None
         target_mug_pose = None
+        source_target_eef = None
+        source_contact_pose = None
+        grasp_approach_fraction_used = None
+        grasp_contact_fraction_used = None
         base_controls = nominal
         if args.search_space == "task" and args.task_controller in (
             "pose_tracking",
@@ -1660,7 +2128,53 @@ def main():
                 is_relative=True,
             )
             if args.task_controller == "semantic_pose":
-                if args.target_name == "inserted_held":
+                semantic_arm_name = "right_arm"
+                semantic_arm_action_start = 7
+                if args.target_name == "left_grasp":
+                    semantic_arm_name = "left_arm"
+                    semantic_arm_action_start = 0
+                    if args.source_grasp_eef_pose is None:
+                        source_target_eef, source_contact_pose = (
+                            _record_grasp_keyframe(
+                            runner,
+                            reference_context,
+                            nominal[: keyframe_offset + 1],
+                            semantic_arm_name,
+                            )
+                        )
+                    else:
+                        source_target_eef = np.asarray(
+                            args.source_grasp_eef_pose, dtype=np.float32
+                        )
+                        source_contact_pose = (
+                            None
+                            if args.source_grasp_contact_pose is None
+                            else np.asarray(
+                                args.source_grasp_contact_pose,
+                                dtype=np.float32,
+                            )
+                        )
+                    source_target_mug = _load_demo_state_row(
+                        args, args.target_state
+                    )[:7]
+                    _replay_context(runner, context)
+                    current_eef_pose = _left_eef_pose_relative(runner.env)
+                    current_mug_pose = _mug_pose_relative(runner.env)
+                    target_eef_pose = asset_relative_grasp_pose(
+                        source_target_eef,
+                        source_target_mug,
+                        current_mug_pose,
+                        _asset_size(_source_mug_path(args)),
+                        _asset_size(_target_mug_path(args)),
+                        source_contact_pose=source_contact_pose,
+                    )
+                    target_eef_pose[:3] += _quat_to_matrix(
+                        current_mug_pose[3:7]
+                    ) @ np.asarray(
+                        args.grasp_target_offset_object, dtype=np.float32
+                    )
+                    target_mug_pose = current_mug_pose.copy()
+                elif args.target_name == "inserted_held":
                     _replay_context(runner, context)
                     current_eef_pose = _right_eef_pose_relative(runner.env)
                     current_mug_pose = _mug_pose_relative(runner.env)
@@ -1682,6 +2196,12 @@ def main():
                         )
                         target_mug_pose = _pose_compose(
                             target_tree_pose, mug_in_source_tree
+                        )
+                    if source_handle_point_mug is not None:
+                        target_mug_pose = _align_corresponding_handle_point(
+                            target_mug_pose,
+                            source_handle_point_mug,
+                            target_handle_point_mug,
                         )
                     target_eef_pose = _eef_target_for_mug_target(
                         current_eef_pose,
@@ -1714,7 +2234,29 @@ def main():
                         target_eef_pose[:3] += np.asarray(
                             task_translation_goal, dtype=np.float32
                         )
-                if (
+                if args.target_name == "left_grasp":
+                    acceptance_phase = (keyframe_offset + 1) / args.horizon
+                    contact_fraction = min(
+                        args.grasp_contact_fraction, acceptance_phase
+                    )
+                    approach_fraction = min(
+                        args.grasp_approach_fraction,
+                        0.8 * contact_fraction,
+                    )
+                    grasp_approach_fraction_used = approach_fraction
+                    grasp_contact_fraction_used = contact_fraction
+                    reference_eef_poses = grasp(
+                        current_eef_pose,
+                        target_eef_pose,
+                        _quat_to_matrix(current_mug_pose[3:7]),
+                        args.horizon,
+                        pregrasp_offset_object=(
+                            args.grasp_pregrasp_offset_object
+                        ),
+                        approach_fraction=approach_fraction,
+                        contact_fraction=contact_fraction,
+                    )
+                elif (
                     args.target_name == "inserted_held"
                     and target_branch_points is not None
                 ):
@@ -1751,14 +2293,65 @@ def main():
                         seat_fraction=args.insert_seat_fraction,
                     )
                 else:
-                    reference_eef_poses = _semantic_reference_trajectory(
-                        current_eef_pose,
-                        target_eef_pose,
-                        args.horizon,
-                    )
+                    if (
+                        args.target_name == "handover_latched"
+                        and args.semantic_anchor_state is not None
+                    ):
+                        anchor_offset = (
+                            args.semantic_anchor_state
+                            - args.start_state
+                            - 1
+                        )
+                        if not 0 <= anchor_offset < args.horizon:
+                            raise ValueError(
+                                "semantic handover anchor must fall inside "
+                                "the rollout horizon"
+                            )
+                        reference_eef_poses = (
+                            _semantic_reference_to_keyframe(
+                                current_eef_pose,
+                                target_eef_pose,
+                                args.horizon,
+                                anchor_offset,
+                            )
+                        )
+                    else:
+                        reference_eef_poses = _semantic_reference_trajectory(
+                            current_eef_pose,
+                            target_eef_pose,
+                            args.horizon,
+                        )
                 base_controls = _semantic_base_controls(
                     nominal, args.target_name
                 )
+                if (
+                    args.target_name == "inserted_held"
+                    and args.left_visibility_anchor_state is not None
+                ):
+                    left_visibility_action = _load_demo_actions(
+                        args,
+                        args.left_visibility_anchor_state,
+                        args.left_visibility_anchor_state + 1,
+                    )[0, :7]
+                    retreat_visibility_action = None
+                    if args.left_visibility_retreat_anchor_state is not None:
+                        retreat_visibility_action = _load_demo_actions(
+                            args,
+                            args.left_visibility_retreat_anchor_state,
+                            args.left_visibility_retreat_anchor_state + 1,
+                        )[0, :7]
+                    base_controls = _apply_left_visibility_pose(
+                        base_controls,
+                        left_visibility_action,
+                        reach_fraction=args.left_visibility_reach_fraction,
+                        retreat_left_action=retreat_visibility_action,
+                        retreat_start_fraction=(
+                            args.left_visibility_retreat_start_fraction
+                        ),
+                        retreat_end_fraction=(
+                            args.left_visibility_retreat_end_fraction
+                        ),
+                    )
                 if (
                     args.target_name == "hang_complete"
                     and args.release_open_value is not None
@@ -1775,6 +2368,16 @@ def main():
                 )
             task_adapter = DampedLeastSquaresPoseTrackingAdapter(
                 reference_poses=reference_eef_poses,
+                arm_name=(
+                    semantic_arm_name
+                    if args.task_controller == "semantic_pose"
+                    else "right_arm"
+                ),
+                arm_action_start=(
+                    semantic_arm_action_start
+                    if args.task_controller == "semantic_pose"
+                    else 7
+                ),
                 damping=args.dls_damping,
                 max_joint_delta=args.dls_max_joint_delta,
                 max_position_step=args.dls_max_position_step,
@@ -1792,6 +2395,15 @@ def main():
             state_encoder=_encode_state,
             sensor_encoder=_encode_sensors,
             candidate_action_adapter=task_adapter,
+            step_observer=(
+                None
+                if args.initial_task_stage == 0
+                else lambda env, phase, _step: (
+                    _initialize_task_stage(env, args.initial_task_stage)
+                    if phase == "reset"
+                    else None
+                )
+            ),
         )
         optimizer_dim = 6 if task_adapter is not None else nominal.shape[1]
         optimizer = CrossEntropyMethod(
@@ -1858,6 +2470,8 @@ def main():
                 target_name=args.target_name,
                 source_branch_points=source_branch_points,
                 target_branch_points=target_branch_points,
+                source_handle_point_mug=source_handle_point_mug,
+                target_handle_point_mug=target_handle_point_mug,
                 right_joint_path_weight=args.right_joint_path_weight,
                 right_joint_accel_weight=args.right_joint_accel_weight,
                 right_joint_jerk_weight=args.right_joint_jerk_weight,
@@ -1929,6 +2543,8 @@ def main():
             target_name=args.target_name,
             source_branch_points=source_branch_points,
             target_branch_points=target_branch_points,
+            source_handle_point_mug=source_handle_point_mug,
+            target_handle_point_mug=target_handle_point_mug,
             right_joint_path_weight=args.right_joint_path_weight,
             right_joint_accel_weight=args.right_joint_accel_weight,
             right_joint_jerk_weight=args.right_joint_jerk_weight,
@@ -1962,6 +2578,7 @@ def main():
                     if args.checkpoint_state is None
                     else args.checkpoint_state
                 ),
+                "initial_task_stage": args.initial_task_stage,
                 "history_steps": int(history.shape[0]),
                 "history_control_overrides": list(
                     args.history_controls_npz
@@ -1971,6 +2588,16 @@ def main():
                 "target_name": args.target_name,
                 "insert_anchor_state": (
                     args.insert_anchor_state
+                    if args.target_name == "inserted_held"
+                    else None
+                ),
+                "left_visibility_anchor_state": (
+                    args.left_visibility_anchor_state
+                    if args.target_name == "inserted_held"
+                    else None
+                ),
+                "left_visibility_retreat_anchor_state": (
+                    args.left_visibility_retreat_anchor_state
                     if args.target_name == "inserted_held"
                     else None
                 ),
@@ -1991,6 +2618,12 @@ def main():
                     "insertion_position_tolerance_m": (
                         TREE_INSERTION_POSITION_TOLERANCE_M
                     ),
+                    "insertion_position_metric": (
+                        "handle_center_radial_error_to_matched_branch_axis"
+                    ),
+                    "insertion_depth_margin_m": (
+                        TREE_INSERTION_TANGENT_MARGIN_M
+                    ),
                     "insertion_rotation_tolerance_rad": (
                         TREE_INSERTION_ROTATION_TOLERANCE_RAD
                     ),
@@ -2003,6 +2636,18 @@ def main():
                 ),
                 "tree_offset_xyz_m": list(args.tree_offset_xyz),
                 "tree_yaw_deg": args.tree_yaw_deg,
+                "mug_offset_xyz_m": list(args.mug_offset_xyz),
+                "mug_yaw_deg": args.mug_yaw_deg,
+                "source_grasp_eef_pose": (
+                    None
+                    if source_target_eef is None
+                    else source_target_eef.tolist()
+                ),
+                "source_grasp_contact_pose": (
+                    None
+                    if source_contact_pose is None
+                    else source_contact_pose.tolist()
+                ),
                 "source_mug": _source_mug_path(args),
                 "target_mug": _target_mug_path(args),
                 "source_mug_tree": _source_tree_path(args),
@@ -2012,6 +2657,16 @@ def main():
                     None
                     if source_branch_points is None
                     else source_branch_points.tolist()
+                ),
+                "source_handle_point_mug_local": (
+                    None
+                    if source_handle_point_mug is None
+                    else source_handle_point_mug.tolist()
+                ),
+                "target_handle_point_mug_local": (
+                    None
+                    if target_handle_point_mug is None
+                    else target_handle_point_mug.tolist()
                 ),
                 "target_branch_points_tree_local": (
                     None
@@ -2027,7 +2682,12 @@ def main():
                 "search_space": args.search_space,
                 "task_controller": args.task_controller,
                 "task_reference": (
-                    "fresh_live_pose_to_semantic_keyframe"
+                    "asset_relative_mug_grasp"
+                    if (
+                        args.task_controller == "semantic_pose"
+                        and args.target_name == "left_grasp"
+                    )
+                    else "fresh_live_pose_to_semantic_keyframe"
                     if args.task_controller == "semantic_pose"
                     else (
                         "recorded_source_eef_trajectory"
@@ -2075,8 +2735,10 @@ def main():
                         and args.target_name == "inserted_held"
                         and target_branch_points is not None
                     ),
-                    "clearance_offset_branch_m": list(
-                        args.insert_clearance_offset_branch
+                    "clearance_offset_branch_m": (
+                        None
+                        if args.insert_clearance_offset_branch is None
+                        else list(args.insert_clearance_offset_branch)
                     ),
                     "clearance_rotation_offset_branch_rad": list(
                         args.insert_clearance_rotation_offset_branch
@@ -2096,6 +2758,33 @@ def main():
                     "clearance_fraction": args.insert_clearance_fraction,
                     "approach_fraction": args.insert_approach_fraction,
                     "seat_fraction": args.insert_seat_fraction,
+                    "left_visibility_anchor_state": (
+                        args.left_visibility_anchor_state
+                    ),
+                    "left_visibility_reach_fraction": (
+                        args.left_visibility_reach_fraction
+                    ),
+                    "left_visibility_retreat_anchor_state": (
+                        args.left_visibility_retreat_anchor_state
+                    ),
+                    "left_visibility_retreat_fractions": [
+                        args.left_visibility_retreat_start_fraction,
+                        args.left_visibility_retreat_end_fraction,
+                    ],
+                },
+                "grasp": {
+                    "enabled": (
+                        args.task_controller == "semantic_pose"
+                        and args.target_name == "left_grasp"
+                    ),
+                    "pregrasp_offset_object_m": list(
+                        args.grasp_pregrasp_offset_object
+                    ),
+                    "target_offset_object_m": list(
+                        args.grasp_target_offset_object
+                    ),
+                    "approach_fraction": grasp_approach_fraction_used,
+                    "contact_fraction": grasp_contact_fraction_used,
                 },
                 "release": {
                     "enabled": (
@@ -2157,11 +2846,31 @@ def main():
                     if target_mug_pose is None
                     else target_mug_pose[None, :]
                 ),
+                grasp_pregrasp_offset_object=np.asarray(
+                    args.grasp_pregrasp_offset_object, dtype=np.float32
+                ),
+                grasp_target_offset_object=np.asarray(
+                    args.grasp_target_offset_object, dtype=np.float32
+                ),
+                grasp_approach_fraction=np.float32(
+                    np.nan
+                    if grasp_approach_fraction_used is None
+                    else grasp_approach_fraction_used
+                ),
+                grasp_contact_fraction=np.float32(
+                    np.nan
+                    if grasp_contact_fraction_used is None
+                    else grasp_contact_fraction_used
+                ),
                 insert_approach_offset_branch=np.asarray(
                     args.insert_approach_offset_branch, dtype=np.float32
                 ),
-                insert_clearance_offset_branch=np.asarray(
-                    args.insert_clearance_offset_branch, dtype=np.float32
+                insert_clearance_offset_branch=(
+                    np.empty((0,), dtype=np.float32)
+                    if args.insert_clearance_offset_branch is None
+                    else np.asarray(
+                        args.insert_clearance_offset_branch, dtype=np.float32
+                    )
                 ),
                 insert_clearance_rotation_offset_branch=np.asarray(
                     args.insert_clearance_rotation_offset_branch,
@@ -2184,6 +2893,27 @@ def main():
                 ),
                 insert_seat_fraction=np.float32(args.insert_seat_fraction),
                 insert_anchor_state=np.int64(args.insert_anchor_state),
+                left_visibility_anchor_state=(
+                    np.int64(-1)
+                    if args.left_visibility_anchor_state is None
+                    else np.int64(args.left_visibility_anchor_state)
+                ),
+                left_visibility_reach_fraction=np.float32(
+                    args.left_visibility_reach_fraction
+                ),
+                left_visibility_retreat_anchor_state=(
+                    np.int64(-1)
+                    if args.left_visibility_retreat_anchor_state is None
+                    else np.int64(
+                        args.left_visibility_retreat_anchor_state
+                    )
+                ),
+                left_visibility_retreat_start_fraction=np.float32(
+                    args.left_visibility_retreat_start_fraction
+                ),
+                left_visibility_retreat_end_fraction=np.float32(
+                    args.left_visibility_retreat_end_fraction
+                ),
                 semantic_anchor_state=(
                     np.int64(-1)
                     if args.semantic_anchor_state is None
@@ -2213,6 +2943,7 @@ def main():
                     if args.checkpoint_state is None
                     else args.checkpoint_state
                 ),
+                initial_task_stage=np.int64(args.initial_task_stage),
                 start_state=np.int64(args.start_state),
                 target_state=np.int64(args.target_state),
                 target_name=np.asarray(args.target_name),
@@ -2220,6 +2951,24 @@ def main():
                     args.tree_offset_xyz, dtype=np.float32
                 ),
                 tree_yaw_deg=np.float32(args.tree_yaw_deg),
+                mug_offset_xyz=np.asarray(
+                    args.mug_offset_xyz, dtype=np.float32
+                ),
+                mug_yaw_deg=np.float32(args.mug_yaw_deg),
+                source_grasp_eef_pose=(
+                    np.empty((0, 7), dtype=np.float32)
+                    if source_target_eef is None
+                    else np.asarray(source_target_eef, dtype=np.float32)[
+                        None, :
+                    ]
+                ),
+                source_grasp_contact_pose=(
+                    np.empty((0, 7), dtype=np.float32)
+                    if source_contact_pose is None
+                    else np.asarray(source_contact_pose, dtype=np.float32)[
+                        None, :
+                    ]
+                ),
                 source_mug_tree=np.asarray(_source_tree_path(args)),
                 target_mug_tree=np.asarray(_target_tree_path(args)),
                 source_mug=np.asarray(_source_mug_path(args)),
@@ -2236,6 +2985,16 @@ def main():
                     np.empty((0, 3), dtype=np.float32)
                     if target_branch_points is None
                     else target_branch_points
+                ),
+                source_handle_point_mug=(
+                    np.empty((0,), dtype=np.float32)
+                    if source_handle_point_mug is None
+                    else source_handle_point_mug
+                ),
+                target_handle_point_mug=(
+                    np.empty((0,), dtype=np.float32)
+                    if target_handle_point_mug is None
+                    else target_handle_point_mug
                 ),
             )
         print(

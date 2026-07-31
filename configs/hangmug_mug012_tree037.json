@@ -1,6 +1,11 @@
 {
   "checkpoint_state": 0,
   "correspondences": {
+    "mug.handle": {
+      "method": "matched handle-hole center from visual-mesh side silhouette",
+      "source_point": [0.0425, 0.0, 0.0015],
+      "target_point": [0.043, 0.0, 0.003]
+    },
     "mug_tree.branch": {
       "method": "matched collision branch center, tangent, and normal",
       "source_points": [
@@ -52,7 +57,7 @@
   "dataset": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/teleop/hangmug_000.hdf5",
   "episode": "demo_0",
   "metadata": {
-    "asset_selection": "nearest non-source official instances by normalized XYZ bounding-box distance",
+    "asset_selection": "official mug whose fresh source-action grasp replay fails; selected as the strongest recovered contact-frame MPC candidate",
     "final_episode_contract": "one process, one reset, continuous actions, coded stage-3 success",
     "source_strategy": "pick, handover, branch-relative insert, release and stabilize"
   },
@@ -63,22 +68,131 @@
   },
   "stages": [
     {
-      "horizon": 550,
-      "name": "source_strategy_bootstrap",
+      "horizon": 120,
+      "name": "asset_relative_left_grasp",
       "parameters": {
-        "candidate_repeats": 1,
-        "control_knots": 8,
-        "duplicate_nominal": 1,
-        "max_action_delta": 0.0,
-        "num_elites": 1,
-        "num_iterations": 1,
-        "num_rollouts": 3,
-        "sigma_max": 0.000002,
-        "sigma_min": 0.000001
+        "attempts": [
+          {
+            "grasp_approach_fraction": 0.60,
+            "grasp_contact_fraction": 0.82
+          },
+          {
+            "grasp_approach_fraction": 0.55,
+            "grasp_contact_fraction": 0.78,
+            "grasp_target_offset_object": [
+              0.0,
+              0.004,
+              0.0
+            ],
+            "num_iterations": 8,
+            "num_rollouts": 24
+          },
+          {
+            "grasp_approach_fraction": 0.55,
+            "grasp_contact_fraction": 0.78,
+            "grasp_target_offset_object": [
+              0.0,
+              -0.004,
+              0.0
+            ],
+            "num_iterations": 8,
+            "num_rollouts": 24
+          }
+        ],
+        "candidate_repeat_reducer": "min",
+        "candidate_repeats": 4,
+        "control_knots": 10,
+        "duplicate_nominal": 4,
+        "max_task_rotation_delta": 0.15,
+        "max_task_translation_delta": 0.025,
+        "num_elites": 4,
+        "num_iterations": 5,
+        "num_rollouts": 20,
+        "provisional_fallback": {
+          "metric_min": {
+            "acceptance_success_count": 6,
+            "post_keyframe_target_fraction_mean": 0.8
+          },
+          "require_rendered_mpc_success": true
+        },
+        "search_space": "task",
+        "sigma_max": 0.012,
+        "sigma_min": 0.0005,
+        "task_controller": "semantic_pose"
       },
       "start_state": 0,
+      "target_name": "left_grasp",
+      "target_state": 116
+    },
+    {
+      "horizon": 250,
+      "name": "semantic_handover_anchor323",
+      "parameters": {
+        "attempts": [
+          {
+            "num_iterations": 6,
+            "num_rollouts": 18
+          },
+          {
+            "num_iterations": 10,
+            "num_rollouts": 24,
+            "sigma_max": 0.02
+          }
+        ],
+        "candidate_repeat_reducer": "min",
+        "candidate_repeats": 3,
+        "control_knots": 14,
+        "duplicate_nominal": 3,
+        "max_task_rotation_delta": 0.2,
+        "max_task_translation_delta": 0.04,
+        "num_elites": 5,
+        "num_iterations": 6,
+        "num_rollouts": 18,
+        "search_space": "task",
+        "semantic_anchor_state": 323,
+        "sigma_max": 0.015,
+        "sigma_min": 0.0005,
+        "task_controller": "semantic_pose"
+      },
+      "start_state": 120,
       "target_name": "handover_latched",
       "target_state": 361
+    },
+    {
+      "horizon": 180,
+      "name": "semantic_tree_transport",
+      "parameters": {
+        "attempts": [
+          {
+            "num_iterations": 6,
+            "num_rollouts": 18
+          },
+          {
+            "num_iterations": 10,
+            "num_rollouts": 24,
+            "sigma_max": 0.02
+          }
+        ],
+        "candidate_repeat_reducer": "min",
+        "candidate_repeats": 3,
+        "control_knots": 12,
+        "duplicate_nominal": 3,
+        "max_task_rotation_delta": 0.2,
+        "max_task_translation_delta": 0.04,
+        "num_elites": 5,
+        "num_iterations": 6,
+        "num_rollouts": 18,
+        "right_joint_accel_weight": 0.2,
+        "right_joint_jerk_weight": 0.1,
+        "right_joint_path_weight": 0.05,
+        "search_space": "task",
+        "sigma_max": 0.015,
+        "sigma_min": 0.0005,
+        "task_controller": "semantic_pose"
+      },
+      "start_state": 370,
+      "target_name": "tree_approach",
+      "target_state": 550
     },
     {
       "horizon": 120,
@@ -129,47 +243,37 @@
         "dls_max_position_step": 0.03,
         "dls_max_rotation_step": 0.2,
         "duplicate_nominal": 4,
-        "insert_approach_fraction": 0.55,
+        "insert_approach_fraction": 0.7,
         "insert_approach_offset_branch": [
           0.05,
           0.0,
           0.0
         ],
-        "insert_clearance_fraction": 0.2,
-        "insert_clearance_offset_branch": [
-          -0.025,
-          0.025,
-          -0.055
-        ],
-        "insert_clearance_rotation_offset_branch": [
-          0.55756,
-          0.09357,
-          -0.21612
-        ],
         "insert_eef_position_offset_branch": [
-          -0.00269,
-          -0.00488,
-          0.00023
+          -0.00688,
+          -0.000867,
+          -0.002094
         ],
         "insert_eef_rotation_offset_branch": [
-          -0.05504,
-          0.00746,
-          -0.0322
+          0.09723728,
+          0.00511356,
+          0.20434844
         ],
-        "insert_seat_fraction": 0.75,
+        "left_visibility_anchor_state": 735,
+        "left_visibility_reach_fraction": 0.35,
+        "left_visibility_retreat_anchor_state": 790,
+        "left_visibility_retreat_start_fraction": 0.65,
+        "left_visibility_retreat_end_fraction": 0.90,
+        "insert_seat_fraction": 0.9,
         "max_task_rotation_delta": 0.15,
-        "max_task_translation_delta": 0.04,
+        "max_task_translation_delta": 0.025,
         "num_elites": 5,
-        "provisional_fallback": {
-          "position_tolerance_m": 0.015,
-          "rotation_tolerance_rad": 0.22
-        },
         "right_joint_accel_weight": 0.2,
         "right_joint_jerk_weight": 0.1,
         "right_joint_path_weight": 0.05,
         "search_space": "task",
-        "sigma_max": 0.025,
-        "sigma_min": 0.001,
+        "sigma_max": 0.012,
+        "sigma_min": 0.0005,
         "task_controller": "semantic_pose"
       },
       "start_state": 550,
@@ -208,7 +312,7 @@
   ],
   "success_check": "dc_study.envs.tasks.hang_mug_on_tree_manager_cfg.check_task_success",
   "target_assets": {
-    "mug": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/Mug/mug_029",
+    "mug": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/Mug/mug_012",
     "mug_tree": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/MugTree/mug_tree_037"
   },
   "task_name": "HangMugOnTree-v0"

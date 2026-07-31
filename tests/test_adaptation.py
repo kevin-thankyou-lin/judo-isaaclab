@@ -1,10 +1,12 @@
 import json
 
+import numpy as np
 import pytest
 
 from judo_isaaclab.adaptation import (
     TaskAdaptationBundle,
     TrialEvidence,
+    asset_relative_grasp_pose,
     corrected_insert_offset,
 )
 
@@ -16,6 +18,7 @@ from hangmug_task_adaptation_agent import (
     _discard_incomplete_trailing_trials,
     _extend,
     _fallback_trial,
+    _rendered_mpc_subtask_passed,
     _resumable_stage_record,
 )
 
@@ -152,3 +155,115 @@ def test_fallback_requires_robust_grasp_and_selects_best_pose():
         {"position_tolerance_m": 0.015, "rotation_tolerance_rad": 0.22},
     )
     assert selected["index"] == 1
+
+
+def test_fallback_supports_stage_specific_metric_thresholds():
+    selected = _fallback_trial(
+        {
+            "trials": [
+                {
+                    "index": 0,
+                    "metrics": {
+                        "acceptance_success_count": 4,
+                        "post_keyframe_target_fraction_mean": 0.9,
+                    },
+                },
+                {
+                    "index": 1,
+                    "metrics": {
+                        "acceptance_success_count": 5,
+                        "post_keyframe_target_fraction_mean": 0.83,
+                    },
+                },
+            ]
+        },
+        {
+            "metric_min": {
+                "acceptance_success_count": 5,
+                "post_keyframe_target_fraction_mean": 0.8,
+            }
+        },
+    )
+    assert selected["index"] == 1
+
+
+def test_rendered_fallback_requires_mpc_success_and_decodable_video(tmp_path):
+    result = tmp_path / "render.json"
+    result.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "subtask_complete": {"mpc": True},
+                "checks": {"fully_decodable": True},
+            }
+        )
+    )
+    assert _rendered_mpc_subtask_passed(result)
+    payload = json.loads(result.read_text())
+    payload["subtask_complete"]["mpc"] = False
+    result.write_text(json.dumps(payload))
+    assert not _rendered_mpc_subtask_passed(result)
+
+
+def test_asset_relative_grasp_tracks_target_pose_and_dimensions():
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    source_eef = identity.copy()
+    source_eef[0] = 0.1
+    half = np.sqrt(0.5)
+    target_object = np.asarray(
+        [1.0, 2.0, 3.0, half, 0.0, 0.0, half]
+    )
+
+    target = asset_relative_grasp_pose(
+        source_eef,
+        identity,
+        target_object,
+        [1.0, 1.0, 1.0],
+        [2.0, 1.0, 1.0],
+    )
+
+    assert target[:3] == pytest.approx([1.0, 2.2, 3.0], abs=1.0e-6)
+    assert target[3:] == pytest.approx(target_object[3:], abs=1.0e-6)
+
+
+def test_asset_relative_grasp_preserves_vertical_tool_standoff():
+    source_object = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    source_eef = source_object.copy()
+    source_eef[:3] = [0.1, 0.2, 0.3]
+
+    target = asset_relative_grasp_pose(
+        source_eef,
+        source_object,
+        source_object,
+        [1.0, 1.0, 1.0],
+        [2.0, 0.5, 1.5],
+    )
+
+    assert target[:3] == pytest.approx([0.2, 0.1, 0.3], abs=1.0e-6)
+
+
+def test_asset_relative_grasp_scales_contact_but_not_tool_transform():
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    source_contact = identity.copy()
+    source_contact[:3] = [0.1, 0.2, 0.3]
+    source_eef = identity.copy()
+    source_eef[:3] = [0.1, 0.2, 0.5]
+
+    target = asset_relative_grasp_pose(
+        source_eef,
+        identity,
+        identity,
+        [1.0, 1.0, 1.0],
+        [2.0, 0.5, 1.5],
+        source_contact_pose=source_contact,
+    )
+
+    assert target[:3] == pytest.approx([0.2, 0.1, 0.65], abs=1.0e-6)
+
+
+def test_asset_relative_grasp_rejects_invalid_sizes():
+    pose = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        asset_relative_grasp_pose(
+            pose, pose, pose, [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]
+        )

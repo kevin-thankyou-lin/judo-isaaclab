@@ -7,23 +7,74 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from hangmug_grasp_keyframe_mpc import (
+    _align_corresponding_handle_point,
+    _apply_left_visibility_pose,
     _apply_history_control_overrides,
     _correspond_pose_between_branches,
     _expand_control_corrections,
     _expand_task_space_program,
     _eef_target_for_mug_target,
+    _initialize_task_stage,
     _objective_components,
     _pose_compose,
     _pose_inverse,
     _quat_to_matrix,
     _semantic_base_controls,
+    _semantic_reference_to_keyframe,
     _semantic_reference_trajectory,
     _subtask_reached,
     _task_program_knots,
+    grasp,
     insert,
     release,
 )
 from render_hangmug_mpc_comparison import _quaternion_error
+
+
+class _FillValue:
+    def __init__(self):
+        self.value = None
+
+    def fill_(self, value):
+        self.value = value
+
+
+def test_initial_task_stage_restores_phase_latches_only():
+    env = type(
+        "Env",
+        (),
+        {
+            name: _FillValue()
+            for name in (
+                "stage1_success",
+                "stage2_success",
+                "stage3_success",
+                "_prev_stage1_success",
+                "_prev_stage2_success",
+                "_prev_stage3_success",
+                "_stage2_reward_given",
+                "_stage3_reward_given",
+            )
+        },
+    )()
+
+    _initialize_task_stage(env, 2)
+
+    assert env.stage1_success.value is True
+    assert env.stage2_success.value is True
+    assert env.stage3_success.value is False
+    assert env._stage2_reward_given.value is True
+
+
+def test_handle_correspondence_shifts_mug_origin_to_align_landmarks():
+    pose = np.asarray([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
+    source = np.asarray([0.06, 0.01, 0.02])
+    target = np.asarray([0.04, -0.01, 0.01])
+
+    aligned = _align_corresponding_handle_point(pose, source, target)
+
+    np.testing.assert_allclose(aligned[:3] + target, pose[:3] + source)
+    np.testing.assert_allclose(aligned[3:], pose[3:])
 
 
 @pytest.fixture
@@ -74,6 +125,25 @@ def test_target_success_selects_expected_sensor(
 
     assert result["keyframe_target_success"].tolist() == [True, False]
     assert result["rewards"][0] > result["rewards"][1]
+
+
+def test_handover_latch_without_right_grasp_is_not_success(rollout_inputs):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    sensors[0, :, 8] = 1.0
+    sensors[1, :, 8] = 1.0
+    sensors[1, :, 6] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=0,
+        target_name="handover_latched",
+    )
+
+    assert result["keyframe_target_success"].tolist() == [False, True]
 
 
 def test_video_quaternion_error_is_sign_invariant():
@@ -170,6 +240,45 @@ def test_branch_correspondence_adapts_to_a_taller_branch(rollout_inputs):
     )
     assert result["keyframe_position_error_m"][1] == pytest.approx(0.2)
     assert result["rewards"][0] - result["rewards"][1] > 10.0
+
+
+def test_handle_support_allows_seating_depth_but_rejects_radial_error(
+    rollout_inputs,
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    branch_points = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    )
+    states[0, :, :3] = [0.02, 0.0, 0.0]
+    states[1, :, :3] = [0.02, 0.02, 0.0]
+    sensors[:, :, 6] = 1.0
+    sensors[:, :, 8] = 1.0
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=1,
+        target_name="inserted_held",
+        source_branch_points=branch_points,
+        target_branch_points=branch_points,
+        source_handle_point_mug=np.zeros(3),
+        target_handle_point_mug=np.zeros(3),
+    )
+
+    assert result["target_frame"] == (
+        "handle_hole_relative_to_corresponded_branch"
+    )
+    assert result["keyframe_position_error_m"].tolist() == pytest.approx(
+        [0.0, 0.02]
+    )
+    assert result["keyframe_insertion_depth_supported"].tolist() == [
+        True,
+        True,
+    ]
+    assert result["keyframe_target_success"].tolist() == [True, False]
 
 
 def test_pose_correspondence_preserves_branch_relative_pose_and_orientation():
@@ -390,6 +499,43 @@ def test_semantic_reference_starts_from_live_pose_and_ends_at_keyframe():
     assert np.linalg.norm(reference[0, :3] - start[:3]) < np.linalg.norm(
         target[:3] - start[:3]
     )
+
+
+def test_semantic_reference_reaches_acceptance_step_then_holds():
+    start = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = np.asarray([0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
+
+    reference = _semantic_reference_to_keyframe(
+        start, target, horizon=6, keyframe_offset=2
+    )
+
+    assert reference.shape == (6, 7)
+    assert reference[2:] == pytest.approx(
+        np.broadcast_to(target, (4, 7))
+    )
+
+
+def test_grasp_approaches_outside_object_then_moves_inward():
+    start = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = np.asarray([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    reference = grasp(
+        start,
+        target,
+        np.eye(3),
+        10,
+        pregrasp_offset_object=[0.1, 0.0, 0.0],
+        approach_fraction=0.5,
+        contact_fraction=0.8,
+    )
+
+    assert reference[4, :3] == pytest.approx([0.6, 0.0, 0.0])
+    assert reference[7:, :3] == pytest.approx(
+        np.broadcast_to(target[:3], (3, 3))
+    )
+    assert reference[7:, 3:7] == pytest.approx(
+        np.broadcast_to(target[3:7], (3, 4)), abs=1e-6
+    )
     assert np.linalg.norm(reference[:, 3:7], axis=-1) == pytest.approx(1.0)
 
 
@@ -435,6 +581,37 @@ def test_insert_default_backs_out_then_seats_along_branch_tangent():
     )
     assert reference[16:, :3] == pytest.approx(
         np.broadcast_to(target[:3], (4, 3))
+    )
+    # Direct tip alignment never uses the old under-branch clearance lane.
+    assert reference[:, 2].min() >= 0.3
+    assert reference[11, 1:3] == pytest.approx(target[1:3])
+
+
+def test_insert_aligns_orientation_before_tangent_seating():
+    target_angle = 0.4
+    target = np.array(
+        [
+            0.2,
+            -0.1,
+            0.5,
+            np.cos(target_angle / 2.0),
+            0.0,
+            0.0,
+            np.sin(target_angle / 2.0),
+        ]
+    )
+    reference = insert(
+        np.array([0.0, 0.0, 0.3, 1.0, 0.0, 0.0, 0.0]),
+        target,
+        np.eye(3),
+        horizon=20,
+        approach_fraction=0.6,
+        seat_fraction=0.8,
+    )
+
+    assert reference[11, 3:7] == pytest.approx(target[3:7])
+    assert reference[12:, 3:7] == pytest.approx(
+        np.broadcast_to(target[3:7], (8, 4))
     )
 
 
@@ -556,6 +733,91 @@ def test_semantic_base_uses_only_hold_release_intent(
     )
     assert controls[:, 7:13] == pytest.approx(nominal[:, 7:13])
     assert controls[:, 13] == pytest.approx(expected_right_gripper)
+
+
+def test_left_visibility_pose_reaches_source_target_then_holds():
+    controls = np.zeros((10, 14), dtype=np.float32)
+    controls[0, :7] = np.arange(7, dtype=np.float32)
+    target = np.arange(7, dtype=np.float32) + 10.0
+
+    result = _apply_left_visibility_pose(
+        controls,
+        target,
+        reach_fraction=0.4,
+    )
+
+    assert result[3:, :7] == pytest.approx(
+        np.broadcast_to(target, (7, 7))
+    )
+    assert result[0, :7] != pytest.approx(target)
+    assert result[:, 7:] == pytest.approx(controls[:, 7:])
+
+
+def test_left_visibility_pose_pulls_back_during_seating():
+    controls = np.zeros((10, 14), dtype=np.float32)
+    observer = np.ones(7, dtype=np.float32)
+    retreat = np.full(7, 2.0, dtype=np.float32)
+
+    result = _apply_left_visibility_pose(
+        controls,
+        observer,
+        reach_fraction=0.3,
+        retreat_left_action=retreat,
+        retreat_start_fraction=0.6,
+        retreat_end_fraction=0.9,
+    )
+
+    assert result[2:6, :7] == pytest.approx(
+        np.broadcast_to(observer, (4, 7))
+    )
+    assert result[8:, :7] == pytest.approx(
+        np.broadcast_to(retreat, (2, 7))
+    )
+    assert result[:, 7:] == pytest.approx(controls[:, 7:])
+
+
+@pytest.mark.parametrize("fraction", (0.0, -0.1, 1.1))
+def test_left_visibility_pose_rejects_invalid_fraction(fraction):
+    with pytest.raises(ValueError, match="reach fraction"):
+        _apply_left_visibility_pose(
+            np.zeros((2, 14), dtype=np.float32),
+            np.zeros(7, dtype=np.float32),
+            reach_fraction=fraction,
+        )
+
+
+def test_semantic_grasp_base_preserves_left_gripper_only():
+    nominal = np.arange(42, dtype=np.float32).reshape(3, 14)
+
+    controls = _semantic_base_controls(nominal, "left_grasp")
+
+    assert controls[:, :6] == pytest.approx(nominal[:, :6])
+    assert controls[:, 6] == pytest.approx(nominal[:, 6])
+    assert controls[:, 7:] == pytest.approx(
+        np.broadcast_to(nominal[0, 7:], (3, 7))
+    )
+
+
+@pytest.mark.parametrize("target_name", ("right_grasp", "handover_latched"))
+def test_semantic_handover_preserves_demo_gripper_timing(target_name):
+    nominal = np.arange(42, dtype=np.float32).reshape(3, 14)
+
+    controls = _semantic_base_controls(nominal, target_name)
+
+    if target_name == "handover_latched":
+        assert controls[:, :6] == pytest.approx(nominal[:, :6])
+    else:
+        assert controls[:, :6] == pytest.approx(
+            np.broadcast_to(nominal[0, :6], (3, 6))
+        )
+    if target_name == "right_grasp":
+        assert controls[:, 6] == pytest.approx(
+            np.broadcast_to(nominal[0, 6], 3)
+        )
+    else:
+        assert controls[:, 6] == pytest.approx(nominal[:, 6])
+    assert controls[:, 7:13] == pytest.approx(nominal[:, 7:13])
+    assert controls[:, 13] == pytest.approx(nominal[:, 13])
 
 
 def test_objective_accepts_task_space_control_reference(rollout_inputs):

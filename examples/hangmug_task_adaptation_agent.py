@@ -116,6 +116,18 @@ def _stage_command(
     if branch:
         _extend(command, "source_branch_points", branch["source_points"])
         _extend(command, "target_branch_points", branch["target_points"])
+    handle = bundle.correspondences.get("mug.handle", {})
+    if handle:
+        _extend(command, "source_handle_point_mug", handle["source_point"])
+        _extend(command, "target_handle_point_mug", handle["target_point"])
+    grasp = bundle.correspondences.get("mug.left_grasp", {})
+    if stage.target_name == "left_grasp" and grasp:
+        _extend(command, "source_grasp_eef_pose", grasp["source_eef_pose"])
+        _extend(
+            command,
+            "source_grasp_contact_pose",
+            grasp.get("source_contact_pose"),
+        )
     for name, value in parameters.items():
         if name != "attempts":
             _extend(command, name, value)
@@ -182,24 +194,52 @@ def _fallback_trial(stage_record, fallback):
     for trial in stage_record["trials"]:
         metrics = trial.get("metrics", {})
         count = metrics.get("count", 0)
-        if (
+        generic_minima = fallback.get("metric_min", {})
+        generic_maxima = fallback.get("metric_max", {})
+        generic_match = bool(generic_minima or generic_maxima) and all(
+            metrics.get(name, float("-inf")) >= threshold
+            for name, threshold in generic_minima.items()
+        ) and all(
+            metrics.get(name, float("inf")) <= threshold
+            for name, threshold in generic_maxima.items()
+        )
+        legacy_match = (
             count > 0
             and metrics.get("keyframe_right_grasp_count") == count
             and metrics.get("keyframe_stage2_count") == count
             and metrics.get("keyframe_position_error_m_max", float("inf"))
-            <= fallback["position_tolerance_m"]
+            <= fallback.get("position_tolerance_m", float("-inf"))
             and metrics.get("keyframe_rotation_error_rad_max", float("inf"))
-            <= fallback["rotation_tolerance_rad"]
-        ):
+            <= fallback.get("rotation_tolerance_rad", float("-inf"))
+        )
+        if generic_match or legacy_match:
             eligible.append(trial)
     if not eligible:
         return None
     return min(
         eligible,
         key=lambda trial: (
-            trial["metrics"]["keyframe_position_error_m_max"],
-            trial["metrics"]["keyframe_rotation_error_rad_max"],
+            -trial["metrics"].get("acceptance_success_count", 0),
+            -trial["metrics"].get("post_keyframe_target_fraction_mean", 0.0),
+            trial["metrics"].get("keyframe_position_error_m_max", float("inf")),
+            trial["metrics"].get("keyframe_rotation_error_rad_max", float("inf")),
         ),
+    )
+
+
+def _rendered_mpc_subtask_passed(result_path):
+    """Require a fresh rendered execution, not only batched search metrics."""
+    result_path = Path(result_path)
+    if not result_path.exists():
+        return False
+    try:
+        result = json.loads(result_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(
+        result.get("status") == "passed"
+        and result.get("subtask_complete", {}).get("mpc")
+        and result.get("checks", {}).get("fully_decodable")
     )
 
 
@@ -222,6 +262,8 @@ def main():
             "stages": [],
         }
     )
+    if args.resume:
+        ledger["status"] = "running"
     promoted_controls = [
         Path(stage["promoted_controls"])
         for stage in ledger["stages"]
@@ -341,6 +383,44 @@ def main():
                 )
         if stage_record["status"] != "promoted" and fallback is not None:
             provisional = _fallback_trial(stage_record, fallback)
+            if provisional is not None:
+                controls_path = Path(provisional["controls"])
+                if fallback.get("require_rendered_mpc_success"):
+                    prefix_name = controls_path.name.removesuffix(
+                        "_controls.npz"
+                    )
+                    render_output = controls_path.with_name(
+                        prefix_name + "_all_views.mp4"
+                    )
+                    render_result = controls_path.with_name(
+                        prefix_name + "_render.json"
+                    )
+                    render_log = controls_path.with_name(
+                        prefix_name + "_render.log"
+                    )
+                    if not _rendered_mpc_subtask_passed(render_result):
+                        _run(
+                            _failure_render_command(
+                                args,
+                                bundle,
+                                controls_path,
+                                render_output,
+                                render_result,
+                            ),
+                            render_log,
+                            False,
+                        )
+                    render_passed = _rendered_mpc_subtask_passed(
+                        render_result
+                    )
+                    stage_record["fallback_render"] = {
+                        "passed": render_passed,
+                        "result": str(render_result),
+                        "video": str(render_output),
+                        "log": str(render_log),
+                    }
+                    if not render_passed:
+                        provisional = None
             if provisional is not None:
                 controls_path = Path(provisional["controls"])
                 promoted_controls.append(controls_path)

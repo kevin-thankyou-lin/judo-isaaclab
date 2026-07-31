@@ -4,6 +4,30 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def resolve_end_effector_body_index(
+    env: Any,
+    arm_name: str,
+    body_name: str | None = None,
+) -> int:
+    """Resolve the arm attachment body used for pose and Jacobian tracking."""
+    arm = env.scene[arm_name]
+    if body_name is None:
+        robot = getattr(env, "robot", None)
+        robot_arms = getattr(robot, "arms", {})
+        robot_arm = robot_arms.get(arm_name) if hasattr(robot_arms, "get") else None
+        end_effector = getattr(robot_arm, "end_effector", None)
+        body_name = getattr(end_effector, "attach_link_name", None)
+    if body_name is None:
+        return arm.num_bodies - 1
+    try:
+        return arm.data.body_names.index(body_name)
+    except ValueError as error:
+        raise ValueError(
+            f"End-effector body {body_name!r} is not in {arm_name!r}: "
+            f"{arm.data.body_names}"
+        ) from error
+
+
 def damped_least_squares(jacobian: Any, twist: Any, damping: float) -> Any:
     """Map batched Cartesian residuals to joint residuals without an SVD."""
     import torch
@@ -31,6 +55,7 @@ class DampedLeastSquaresTaskSpaceAdapter:
     arm_joint_count: int = 6
     damping: float = 0.05
     max_joint_delta: float = 0.35
+    end_effector_body_name: str | None = None
 
     @property
     def control_dim(self) -> int:
@@ -48,7 +73,9 @@ class DampedLeastSquaresTaskSpaceAdapter:
                 f"(batch, {self.control_dim}), got {tuple(controls.shape)}"
             )
         arm = env.scene[self.arm_name]
-        body_index = arm.num_bodies - 1
+        body_index = resolve_end_effector_body_index(
+            env, self.arm_name, self.end_effector_body_name
+        )
         jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
         jacobian = arm.root_physx_view.get_jacobians()[
             :, jacobian_index, :, : self.arm_joint_count
@@ -86,6 +113,7 @@ class DampedLeastSquaresPoseTrackingAdapter:
     max_joint_delta: float = 0.35
     max_position_step: float = 0.03
     max_rotation_step: float = 0.2
+    end_effector_body_name: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -139,7 +167,9 @@ class DampedLeastSquaresPoseTrackingAdapter:
             raise RuntimeError("Candidate horizon exceeds reference trajectory")
 
         arm = env.scene[self.arm_name]
-        body_index = arm.num_bodies - 1
+        body_index = resolve_end_effector_body_index(
+            env, self.arm_name, self.end_effector_body_name
+        )
         jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
         jacobian = arm.root_physx_view.get_jacobians()[
             :, jacobian_index, :, : self.arm_joint_count

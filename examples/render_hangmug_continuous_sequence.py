@@ -169,6 +169,10 @@ def main():
             },
             is_relative=True,
         )
+        if first["initial_task_stage"]:
+            render._initialize_task_stage(
+                env, first["initial_task_stage"]
+            )
         for action in first["history"]:
             env.step(action.reshape(1, -1).expand(2, -1))
 
@@ -176,22 +180,18 @@ def main():
         frame_stats = []
         stage_trace_ranges = []
         global_step = 0
-        with tempfile.TemporaryDirectory(
-            prefix="hangmug-adaptation-final-"
-        ) as frames_dir:
+        with render._StreamingEncoder(args.fps, args.output) as encoder:
             sample = render._sample(env, -1)
             traces.append(sample)
-            frame_stats.append(
-                render._write_frame(
-                    env,
-                    sample,
-                    0,
-                    frames_dir,
-                    first["target_name"],
-                    inputs=first,
-                    coordinate_draw=coordinate_draw,
-                )
+            frame, stats = render._compose_frame(
+                env,
+                sample,
+                first["target_name"],
+                inputs=first,
+                coordinate_draw=coordinate_draw,
             )
+            encoder.write(frame)
+            frame_stats.append(stats)
             for stage in stages:
                 trace_start = len(traces) - 1
                 for local_step in range(stage["candidate"].shape[1]):
@@ -204,17 +204,15 @@ def main():
                         )
                     sample = render._sample(env, global_step)
                     traces.append(sample)
-                    frame_stats.append(
-                        render._write_frame(
-                            env,
-                            sample,
-                            global_step + 1,
-                            frames_dir,
-                            stage["target_name"],
-                            inputs=stage,
-                            coordinate_draw=coordinate_draw,
-                        )
+                    frame, stats = render._compose_frame(
+                        env,
+                        sample,
+                        stage["target_name"],
+                        inputs=stage,
+                        coordinate_draw=coordinate_draw,
                     )
+                    encoder.write(frame)
+                    frame_stats.append(stats)
                     global_step += 1
                 stage_trace_ranges.append(
                     {
@@ -223,9 +221,30 @@ def main():
                         "trace_end": len(traces) - 1,
                     }
                 )
-            render._encode(frames_dir, args.fps, args.output)
 
-        final_acceptance = render._hang_acceptance(traces, stages[-1])
+        stage_acceptance = []
+        for stage, trace_range in zip(stages, stage_trace_ranges):
+            stage_traces = traces[
+                trace_range["trace_start"] : trace_range["trace_end"] + 1
+            ]
+            if stage["target_name"] == "inserted_held":
+                acceptance = render._insert_acceptance(stage_traces, stage)
+            elif stage["target_name"] == "hang_complete":
+                acceptance = render._hang_acceptance(stage_traces, stage)
+            else:
+                complete = [
+                    bool(
+                        render._subtask_complete(
+                            stage_traces[-1], lane, stage["target_name"]
+                        )
+                    )
+                    for lane in range(2)
+                ]
+                acceptance = {"complete": complete}
+            stage_acceptance.append(
+                {"name": stage["target_name"], **acceptance}
+            )
+        final_acceptance = stage_acceptance[-1]
         video = render._probe(args.output)
         checks = {
             "one_reset": True,
@@ -236,6 +255,9 @@ def main():
                 and stages[-1]["target_mug_tree"] == args.target_mug_tree
             ),
             "coded_task_success": bool(final_acceptance["complete"][1]),
+            "all_mpc_stages_complete": all(
+                bool(stage["complete"][1]) for stage in stage_acceptance
+            ),
             "dynamic_frames": (
                 max(row["mean"] for row in frame_stats)
                 != min(row["mean"] for row in frame_stats)
@@ -267,6 +289,7 @@ def main():
                 "stage3": traces[-1]["stage3"],
             },
             "hang_acceptance": final_acceptance,
+            "stage_acceptance": stage_acceptance,
             "checks": checks,
             "video": video,
         }

@@ -20,7 +20,9 @@ from hangmug_grasp_keyframe_mpc import (
     TREE_INSERTION_POSITION_TOLERANCE_M,
     TREE_INSERTION_ROTATION_TOLERANCE_RAD,
     TREE_INSERTION_STABILITY_STEPS,
+    TREE_INSERTION_TANGENT_MARGIN_M,
     _branch_frame,
+    _initialize_task_stage,
     _mug_in_branch_frame,
     _quat_to_matrix,
     _rotation_matrix_error,
@@ -106,6 +108,11 @@ def _load_inputs(args, device):
         dtype=np.float32,
     )
     checkpoint_state = int(controls["checkpoint_state"])
+    initial_task_stage = int(
+        controls["initial_task_stage"]
+        if "initial_task_stage" in controls.files
+        else 0
+    )
     start_state = int(controls["start_state"])
     target_state = int(controls["target_state"])
     target_name = str(controls["target_name"])
@@ -163,6 +170,17 @@ def _load_inputs(args, device):
         if "tree_yaw_deg" in controls.files
         else 0.0
     )
+    mug_offset_xyz = np.asarray(
+        controls["mug_offset_xyz"]
+        if "mug_offset_xyz" in controls.files
+        else np.zeros(3),
+        dtype=np.float32,
+    )
+    mug_yaw_deg = float(
+        controls["mug_yaw_deg"]
+        if "mug_yaw_deg" in controls.files
+        else 0.0
+    )
     source_branch_points = (
         np.asarray(controls["source_branch_points"], dtype=np.float32)
         if "source_branch_points" in controls.files
@@ -173,6 +191,18 @@ def _load_inputs(args, device):
         np.asarray(controls["target_branch_points"], dtype=np.float32)
         if "target_branch_points" in controls.files
         and controls["target_branch_points"].size
+        else None
+    )
+    source_handle_point = (
+        np.asarray(controls["source_handle_point_mug"], dtype=np.float32)
+        if "source_handle_point_mug" in controls.files
+        and controls["source_handle_point_mug"].size
+        else None
+    )
+    target_handle_point = (
+        np.asarray(controls["target_handle_point_mug"], dtype=np.float32)
+        if "target_handle_point_mug" in controls.files
+        and controls["target_handle_point_mug"].size
         else None
     )
     target_eef_pose = (
@@ -197,6 +227,22 @@ def _load_inputs(args, device):
         checkpoint = _tensor_tree(
             group["states"], checkpoint_state, device
         )
+        mug_pose = checkpoint["rigid_object"]["mug"]["root_pose"]
+        mug_pose[:, :3] += torch.as_tensor(
+            mug_offset_xyz,
+            dtype=mug_pose.dtype,
+            device=mug_pose.device,
+        )
+        if mug_yaw_deg:
+            half_yaw = np.deg2rad(mug_yaw_deg) / 2.0
+            yaw = torch.tensor(
+                [np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)],
+                dtype=mug_pose.dtype,
+                device=mug_pose.device,
+            ).reshape(1, 4)
+            mug_pose[:, 3:7] = _torch_quat_multiply(
+                yaw, mug_pose[:, 3:7]
+            )
         tree_pose = checkpoint["rigid_object"]["mug_tree"]["root_pose"]
         tree_pose[:, 2] += tree_root_z_adjustment
         tree_pose[:, :3] += torch.as_tensor(
@@ -256,6 +302,7 @@ def _load_inputs(args, device):
         ),
         "candidate": candidate,
         "checkpoint_state": checkpoint_state,
+        "initial_task_stage": initial_task_stage,
         "start_state": start_state,
         "target_state": target_state,
         "target_name": target_name,
@@ -267,6 +314,8 @@ def _load_inputs(args, device):
         "tree_root_z_adjustment": tree_root_z_adjustment,
         "tree_offset_xyz": tree_offset_xyz.tolist(),
         "tree_yaw_deg": tree_yaw_deg,
+        "mug_offset_xyz": mug_offset_xyz.tolist(),
+        "mug_yaw_deg": mug_yaw_deg,
         "source_branch_points": (
             None
             if source_branch_points is None
@@ -277,6 +326,8 @@ def _load_inputs(args, device):
             if target_branch_points is None
             else target_branch_points.tolist()
         ),
+        "source_handle_point": source_handle_point,
+        "target_handle_point": target_handle_point,
         "target_eef_pose": target_eef_pose,
         "target_mug_pose": target_mug_pose,
         "target_reference": target_reference,
@@ -333,11 +384,12 @@ def _draw_coordinate_axes(env, inputs, draw):
         inputs["target_branch_points"]
     )
     tree_pose = env.scene["mug_tree"].data.root_pose_w.detach().cpu().numpy()
+    from judo_isaaclab import resolve_end_effector_body_index
+
+    arm = env.scene["right_arm"]
+    eef_body_index = resolve_end_effector_body_index(env, "right_arm")
     eef_pose = (
-        env.scene["right_arm"].data.body_pose_w[:, -1]
-        .detach()
-        .cpu()
-        .numpy()
+        arm.data.body_pose_w[:, eef_body_index].detach().cpu().numpy()
     )
     mug_pose = (
         env.scene["mug"].data.root_pose_w.detach().cpu().numpy()
@@ -392,11 +444,9 @@ def _draw_coordinate_axes(env, inputs, draw):
     draw.draw_lines(starts, ends, colors, sizes)
 
 
-def _write_frame(
+def _compose_frame(
     env,
     sample,
-    frame_index,
-    frames_dir,
     target_name,
     *,
     inputs,
@@ -444,15 +494,38 @@ def _write_frame(
             panels.append(panel)
         camera_rows.append(np.concatenate(panels, axis=1))
     combined = np.concatenate(camera_rows, axis=0)
-    path = os.path.join(frames_dir, f"frame_{frame_index:06d}.png")
-    if not cv2.imwrite(path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)):
-        raise RuntimeError(f"Failed to write {path}")
-    return {
+    stats = {
         "mean": float(combined.mean()),
         "std": float(combined.std()),
         "width": int(combined.shape[1]),
         "height": int(combined.shape[0]),
     }
+    return combined, stats
+
+
+def _write_frame(
+    env,
+    sample,
+    frame_index,
+    frames_dir,
+    target_name,
+    *,
+    inputs,
+    coordinate_draw=None,
+):
+    import cv2
+
+    combined, stats = _compose_frame(
+        env,
+        sample,
+        target_name,
+        inputs=inputs,
+        coordinate_draw=coordinate_draw,
+    )
+    path = os.path.join(frames_dir, f"frame_{frame_index:06d}.png")
+    if not cv2.imwrite(path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)):
+        raise RuntimeError(f"Failed to write {path}")
+    return stats
 
 
 def _encode(frames_dir, fps, output):
@@ -479,6 +552,75 @@ def _encode(frames_dir, fps, output):
         ],
         check=True,
     )
+
+
+class _StreamingEncoder:
+    """Encode RGB frames through ffmpeg without buffering PNGs on disk."""
+
+    def __init__(self, fps, output):
+        self.fps = int(fps)
+        self.output = str(output)
+        self.process = None
+
+    def write(self, frame):
+        frame = np.ascontiguousarray(frame, dtype=np.uint8)
+        height, width = frame.shape[:2]
+        if self.process is None:
+            self.process = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-s:v",
+                    f"{width}x{height}",
+                    "-r",
+                    str(self.fps),
+                    "-i",
+                    "pipe:0",
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-crf",
+                    "18",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    self.output,
+                ],
+                stdin=subprocess.PIPE,
+            )
+        elif self.process.stdin is None:
+            raise RuntimeError("ffmpeg encoder stdin is closed")
+        self.process.stdin.write(frame.tobytes())
+
+    def close(self):
+        if self.process is None:
+            raise RuntimeError("no frames were written")
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+        returncode = self.process.wait()
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, self.process.args)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, _exc, _traceback):
+        if self.process is None:
+            return False
+        if self.process.stdin is not None and not self.process.stdin.closed:
+            self.process.stdin.close()
+        returncode = self.process.wait()
+        if exc_type is None and returncode != 0:
+            raise subprocess.CalledProcessError(returncode, self.process.args)
+        return False
 
 
 def _probe(path):
@@ -546,7 +688,7 @@ def _subtask_complete(sample, lane, target_name):
     if target_name == "right_grasp":
         return sample["right_grasp"][lane]
     if target_name == "handover_latched":
-        return sample["stage2"][lane]
+        return sample["stage2"][lane] and sample["right_grasp"][lane]
     if target_name == "tree_approach":
         return sample["stage2"][lane] and sample["right_grasp"][lane]
     return sample["stage3"][lane]
@@ -576,16 +718,47 @@ def _tree_geometry(traces, inputs):
     position_error = np.linalg.norm(
         actual_position - reference_position[None, :, :], axis=-1
     )
+    depth_supported = np.ones_like(position_error, dtype=bool)
+    if (
+        inputs["target_name"] == "inserted_held"
+        and inputs["source_handle_point"] is not None
+        and inputs["target_handle_point"] is not None
+    ):
+        actual_handle = actual_position + np.einsum(
+            "...ij,j->...i",
+            actual_rotation,
+            inputs["target_handle_point"],
+        )
+        reference_handle = reference_position + np.einsum(
+            "...ij,j->...i",
+            reference_rotation,
+            inputs["source_handle_point"],
+        )
+        delta = actual_handle - reference_handle[None, :, :]
+        position_error = np.linalg.norm(delta[..., 1:], axis=-1)
+        branch_length = float(
+            np.linalg.norm(target_points[1] - target_points[0])
+        )
+        depth_supported = (
+            actual_handle[..., 0]
+            >= reference_handle[None, :, 0]
+            - TREE_INSERTION_TANGENT_MARGIN_M
+        ) & (
+            actual_handle[..., 0]
+            <= branch_length + TREE_INSERTION_TANGENT_MARGIN_M
+        )
     rotation_error = _rotation_matrix_error(
         actual_rotation,
         reference_rotation[None, :, :, :],
     )
     speed = np.linalg.norm(rows[:, :, 7:10], axis=-1)
-    return position_error, rotation_error, speed
+    return position_error, rotation_error, speed, depth_supported
 
 
 def _insert_acceptance(traces, inputs):
-    position_error, rotation_error, _ = _tree_geometry(traces, inputs)
+    position_error, rotation_error, _, depth_supported = _tree_geometry(
+        traces, inputs
+    )
     success = np.asarray(
         [
             [
@@ -598,17 +771,19 @@ def _insert_acceptance(traces, inputs):
     )
     success &= position_error <= TREE_INSERTION_POSITION_TOLERANCE_M
     success &= rotation_error <= TREE_INSERTION_ROTATION_TOLERANCE_RAD
+    success &= depth_supported
     window = success[-TREE_INSERTION_STABILITY_STEPS:]
     return {
         "complete": window.all(axis=0).tolist(),
         "acceptance_fraction": window.mean(axis=0).tolist(),
         "terminal_position_error_m": position_error[-1].tolist(),
         "terminal_rotation_error_rad": rotation_error[-1].tolist(),
+        "terminal_depth_supported": depth_supported[-1].tolist(),
     }
 
 
 def _hang_acceptance(traces, inputs):
-    position_error, rotation_error, speed = _tree_geometry(traces, inputs)
+    position_error, rotation_error, speed, _ = _tree_geometry(traces, inputs)
     success = np.asarray(
         [
             [
@@ -692,6 +867,7 @@ def main():
             init_joint_pos_randomization=0.0,
             enable_gripper_grasp_clamp=False,
             planning_substep_contact_sensors=True,
+            replicate_physics=True,
             camera_width=640,
             camera_height=480,
         )
@@ -719,25 +895,23 @@ def main():
         for action in inputs["history"]:
             repeated = action.reshape(1, -1).expand(2, -1)
             env.step(repeated)
+        if inputs["initial_task_stage"]:
+            _initialize_task_stage(env, inputs["initial_task_stage"])
 
         traces = []
         frame_stats = []
-        with tempfile.TemporaryDirectory(
-            prefix="hangmug-mpc-comparison-"
-        ) as frames_dir:
+        with _StreamingEncoder(args.fps, args.output) as encoder:
             sample = _sample(env, -1)
             traces.append(sample)
-            frame_stats.append(
-                _write_frame(
-                    env,
-                    sample,
-                    0,
-                    frames_dir,
-                    inputs["target_name"],
-                    inputs=inputs,
-                    coordinate_draw=coordinate_draw,
-                )
+            frame, stats = _compose_frame(
+                env,
+                sample,
+                inputs["target_name"],
+                inputs=inputs,
+                coordinate_draw=coordinate_draw,
             )
+            encoder.write(frame)
+            frame_stats.append(stats)
             for step in range(inputs["candidate"].shape[1]):
                 _, _, terminated, truncated, _ = env.step(
                     inputs["candidate"][:, step]
@@ -746,18 +920,15 @@ def main():
                     raise RuntimeError(f"Unexpected done at candidate step {step}")
                 sample = _sample(env, step)
                 traces.append(sample)
-                frame_stats.append(
-                    _write_frame(
-                        env,
-                        sample,
-                        step + 1,
-                        frames_dir,
-                        inputs["target_name"],
-                        inputs=inputs,
-                        coordinate_draw=coordinate_draw,
-                    )
+                frame, stats = _compose_frame(
+                    env,
+                    sample,
+                    inputs["target_name"],
+                    inputs=inputs,
+                    coordinate_draw=coordinate_draw,
                 )
-            _encode(frames_dir, args.fps, args.output)
+                encoder.write(frame)
+                frame_stats.append(stats)
         video = _probe(args.output)
         positions = np.asarray(
             [[row["mug_pose"][lane][:3] for lane in range(2)] for row in traces]
@@ -779,6 +950,7 @@ def main():
                 "left_lane": "source-demo nominal",
                 "right_lane": "MPC best sample",
                 "checkpoint_state": inputs["checkpoint_state"],
+                "initial_task_stage": inputs["initial_task_stage"],
                 "history_steps": int(inputs["history"].shape[0]),
                 "history_control_overrides": inputs[
                     "history_control_overrides"
@@ -796,6 +968,8 @@ def main():
                 ],
                 "tree_offset_xyz_m": inputs["tree_offset_xyz"],
                 "tree_yaw_deg": inputs["tree_yaw_deg"],
+                "mug_offset_xyz_m": inputs["mug_offset_xyz"],
+                "mug_yaw_deg": inputs["mug_yaw_deg"],
                 "source_branch_points_tree_local": inputs[
                     "source_branch_points"
                 ],
@@ -811,6 +985,12 @@ def main():
                 "right_grasp": traces[-1]["right_grasp"],
                 "stage2": traces[-1]["stage2"],
                 "stage3": traces[-1]["stage3"],
+                "mug_pose": traces[-1]["mug_pose"],
+                "target_mug_pose": (
+                    None
+                    if inputs["target_mug_pose"] is None
+                    else np.asarray(inputs["target_mug_pose"]).tolist()
+                ),
             },
             "nominal_vs_mpc_mug_divergence": {
                 "translation_m_max": float(translation.max()),
