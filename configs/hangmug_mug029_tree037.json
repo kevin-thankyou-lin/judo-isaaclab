@@ -1,0 +1,193 @@
+{
+  "checkpoint_state": 0,
+  "correspondences": {
+    "mug_tree.branch": {
+      "method": "matched collision branch center, tangent, and normal",
+      "source_points": [
+        0.000058245,
+        0.046274152,
+        0.068594158,
+        -0.000084349,
+        0.081081681,
+        0.088302411,
+        0.020058244,
+        0.046274152,
+        0.068594158
+      ],
+      "target_points": [
+        0.000001694,
+        0.047376039,
+        0.067607097,
+        -0.000072710,
+        0.085326464,
+        0.080246706,
+        0.020001694,
+        0.047376039,
+        0.067607097
+      ]
+    }
+  },
+  "dataset": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/teleop/hangmug_000.hdf5",
+  "episode": "demo_0",
+  "metadata": {
+    "asset_selection": "nearest non-source official instances by normalized XYZ bounding-box distance",
+    "final_episode_contract": "one process, one reset, continuous actions, coded stage-3 success",
+    "source_strategy": "pick, handover, branch-relative insert, release and stabilize"
+  },
+  "objects_root": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects",
+  "source_assets": {
+    "mug": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/Mug/mug_000",
+    "mug_tree": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/MugTree/mug_tree_000"
+  },
+  "stages": [
+    {
+      "horizon": 550,
+      "name": "source_strategy_bootstrap",
+      "parameters": {
+        "candidate_repeats": 1,
+        "control_knots": 8,
+        "duplicate_nominal": 1,
+        "max_action_delta": 0.0,
+        "num_elites": 1,
+        "num_iterations": 1,
+        "num_rollouts": 3,
+        "sigma_max": 0.000002,
+        "sigma_min": 0.000001
+      },
+      "start_state": 0,
+      "target_name": "handover_latched",
+      "target_state": 361
+    },
+    {
+      "horizon": 120,
+      "name": "semantic_insert",
+      "parameters": {
+        "attempts": [
+          {
+            "candidate_repeats": 1,
+            "control_knots": 6,
+            "duplicate_nominal": 1,
+            "num_elites": 1,
+            "num_iterations": 1,
+            "num_rollouts": 3,
+            "sigma_max": 0.0002,
+            "sigma_min": 0.0001
+          },
+          {
+            "num_iterations": 10,
+            "num_rollouts": 24
+          },
+          {
+            "candidate_repeats": 4,
+            "max_task_rotation_delta": 0.1,
+            "max_task_translation_delta": 0.02,
+            "num_iterations": 12,
+            "num_rollouts": 32,
+            "sigma_max": 0.008,
+            "sigma_min": 0.0005
+          },
+          {
+            "candidate_repeats": 2,
+            "insert_eef_position_offset_branch": [
+              0.002211681319,
+              -0.015309504609,
+              -0.01115179143
+            ],
+            "max_task_rotation_delta": 0.2,
+            "max_task_translation_delta": 0.04,
+            "num_iterations": 12,
+            "num_rollouts": 24,
+            "sigma_max": 0.02,
+            "sigma_min": 0.0005
+          }
+        ],
+        "candidate_repeat_reducer": "min",
+        "candidate_repeats": 2,
+        "control_knots": 12,
+        "dls_max_position_step": 0.03,
+        "dls_max_rotation_step": 0.2,
+        "duplicate_nominal": 4,
+        "insert_approach_fraction": 0.55,
+        "insert_approach_offset_branch": [
+          0.05,
+          0.0,
+          0.0
+        ],
+        "insert_clearance_fraction": 0.2,
+        "insert_clearance_offset_branch": [
+          -0.025,
+          0.025,
+          -0.055
+        ],
+        "insert_clearance_rotation_offset_branch": [
+          0.55756,
+          0.09357,
+          -0.21612
+        ],
+        "insert_eef_position_offset_branch": [
+          -0.00269,
+          -0.00488,
+          0.00023
+        ],
+        "insert_eef_rotation_offset_branch": [
+          -0.05504,
+          0.00746,
+          -0.0322
+        ],
+        "insert_seat_fraction": 0.75,
+        "max_task_rotation_delta": 0.15,
+        "max_task_translation_delta": 0.04,
+        "num_elites": 5,
+        "provisional_fallback": {
+          "position_tolerance_m": 0.015,
+          "rotation_tolerance_rad": 0.22
+        },
+        "right_joint_accel_weight": 0.2,
+        "right_joint_jerk_weight": 0.1,
+        "right_joint_path_weight": 0.05,
+        "search_space": "task",
+        "sigma_max": 0.025,
+        "sigma_min": 0.001,
+        "task_controller": "semantic_pose"
+      },
+      "start_state": 550,
+      "target_name": "inserted_held",
+      "target_state": 669
+    },
+    {
+      "horizon": 80,
+      "name": "release_and_stabilize",
+      "parameters": {
+        "candidate_repeat_reducer": "min",
+        "candidate_repeats": 4,
+        "control_knots": 8,
+        "duplicate_nominal": 4,
+        "max_task_rotation_delta": 0.1,
+        "max_task_translation_delta": 0.025,
+        "num_elites": 5,
+        "num_iterations": 6,
+        "num_rollouts": 24,
+        "release_end_fraction": 0.2,
+        "release_open_value": -0.0475,
+        "release_start_fraction": 0.05,
+        "right_joint_accel_weight": 0.2,
+        "right_joint_jerk_weight": 0.1,
+        "right_joint_path_weight": 0.05,
+        "search_space": "task",
+        "semantic_anchor_state": 825,
+        "sigma_max": 0.015,
+        "sigma_min": 0.001,
+        "task_controller": "semantic_pose"
+      },
+      "start_state": 670,
+      "target_name": "hang_complete",
+      "target_state": 749
+    }
+  ],
+  "success_check": "dc_study.envs.tasks.hang_mug_on_tree_manager_cfg.check_task_success",
+  "target_assets": {
+    "mug": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/Mug/mug_029",
+    "mug_tree": "/tmp/hangmug_source_demo/tasks_data/HangMugOnTree/objects/MugTree/mug_tree_037"
+  },
+  "task_name": "HangMugOnTree-v0"
+}

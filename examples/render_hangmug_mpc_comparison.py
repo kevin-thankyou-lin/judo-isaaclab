@@ -58,6 +58,10 @@ def _parser():
         "--target-mug-tree",
         help="Override the target MugTree instance recorded with the controls.",
     )
+    parser.add_argument(
+        "--target-mug",
+        help="Override the target Mug instance recorded with the controls.",
+    )
     parser.add_argument("--controls-npz", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--result-json", required=True)
@@ -127,6 +131,21 @@ def _load_inputs(args, device):
     ):
         raise ValueError(
             "target-mug-tree does not match the asset recorded with the controls"
+        )
+    source_mug = str(
+        controls["source_mug"]
+        if "source_mug" in controls.files
+        else os.path.join(args.objects_root, "Mug", "mug_000")
+    )
+    recorded_target_mug = str(
+        controls["target_mug"]
+        if "target_mug" in controls.files
+        else source_mug
+    )
+    target_mug = args.target_mug or recorded_target_mug
+    if args.target_mug is not None and args.target_mug != recorded_target_mug:
+        raise ValueError(
+            "target-mug does not match the asset recorded with the controls"
         )
     tree_root_z_adjustment = float(
         controls["tree_root_z_adjustment"]
@@ -241,6 +260,8 @@ def _load_inputs(args, device):
         "target_state": target_state,
         "target_name": target_name,
         "task_controller": task_controller,
+        "source_mug": source_mug,
+        "target_mug": target_mug,
         "source_mug_tree": source_mug_tree,
         "target_mug_tree": target_mug_tree,
         "tree_root_z_adjustment": tree_root_z_adjustment,
@@ -637,9 +658,15 @@ def main():
             if "target_mug_tree" in controls.files
             else os.path.join(args.objects_root, "MugTree", "mug_tree_000")
         )
+        recorded_mug = str(
+            controls["target_mug"]
+            if "target_mug" in controls.files
+            else os.path.join(args.objects_root, "Mug", "mug_000")
+        )
         target_tree = args.target_mug_tree or recorded_tree
+        target_mug = args.target_mug or recorded_mug
         assets = {
-            "mug": os.path.join(args.objects_root, "Mug", "mug_000"),
+            "mug": target_mug,
             "mug_tree": target_tree,
         }
         assist_config = {
@@ -760,6 +787,8 @@ def main():
                 "target_state": inputs["target_state"],
                 "target_name": inputs["target_name"],
                 "task_controller": inputs["task_controller"],
+                "source_mug": inputs["source_mug"],
+                "target_mug": inputs["target_mug"],
                 "source_mug_tree": inputs["source_mug_tree"],
                 "target_mug_tree": inputs["target_mug_tree"],
                 "tree_root_z_adjustment_m": inputs[

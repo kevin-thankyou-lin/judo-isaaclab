@@ -7,6 +7,12 @@ from judo_isaaclab.task_space import (
     DampedLeastSquaresTaskSpaceAdapter,
 )
 from judo_isaaclab.types import BranchContext, RolloutDiagnostics
+from judo_isaaclab.adaptation import (
+    StageSpec,
+    TaskAdaptationBundle,
+    TrialEvidence,
+    corrected_insert_offset,
+)
 
 __all__ = [
     "BranchContext",
@@ -16,4 +22,8 @@ __all__ = [
     "JudoIsaacLabMPC",
     "MPCPlan",
     "RolloutDiagnostics",
+    "StageSpec",
+    "TaskAdaptationBundle",
+    "TrialEvidence",
+    "corrected_insert_offset",
 ]

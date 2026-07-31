@@ -438,3 +438,35 @@ the handle is threaded around the branch before release and remains supported
 after both arms retract.
 
 See `validation/hangmug_z200_staged_mpc.json`.
+
+## Resumable asset-adaptation agent
+
+`examples/hangmug_task_adaptation_agent.py` executes a versioned task bundle as
+an evidence-gated loop: reproduce the source strategy on substituted assets,
+refine semantic insertion from branch correspondences, plan release, and then
+validate the promoted controls in one continuous simulator episode. Failed
+trials are retained in a JSON ledger, and `--resume` continues from the first
+unfinished trial rather than repeating completed simulation.
+
+The included `configs/hangmug_mug029_tree037.json` adapts the source
+`mug_000`/`mug_tree_000` demonstration to the official
+`mug_029`/`mug_tree_037` instances:
+
+```bash
+python examples/hangmug_task_adaptation_agent.py \
+  --bundle configs/hangmug_mug029_tree037.json \
+  --workspace /tmp/hangmug-adaptation \
+  --gear-repo /path/to/gear-dc-study \
+  --render-failures \
+  --resume
+```
+
+An insertion that narrowly misses the strict 10 mm/0.15 rad diagnostic gate
+may be promoted only through an explicit, bounded provisional gate. It still
+must retain the grasp in every repeat, and both the downstream release search
+and final continuous episode must pass the existing coded task-success check.
+The final validator additionally requires one process, one initial reset, zero
+inter-stage resets, exact control-history continuity, target-asset provenance,
+a fully decodable H.264 render, and stage-3 success.
+
+The checked proof is `validation/hangmug_mug029_tree037_adaptation.json`.

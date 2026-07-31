@@ -36,6 +36,14 @@ def main():
         target_trees = {str(stage["target_mug_tree"]) for stage in loaded}
         if len(target_trees) != 1:
             raise ValueError(f"Target trees differ: {sorted(target_trees)}")
+        target_mugs = {
+            str(stage["target_mug"])
+            if "target_mug" in stage.files
+            else "mug_000"
+            for stage in loaded
+        }
+        if len(target_mugs) != 1:
+            raise ValueError(f"Target mugs differ: {sorted(target_mugs)}")
 
         first = loaded[0]
         last = loaded[-1]
@@ -75,6 +83,16 @@ def main():
             tree_yaw_deg=np.float32(last["tree_yaw_deg"]),
             source_mug_tree=np.asarray(str(last["source_mug_tree"])),
             target_mug_tree=np.asarray(str(last["target_mug_tree"])),
+            source_mug=np.asarray(
+                str(last["source_mug"])
+                if "source_mug" in last.files
+                else "mug_000"
+            ),
+            target_mug=np.asarray(
+                str(last["target_mug"])
+                if "target_mug" in last.files
+                else "mug_000"
+            ),
             tree_root_z_adjustment=np.float32(
                 last["tree_root_z_adjustment"]
             ),

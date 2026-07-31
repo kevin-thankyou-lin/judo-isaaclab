@@ -62,6 +62,13 @@ def _parser():
             "mug_tree_000 asset."
         ),
     )
+    parser.add_argument(
+        "--target-mug",
+        help=(
+            "Target Mug instance directory. Defaults to the source "
+            "mug_000 asset."
+        ),
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument(
         "--history-controls-npz",
@@ -337,6 +344,14 @@ def _source_tree_path(args):
 
 def _target_tree_path(args):
     return args.target_mug_tree or _source_tree_path(args)
+
+
+def _source_mug_path(args):
+    return os.path.join(args.objects_root, "Mug", "mug_000")
+
+
+def _target_mug_path(args):
+    return args.target_mug or _source_mug_path(args)
 
 
 def _asset_height(path):
@@ -1572,7 +1587,7 @@ def main():
 
         np.random.seed(args.seed)
         assets = {
-            "mug": os.path.join(args.objects_root, "Mug", "mug_000"),
+            "mug": _target_mug_path(args),
             "mug_tree": _target_tree_path(args),
         }
         assist_config = {
@@ -1988,6 +2003,8 @@ def main():
                 ),
                 "tree_offset_xyz_m": list(args.tree_offset_xyz),
                 "tree_yaw_deg": args.tree_yaw_deg,
+                "source_mug": _source_mug_path(args),
+                "target_mug": _target_mug_path(args),
                 "source_mug_tree": _source_tree_path(args),
                 "target_mug_tree": _target_tree_path(args),
                 "tree_root_z_adjustment_m": _tree_root_z_adjustment(args),
@@ -2205,6 +2222,8 @@ def main():
                 tree_yaw_deg=np.float32(args.tree_yaw_deg),
                 source_mug_tree=np.asarray(_source_tree_path(args)),
                 target_mug_tree=np.asarray(_target_tree_path(args)),
+                source_mug=np.asarray(_source_mug_path(args)),
+                target_mug=np.asarray(_target_mug_path(args)),
                 tree_root_z_adjustment=np.float32(
                     _tree_root_z_adjustment(args)
                 ),
