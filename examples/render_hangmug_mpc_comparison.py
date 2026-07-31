@@ -89,6 +89,11 @@ def _load_inputs(args, device):
     start_state = int(controls["start_state"])
     target_state = int(controls["target_state"])
     target_name = str(controls["target_name"])
+    task_controller = str(
+        controls["task_controller"]
+        if "task_controller" in controls.files
+        else "joint_residual"
+    )
     source_mug_tree = str(
         controls["source_mug_tree"]
         if "source_mug_tree" in controls.files
@@ -200,6 +205,7 @@ def _load_inputs(args, device):
         "start_state": start_state,
         "target_state": target_state,
         "target_name": target_name,
+        "task_controller": task_controller,
         "source_mug_tree": source_mug_tree,
         "target_mug_tree": target_mug_tree,
         "tree_root_z_adjustment": tree_root_z_adjustment,
@@ -575,6 +581,7 @@ def main():
                 "start_state": inputs["start_state"],
                 "target_state": inputs["target_state"],
                 "target_name": inputs["target_name"],
+                "task_controller": inputs["task_controller"],
                 "source_mug_tree": inputs["source_mug_tree"],
                 "target_mug_tree": inputs["target_mug_tree"],
                 "tree_root_z_adjustment_m": inputs[

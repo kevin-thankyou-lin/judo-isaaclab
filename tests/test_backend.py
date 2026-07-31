@@ -159,3 +159,43 @@ def test_candidate_adapter_can_change_action_dimension():
     np.testing.assert_allclose(
         backend.last_executed_candidate_actions[:, 0, 0], [4.0, 6.0]
     )
+
+
+def test_candidate_adapter_is_reset_before_each_rollout():
+    class StatefulAdapter:
+        def __init__(self):
+            self.begin_calls = 0
+            self.step = 0
+
+        def begin_candidate_rollout(self, env):
+            del env
+            self.begin_calls += 1
+            self.step = 0
+
+        def __call__(self, controls, env):
+            del env
+            self.step += 1
+            return controls[:, :1] + self.step
+
+    adapter = StatefulAdapter()
+    runner = FakeRunner(2)
+    backend = HistoryConditionedIsaacLabBackend(
+        runner,
+        state_encoder=lambda env: env.state.copy(),
+        action_adapter=lambda actions, env: actions,
+        candidate_action_adapter=adapter,
+    )
+    backend.set_branch_context(
+        BranchContext(
+            checkpoint_state={"value": 0.0},
+            action_history=np.empty((0, 1), dtype=np.float32),
+            rigid_object_states={},
+        )
+    )
+    controls = np.zeros((2, 2, 2), dtype=np.float32)
+
+    first, _, _ = backend.rollout(np.empty(0), controls)
+    second, _, _ = backend.rollout(np.empty(0), controls)
+
+    assert adapter.begin_calls == 2
+    np.testing.assert_allclose(first, second)

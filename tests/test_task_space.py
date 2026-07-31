@@ -2,7 +2,10 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from judo_isaaclab.task_space import damped_least_squares
+from judo_isaaclab.task_space import (
+    DampedLeastSquaresPoseTrackingAdapter,
+    damped_least_squares,
+)
 
 
 def test_damped_least_squares_is_batched_and_finite():
@@ -16,3 +19,10 @@ def test_damped_least_squares_is_batched_and_finite():
     assert result.shape == (2, 6)
     torch.testing.assert_close(result, twist / 1.01)
     assert torch.isfinite(result).all()
+
+
+def test_pose_tracking_adapter_rejects_invalid_reference_shape():
+    with pytest.raises(ValueError, match="horizon, 7"):
+        DampedLeastSquaresPoseTrackingAdapter(
+            reference_poses=torch.zeros((3, 6))
+        )

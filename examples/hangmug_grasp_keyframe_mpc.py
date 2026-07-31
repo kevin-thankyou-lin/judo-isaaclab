@@ -86,6 +86,15 @@ def _parser():
         help="Optimize smooth joint corrections or Cartesian right-EEF residuals.",
     )
     parser.add_argument(
+        "--task-controller",
+        choices=("joint_residual", "pose_tracking"),
+        default="joint_residual",
+        help=(
+            "Map task residuals around source joint targets or track a recorded "
+            "source EEF trajectory in closed loop."
+        ),
+    )
+    parser.add_argument(
         "--control-knots",
         type=int,
         help=(
@@ -120,6 +129,8 @@ def _parser():
     parser.add_argument("--max-task-rotation-delta", type=float, default=0.3)
     parser.add_argument("--dls-damping", type=float, default=0.05)
     parser.add_argument("--dls-max-joint-delta", type=float, default=0.35)
+    parser.add_argument("--dls-max-position-step", type=float, default=0.03)
+    parser.add_argument("--dls-max-rotation-step", type=float, default=0.2)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
     parser.add_argument(
@@ -303,12 +314,12 @@ def _load_demo(args, device):
             tree_pose[:, 3:7] = _torch_quat_multiply(
                 yaw, tree_pose[:, 3:7]
             )
-        history = np.asarray(
+        source_history = np.asarray(
             group["actions"][checkpoint_state : args.start_state],
             dtype=np.float32,
         )
         history = _apply_history_control_overrides(
-            history,
+            source_history,
             checkpoint_state=checkpoint_state,
             start_state=args.start_state,
             controls_paths=args.history_controls_npz,
@@ -328,7 +339,7 @@ def _load_demo(args, device):
                 )
             ]
         )
-    return checkpoint, history, nominal, reference
+    return checkpoint, history, nominal, reference, source_history
 
 
 def _encode_state(env):
@@ -397,6 +408,39 @@ def _encode_sensors(env):
         .cpu()
         .numpy()
     )
+
+
+def _record_right_eef_reference(runner, context, nominal):
+    """Replay source controls once and record the environment-relative EEF pose."""
+    import torch
+
+    env = runner.env
+    runner.reset(
+        context.checkpoint_state,
+        context.rigid_object_states,
+        assist_states=context.assist_states,
+        is_relative=context.is_relative,
+        deformable_policy=context.deformable_policy,
+        free_body_velocity_fallback=context.free_body_velocity_fallback,
+    )
+    for action in context.action_history:
+        repeated = torch.as_tensor(
+            action, dtype=torch.float32, device=env.device
+        ).reshape(1, -1).expand(env.num_envs, -1)
+        env.step(repeated)
+    poses = []
+    arm = env.scene["right_arm"]
+    for action in nominal:
+        repeated = torch.as_tensor(
+            action, dtype=torch.float32, device=env.device
+        ).reshape(1, -1).expand(env.num_envs, -1)
+        _, _, terminated, truncated, _ = env.step(repeated)
+        if bool(terminated.any()) or bool(truncated.any()):
+            raise RuntimeError("Reference EEF replay produced a done signal")
+        pose = arm.data.body_pose_w[0, -1].detach().clone()
+        pose[:3] -= env.scene.env_origins[0]
+        poses.append(pose.cpu().numpy())
+    return np.stack(poses)
 
 
 def _quaternion_error(actual, target):
@@ -883,6 +927,7 @@ def main():
         )
         from judo_isaaclab import (
             BranchContext,
+            DampedLeastSquaresPoseTrackingAdapter,
             DampedLeastSquaresTaskSpaceAdapter,
             HistoryConditionedIsaacLabBackend,
             JudoIsaacLabMPC,
@@ -918,7 +963,7 @@ def main():
             planning_substep_contact_sensors=True,
         )
         runner.env.reset(warm_up=False, seed=args.seed)
-        checkpoint, history, nominal, reference = _load_demo(
+        checkpoint, history, nominal, reference, source_history = _load_demo(
             args, runner.env.device
         )
         context = BranchContext(
@@ -940,14 +985,31 @@ def main():
                 task_translation_goal += (
                     target_branch_points[0] - source_branch_points[0]
                 )
-        task_adapter = (
-            DampedLeastSquaresTaskSpaceAdapter(
+        reference_eef_poses = None
+        if args.search_space == "task" and args.task_controller == "pose_tracking":
+            reference_context = BranchContext(
+                checkpoint_state=checkpoint,
+                action_history=source_history,
+                rigid_object_states=context.rigid_object_states,
+                is_relative=True,
+            )
+            reference_eef_poses = _record_right_eef_reference(
+                runner, reference_context, nominal
+            )
+            task_adapter = DampedLeastSquaresPoseTrackingAdapter(
+                reference_poses=reference_eef_poses,
+                damping=args.dls_damping,
+                max_joint_delta=args.dls_max_joint_delta,
+                max_position_step=args.dls_max_position_step,
+                max_rotation_step=args.dls_max_rotation_step,
+            )
+        elif args.search_space == "task":
+            task_adapter = DampedLeastSquaresTaskSpaceAdapter(
                 damping=args.dls_damping,
                 max_joint_delta=args.dls_max_joint_delta,
             )
-            if args.search_space == "task"
-            else None
-        )
+        else:
+            task_adapter = None
         backend = HistoryConditionedIsaacLabBackend(
             runner,
             state_encoder=_encode_state,
@@ -1159,6 +1221,7 @@ def main():
             "optimizer": {
                 "type": "judo.optimizers.cem.CrossEntropyMethod",
                 "search_space": args.search_space,
+                "task_controller": args.task_controller,
                 "num_rollouts": args.num_rollouts,
                 "num_iterations": args.num_iterations,
                 "num_elites": args.num_elites,
@@ -1183,6 +1246,8 @@ def main():
                 ),
                 "dls_damping": args.dls_damping,
                 "dls_max_joint_delta_rad": args.dls_max_joint_delta,
+                "dls_max_position_step_m": args.dls_max_position_step,
+                "dls_max_rotation_step_rad": args.dls_max_rotation_step,
             },
             "iteration_summaries": iteration_summaries,
             "plan": {
@@ -1221,6 +1286,12 @@ def main():
                     else np.asarray(
                         task_translation_goal, dtype=np.float32
                     )
+                ),
+                task_controller=np.asarray(args.task_controller),
+                reference_eef_poses=(
+                    np.empty((0, 7), dtype=np.float32)
+                    if reference_eef_poses is None
+                    else reference_eef_poses
                 ),
                 history_actions=history,
                 history_control_overrides=np.asarray(

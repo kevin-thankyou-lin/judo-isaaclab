@@ -145,6 +145,13 @@ class HistoryConditionedIsaacLabBackend(RolloutBackend):
         states = []
         sensors = []
         executed_actions = []
+        if (
+            self.candidate_action_adapter is not None
+            and hasattr(
+                self.candidate_action_adapter, "begin_candidate_rollout"
+            )
+        ):
+            self.candidate_action_adapter.begin_candidate_rollout(self.env)
         for step in range(candidates.shape[1]):
             adapted = self._step(candidates[:, step, :], "candidate")
             if hasattr(adapted, "detach"):

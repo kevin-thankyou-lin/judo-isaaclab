@@ -1,0 +1,51 @@
+{
+  "status": "partial_success",
+  "controller": {
+    "search_space": "task",
+    "mode": "closed_loop_pose_tracking",
+    "reference": "source EEF trajectory replayed from unmodified history",
+    "feedback": "desired EEF pose minus current EEF pose",
+    "solver": "batched damped least squares",
+    "uses_jparse": false,
+    "uses_svd": false
+  },
+  "late_approach": {
+    "start_state": 700,
+    "target_state": 735,
+    "repeat_success": "6/6",
+    "mean_position_error_m": 0.0204238426,
+    "max_position_error_m": 0.0241421331,
+    "previous_joint_residual_mean_position_error_m": 0.0334872454
+  },
+  "inserted_held": {
+    "start_state": 735,
+    "target_state": 744,
+    "candidate_repeats": 2,
+    "repeat_success": "8/8",
+    "mean_position_error_m": 0.0216670018,
+    "max_position_error_m": 0.0282870606,
+    "tolerance_m": 0.03,
+    "previous_joint_residual_repeat_success": "0/8"
+  },
+  "release_stabilize": {
+    "start_state": 744,
+    "target_state": 825,
+    "candidate_repeats": 2,
+    "best_sampled_position_error_m": 0.0163148902,
+    "sampled_success_count": 1,
+    "repeat_success": "0/6",
+    "repeat_mean_position_error_m": 0.4014049768
+  },
+  "video": {
+    "path": "/tmp/hangmug_z150_closed_loop_task_mpc.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 480,
+    "frame_count": 276,
+    "duration_s": 18.4,
+    "size_bytes": 1795567,
+    "sha256": "086e7cc60b73b97c2f05b772dee2b2b0f21119e223ba3f290946dc18571ac1d1",
+    "full_decode_returncode": 0,
+    "visual_review": "right arm remains elevated near the transformed branch; inserted mug becomes unstable after release"
+  }
+}

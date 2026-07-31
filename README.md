@@ -325,3 +325,27 @@ candidate simulation, not task-space conversion. Retaining or checkpointing a
 history-conditioned planning scene is the next meaningful speed optimization.
 
 See `validation/hangmug_z150_hierarchical_task_mpc.json`.
+
+#### Closed-loop pose tracking
+
+The initial task-space adapter still added a bounded Jacobian correction to
+each source joint target. When the source trajectory retracted, that absolute
+joint target could pull the arm downward despite the Cartesian offset.
+
+`--task-controller pose_tracking` removes that joint anchor. It first records
+the source end-effector trajectory from unmodified history, then computes
+`desired pose - current pose` online and applies batched DLS to the current
+joint positions. On the same 1.5x tree and history:
+
+- late approach improved from 33.49 mm mean to 20.42 mm mean, with 6/6 repeats;
+- strict held insertion improved from 0/8 to 8/8 repeats, with 21.67 mm mean
+  and 28.29 mm maximum error;
+- release search found one 16.31 mm stable-hang sample, but that contact outcome
+  did not reproduce in the independent six-clone evaluation (0/6).
+
+The video confirms the right arm remains near the transformed branch rather
+than springing back toward the source joint targets. The mug still fails robust
+release/stabilization, so release contact—not approach or insertion—is now the
+remaining boundary.
+
+See `validation/hangmug_z150_closed_loop_task_mpc.json`.

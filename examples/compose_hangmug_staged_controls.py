@@ -56,6 +56,11 @@ def main():
             best_sample=best,
             best_executed_actions=best,
             optimized_mean=best,
+            task_controller=np.asarray(
+                str(last["task_controller"])
+                if "task_controller" in last.files
+                else "joint_residual"
+            ),
             checkpoint_state=np.int64(first["checkpoint_state"]),
             start_state=np.int64(starts[0]),
             target_state=np.int64(last["target_state"]),
