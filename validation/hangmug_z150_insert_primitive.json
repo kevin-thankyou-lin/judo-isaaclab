@@ -1,57 +1,85 @@
 {
-  "status": "passed",
+  "status": "passed_end_to_end",
+  "supersedes": {
+    "result": "state-744 loose-pose validation",
+    "reason": "Retained grasp and a loose mug-root threshold did not prove that the branch occupied the handle."
+  },
   "primitive": {
     "name": "insert",
     "frame": "matched target branch",
-    "approach_offset_branch_m": [0.004, -0.011, 0.018],
-    "seat_offset_branch_m": [0.0, 0.0, -0.004],
-    "approach_fraction": 0.45,
+    "approach_offset_branch_m": [0.05, 0.0, 0.0],
+    "seat_offset_branch_m": [0.0, 0.0, 0.0],
+    "approach_fraction": 0.35,
     "seat_fraction": 0.8,
-    "terminal_behavior": "hold seated pose"
+    "terminal_behavior": "hold stable-hang-derived seated pose",
+    "path": "approach beyond branch tip, move inward along branch tangent, then hold"
   },
-  "simulator_validation": {
+  "held_insertion": {
     "target_asset": "1.5x Z-scaled MugTree",
     "start_state": 735,
-    "target_state": 744,
+    "target_state": 774,
+    "horizon_steps": 40,
     "candidate_repeats": 2,
-    "full_pose_correspondence_target_shift_m": 0.011170,
-    "full_pose_correspondence_target_shift_rad": 0.188039,
-    "approach_repeat_success": "6/6",
-    "approach_mean_position_error_m": 0.022809909656643867,
-    "approach_max_position_error_m": 0.03206630051136017,
-    "repeat_success": "8/8",
-    "mean_position_error_m": 0.022609518840909004,
-    "max_position_error_m": 0.027193907648324966,
-    "mean_rotation_error_rad": 0.11523164808750153,
-    "max_rotation_error_rad": 0.17498008906841278,
+    "strict_repeat_success": "6/8",
+    "mean_position_error_m": 0.010180688463151455,
+    "max_position_error_m": 0.0403917133808136,
+    "mean_rotation_error_rad": 0.14118048548698425,
+    "max_rotation_error_rad": 0.29602909088134766,
     "right_grasp_count": "8/8",
-    "mean_mug_speed_m_s": 0.10801561176776886,
-    "max_mug_speed_m_s": 0.20154081284999847
+    "all_camera_render": {
+      "path": "/tmp/hangmug_z150_tangent_insert_h40_all_views.mp4",
+      "codec": "h264",
+      "width": 1280,
+      "height": 1440,
+      "frame_count": 41,
+      "duration_s": 2.734,
+      "size_bytes": 1288712,
+      "sha256": "e4982914651c7139d47ea012ed97c14b36f3cdf2c2186ba8b050ce3328eae3cf",
+      "mpc_terminal_position_error_m": 0.0035824524238705635,
+      "mpc_terminal_rotation_error_rad": 0.07490463554859161,
+      "strict_insertion_complete": true,
+      "visual_review": "Top, left-wrist, and right-wrist views show the handle approach beyond the tip and finish threaded around the branch while right grasp remains active."
+    }
+  },
+  "release_support": {
+    "start_state": 775,
+    "target_state": 825,
+    "horizon_steps": 50,
+    "candidate_repeats": 4,
+    "candidate_repeat_reducer": "min",
+    "existing_task_stage3_success": "8/8",
+    "both_grippers_released": "8/8",
+    "low_speed_success": "8/8",
+    "mean_terminal_position_error_m": 0.01011883094906807,
+    "max_terminal_position_error_m": 0.012027334421873093,
+    "mean_terminal_rotation_error_rad": 0.26717519760131836,
+    "max_terminal_rotation_error_rad": 0.4160463511943817,
+    "mean_terminal_speed_m_s": 0.0,
+    "max_terminal_speed_m_s": 0.0,
+    "all_camera_render": {
+      "path": "/tmp/hangmug_z150_tangent_release_support_final_all_views.mp4",
+      "codec": "h264",
+      "width": 1280,
+      "height": 1440,
+      "frame_count": 51,
+      "duration_s": 3.4,
+      "size_bytes": 1703062,
+      "sha256": "11028d1987a4d236cdb95ef1070572c701ce94a8fb0c7380ce5bc85d1680524a",
+      "task_stage3_terminal": [true, true],
+      "both_grippers_released": [true, true],
+      "terminal_speed_m_s": [0.014177607372403145, 0.0],
+      "visual_review": "All three views show both grippers clear and both mugs supported by the branch through the terminal frame."
+    }
+  },
+  "acceptance": {
+    "held_insertion": "Stable-hang-derived branch-relative mug pose within 10 mm and 0.15 rad for three consecutive steps while right grasp is retained.",
+    "released_hang": "Existing task stage-3 latch, which already requires 30 stable steps, with both grippers released and mug speed at most 0.05 m/s.",
+    "diagnostics": "Branch-relative position and orientation remain reported for changed geometry but do not duplicate the task's hang-success gate."
   },
   "tests": {
-    "host": "36 passed",
-    "isaac_environment": "15 passed"
-  },
-  "video": {
-    "path": "/tmp/hangmug_z150_corresponded_insert_axes.mp4",
-    "codec": "h264",
-    "width": 1280,
-    "height": 480,
-    "frame_count": 10,
-    "duration_s": 0.667,
-    "size_bytes": 108279,
-    "sha256": "9e1fbd9fca392c4b80910c6054a1b173a6a7f60b052220e378323d5e04054d6c",
-    "full_decode_returncode": 0,
-    "coordinate_axes": true,
-    "terminal_right_grasp": [true, true],
-    "subtask_complete": {
-      "nominal": true,
-      "mpc": true
-    },
-    "max_translation_divergence_m": 0.12311461711231088,
-    "terminal_translation_divergence_m": 0.12311461711231088,
-    "max_rotation_divergence_rad": 0.34205887296064724,
-    "terminal_rotation_divergence_rad": 0.2773857461838576,
-    "visual_review": "branch, desired EEF, and live EEF axes are visible; both lanes retain the right grasp and complete held insertion"
+    "focused": "32 passed",
+    "full": "40 passed",
+    "compileall": "passed",
+    "diff_check": "passed"
   }
 }

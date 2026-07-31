@@ -11,7 +11,10 @@ from hangmug_grasp_keyframe_mpc import (
     _correspond_pose_between_branches,
     _expand_control_corrections,
     _expand_task_space_program,
+    _eef_target_for_mug_target,
     _objective_components,
+    _pose_compose,
+    _pose_inverse,
     _quat_to_matrix,
     _semantic_base_controls,
     _semantic_reference_trajectory,
@@ -221,6 +224,55 @@ def test_pose_correspondence_preserves_branch_relative_pose_and_orientation():
     assert mapped_rotation == pytest.approx(expected_rotation, abs=1.0e-6)
 
 
+def test_eef_target_preserves_live_eef_to_mug_grasp_transform():
+    yaw = np.sqrt(0.5)
+    current_eef = np.array([0.1, -0.2, 0.3, yaw, 0.0, 0.0, yaw])
+    eef_to_mug = np.array([0.04, 0.01, -0.02, 1.0, 0.0, 0.0, 0.0])
+    current_mug = _pose_compose(current_eef, eef_to_mug)
+    target_mug = np.array([0.8, 0.3, 0.6, yaw, 0.0, yaw, 0.0])
+
+    target_eef = _eef_target_for_mug_target(
+        current_eef, current_mug, target_mug
+    )
+
+    assert _pose_compose(target_eef, eef_to_mug) == pytest.approx(
+        target_mug, abs=1.0e-6
+    )
+    identity = _pose_compose(target_eef, _pose_inverse(target_eef))
+    assert identity == pytest.approx(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], abs=1.0e-6
+    )
+
+
+def test_inserted_held_rejects_orientation_mismatch_and_unstable_window(
+    rollout_inputs,
+):
+    states, sensors, controls, reference, nominal = rollout_inputs
+    sensors[:, :, 6] = 1.0
+    sensors[:, :, 8] = 1.0
+    angle = 0.3
+    states[0, 1, 3:7] = [
+        np.cos(angle / 2.0),
+        0.0,
+        0.0,
+        np.sin(angle / 2.0),
+    ]
+    states[1, 0, :3] = [0.02, 0.0, 0.0]
+
+    result = _objective_components(
+        states,
+        sensors,
+        controls,
+        reference=reference,
+        nominal=nominal,
+        keyframe_offset=1,
+        target_name="inserted_held",
+    )
+
+    assert result["keyframe_target_success"].tolist() == [False, True]
+    assert result["acceptance_window_fraction"].tolist() == [0.5, 0.5]
+
+
 def test_acceptance_depends_only_on_subtask_completion():
     group = {
         "count": 6,
@@ -234,7 +286,7 @@ def test_acceptance_depends_only_on_subtask_completion():
     assert not _subtask_reached(group)
 
 
-def test_hang_completion_rejects_latched_but_misaligned_mug(rollout_inputs):
+def test_hang_completion_uses_existing_stable_task_latch(rollout_inputs):
     states, sensors, controls, reference, nominal = rollout_inputs
     states[1, :, :3] = [0.1, 0.0, 0.0]
     sensors[:, :, 8:10] = 1.0
@@ -249,8 +301,8 @@ def test_hang_completion_rejects_latched_but_misaligned_mug(rollout_inputs):
         target_name="hang_complete",
     )
 
-    assert result["keyframe_target_success"].tolist() == [True, False]
-    assert result["acceptance_window_fraction"].tolist() == [1.0, 0.0]
+    assert result["keyframe_target_success"].tolist() == [True, True]
+    assert result["acceptance_window_fraction"].tolist() == [1.0, 1.0]
 
 
 def test_smooth_corrections_interpolate_and_preserve_grippers():
@@ -365,6 +417,23 @@ def test_insert_uses_branch_frame_offsets_and_holds_seated_pose():
     )
     assert reference[:, 3:7] == pytest.approx(
         np.broadcast_to([1.0, 0.0, 0.0, 0.0], (10, 4))
+    )
+
+
+def test_insert_default_backs_out_then_seats_along_branch_tangent():
+    target = np.array([0.2, -0.1, 0.5, 1.0, 0.0, 0.0, 0.0])
+    reference = insert(
+        np.array([0.0, 0.0, 0.3, 1.0, 0.0, 0.0, 0.0]),
+        target,
+        np.eye(3),
+        horizon=20,
+    )
+
+    assert reference[6, :3] == pytest.approx(
+        target[:3] + [0.05, 0.0, 0.0]
+    )
+    assert reference[15:, :3] == pytest.approx(
+        np.broadcast_to(target[:3], (5, 3))
     )
 
 

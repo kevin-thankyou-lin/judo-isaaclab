@@ -15,12 +15,15 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
 from hangmug_grasp_keyframe_mpc import (
-    HANG_POSITION_TOLERANCE_M,
     HANG_SPEED_TOLERANCE_M_S,
     HANG_STABILITY_STEPS,
+    TREE_INSERTION_POSITION_TOLERANCE_M,
+    TREE_INSERTION_ROTATION_TOLERANCE_RAD,
+    TREE_INSERTION_STABILITY_STEPS,
     _branch_frame,
     _mug_in_branch_frame,
     _quat_to_matrix,
+    _rotation_matrix_error,
     _state_row,
     _tensor_tree,
     _torch_quat_multiply,
@@ -65,6 +68,12 @@ def _parser():
         "--draw-coordinate-axes",
         action="store_true",
         help="Draw matched branch, desired EEF, and live EEF RGB axes.",
+    )
+    parser.add_argument(
+        "--camera-names",
+        nargs="+",
+        default=("top_camera", "right_wrist_camera"),
+        help="Camera rows to render for visual diagnosis.",
     )
     parser.add_argument("--seed", type=int, default=20260730)
     return parser.parse_args()
@@ -153,6 +162,12 @@ def _load_inputs(args, device):
         and controls["reference_eef_poses"].size
         else None
     )
+    target_mug_pose = (
+        np.asarray(controls["target_mug_pose"][-1], dtype=np.float32)
+        if "target_mug_pose" in controls.files
+        and controls["target_mug_pose"].size
+        else None
+    )
     if nominal.shape != best.shape or nominal.ndim != 2:
         raise ValueError(
             f"Control shapes must match (horizon, action_dim): "
@@ -201,7 +216,14 @@ def _load_inputs(args, device):
                     "Recorded history_actions length does not match "
                     "checkpoint/start states"
                 )
-        target_reference = _state_row(group["states"], target_state)
+        target_reference = (
+            np.asarray(
+                controls["objective_reference_states"][-1],
+                dtype=np.float32,
+            )
+            if "objective_reference_states" in controls.files
+            else _state_row(group["states"], target_state)
+        )
     candidate = torch.as_tensor(
         np.stack((nominal, best)), dtype=torch.float32, device=device
     )
@@ -235,6 +257,7 @@ def _load_inputs(args, device):
             else target_branch_points.tolist()
         ),
         "target_eef_pose": target_eef_pose,
+        "target_mug_pose": target_mug_pose,
         "target_reference": target_reference,
     }
 
@@ -266,9 +289,9 @@ def _sample(env, step):
     }
 
 
-def _rgb_frames(env):
+def _rgb_frames(env, camera_name):
     env.sim.render()
-    camera = env.scene["top_camera"]
+    camera = env.scene[camera_name]
     camera.update(dt=0.0)
     rgb = camera.data.output["rgb"][:, :, :, :3].detach().cpu().numpy()
     if rgb.dtype != np.uint8:
@@ -295,8 +318,12 @@ def _draw_coordinate_axes(env, inputs, draw):
         .cpu()
         .numpy()
     )
+    mug_pose = (
+        env.scene["mug"].data.root_pose_w.detach().cpu().numpy()
+    )
     env_origins = env.scene.env_origins.detach().cpu().numpy()
     target_pose = np.asarray(inputs["target_eef_pose"], dtype=np.float32)
+    target_mug_pose = inputs["target_mug_pose"]
     starts = []
     ends = []
     colors = []
@@ -312,11 +339,29 @@ def _draw_coordinate_axes(env, inputs, draw):
         target_rotation_w = _quat_to_matrix(target_pose[3:7])
         live_origin_w = eef_pose[env_index, :3]
         live_rotation_w = _quat_to_matrix(eef_pose[env_index, 3:7])
-        for origin, rotation, length, size in (
+        axes = [
             (branch_origin_w, branch_rotation_w, 0.050, 5.0),
             (target_origin_w, target_rotation_w, 0.035, 3.0),
             (live_origin_w, live_rotation_w, 0.020, 1.5),
-        ):
+        ]
+        if target_mug_pose is not None:
+            axes.extend(
+                (
+                    (
+                        target_mug_pose[:3] + env_origins[env_index],
+                        _quat_to_matrix(target_mug_pose[3:7]),
+                        0.040,
+                        4.0,
+                    ),
+                    (
+                        mug_pose[env_index, :3],
+                        _quat_to_matrix(mug_pose[env_index, 3:7]),
+                        0.025,
+                        2.0,
+                    ),
+                )
+            )
+        for origin, rotation, length, size in axes:
             for axis, color in enumerate(rgb):
                 starts.append(tuple(float(value) for value in origin))
                 end = origin + length * rotation[:, axis]
@@ -339,40 +384,45 @@ def _write_frame(
     import cv2
 
     _draw_coordinate_axes(env, inputs, coordinate_draw)
-    images = _rgb_frames(env)
-    panels = []
     labels = ("SOURCE-DEMO NOMINAL", "MPC BEST SAMPLE")
-    for env_index, (image, label) in enumerate(zip(images, labels)):
-        panel = image.copy()
-        lines = [
-            label,
-            f"candidate step: {sample['step']}",
-            f"target: {target_name}",
-            (
-                f"left grasp: {sample['left_grasp'][env_index]}  "
-                f"right grasp: {sample['right_grasp'][env_index]}"
-            ),
-            f"handover latched: {sample['stage2'][env_index]}",
-            f"hang latched: {sample['stage3'][env_index]}",
-        ]
-        if coordinate_draw is not None:
-            lines.append(
-                "RGB=XYZ axes: branch 5cm / target 3.5cm / live 2cm"
-            )
-        for index, line in enumerate(lines):
-            color = (70, 230, 255) if index == 0 else (245, 245, 245)
-            cv2.putText(
-                panel,
-                line,
-                (12, 30 + index * 28),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.56,
-                color,
-                1,
-                cv2.LINE_AA,
-            )
-        panels.append(panel)
-    combined = np.concatenate(panels, axis=1)
+    camera_rows = []
+    for camera_name in inputs["camera_names"]:
+        panels = []
+        images = _rgb_frames(env, camera_name)
+        for env_index, (image, label) in enumerate(zip(images, labels)):
+            panel = image.copy()
+            lines = [
+                f"{label} / {camera_name}",
+                f"candidate step: {sample['step']}",
+                f"target: {target_name}",
+                (
+                    f"left grasp: {sample['left_grasp'][env_index]}  "
+                    f"right grasp: {sample['right_grasp'][env_index]}"
+                ),
+                f"handover latched: {sample['stage2'][env_index]}",
+                f"hang latched: {sample['stage3'][env_index]}",
+            ]
+            if coordinate_draw is not None:
+                lines.append(
+                    "RGB=XYZ: branch / desired+live mug / desired+live EEF"
+                )
+            for index, line in enumerate(lines):
+                color = (
+                    (70, 230, 255) if index == 0 else (245, 245, 245)
+                )
+                cv2.putText(
+                    panel,
+                    line,
+                    (12, 30 + index * 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.56,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+            panels.append(panel)
+        camera_rows.append(np.concatenate(panels, axis=1))
+    combined = np.concatenate(camera_rows, axis=0)
     path = os.path.join(frames_dir, f"frame_{frame_index:06d}.png")
     if not cv2.imwrite(path, cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)):
         raise RuntimeError(f"Failed to write {path}")
@@ -476,12 +526,12 @@ def _subtask_complete(sample, lane, target_name):
         return sample["right_grasp"][lane]
     if target_name == "handover_latched":
         return sample["stage2"][lane]
-    if target_name in ("tree_approach", "inserted_held"):
+    if target_name == "tree_approach":
         return sample["stage2"][lane] and sample["right_grasp"][lane]
     return sample["stage3"][lane]
 
 
-def _hang_acceptance(traces, inputs):
+def _tree_geometry(traces, inputs):
     rows = np.zeros((len(traces), 2, 36), dtype=np.float32)
     rows[:, :, :7] = np.asarray([row["mug_pose"] for row in traces])
     rows[:, :, 7:13] = np.asarray(
@@ -496,14 +546,48 @@ def _hang_acceptance(traces, inputs):
     source_points = np.asarray(
         inputs["source_branch_points"], dtype=np.float32
     )
-    actual_position, _ = _mug_in_branch_frame(rows, target_points)
-    reference_position, _ = _mug_in_branch_frame(
+    actual_position, actual_rotation = _mug_in_branch_frame(
+        rows, target_points
+    )
+    reference_position, reference_rotation = _mug_in_branch_frame(
         np.asarray(inputs["target_reference"])[None, :], source_points
     )
-    error = np.linalg.norm(
+    position_error = np.linalg.norm(
         actual_position - reference_position[None, :, :], axis=-1
     )
+    rotation_error = _rotation_matrix_error(
+        actual_rotation,
+        reference_rotation[None, :, :, :],
+    )
     speed = np.linalg.norm(rows[:, :, 7:10], axis=-1)
+    return position_error, rotation_error, speed
+
+
+def _insert_acceptance(traces, inputs):
+    position_error, rotation_error, _ = _tree_geometry(traces, inputs)
+    success = np.asarray(
+        [
+            [
+                row["stage2"][lane] and row["right_grasp"][lane]
+                for lane in range(2)
+            ]
+            for row in traces
+        ],
+        dtype=bool,
+    )
+    success &= position_error <= TREE_INSERTION_POSITION_TOLERANCE_M
+    success &= rotation_error <= TREE_INSERTION_ROTATION_TOLERANCE_RAD
+    window = success[-TREE_INSERTION_STABILITY_STEPS:]
+    return {
+        "complete": window.all(axis=0).tolist(),
+        "acceptance_fraction": window.mean(axis=0).tolist(),
+        "terminal_position_error_m": position_error[-1].tolist(),
+        "terminal_rotation_error_rad": rotation_error[-1].tolist(),
+    }
+
+
+def _hang_acceptance(traces, inputs):
+    position_error, rotation_error, speed = _tree_geometry(traces, inputs)
     success = np.asarray(
         [
             [
@@ -516,13 +600,16 @@ def _hang_acceptance(traces, inputs):
         ],
         dtype=bool,
     )
-    success &= error <= HANG_POSITION_TOLERANCE_M
     success &= speed <= HANG_SPEED_TOLERANCE_M_S
-    window = success[-HANG_STABILITY_STEPS:]
     return {
-        "complete": window.all(axis=0).tolist(),
-        "acceptance_fraction": window.mean(axis=0).tolist(),
-        "terminal_position_error_m": error[-1].tolist(),
+        "complete": success[-1].tolist(),
+        "acceptance_fraction": success[-1].astype(float).tolist(),
+        "task_stage3_terminal": [
+            bool(value) for value in traces[-1]["stage3"]
+        ],
+        "task_stability_steps": HANG_STABILITY_STEPS,
+        "terminal_position_error_m": position_error[-1].tolist(),
+        "terminal_rotation_error_rad": rotation_error[-1].tolist(),
         "terminal_speed_m_s": speed[-1].tolist(),
     }
 
@@ -584,6 +671,7 @@ def main():
         env = runner.env
         env.reset(warm_up=False, seed=args.seed)
         inputs = _load_inputs(args, env.device)
+        inputs["camera_names"] = list(args.camera_names)
         coordinate_draw = None
         if args.draw_coordinate_axes:
             from isaacsim.core.utils.extensions import enable_extension
@@ -687,6 +775,7 @@ def main():
                 ],
                 "candidate_horizon": int(inputs["candidate"].shape[1]),
                 "coordinate_axes": args.draw_coordinate_axes,
+                "camera_names": inputs["camera_names"],
             },
             "terminal": {
                 "left_grasp": traces[-1]["left_grasp"],
@@ -709,16 +798,23 @@ def main():
             },
             "video": video,
         }
+        insertion_acceptance = (
+            _insert_acceptance(traces, inputs)
+            if inputs["target_name"] == "inserted_held"
+            and inputs["source_branch_points"] is not None
+            else None
+        )
         hang_acceptance = (
             _hang_acceptance(traces, inputs)
             if inputs["target_name"] == "hang_complete"
             and inputs["source_branch_points"] is not None
             else None
         )
+        strict_acceptance = insertion_acceptance or hang_acceptance
         subtask_complete = {
             name: bool(
-                hang_acceptance["complete"][lane]
-                if hang_acceptance is not None
+                strict_acceptance["complete"][lane]
+                if strict_acceptance is not None
                 else _subtask_complete(
                     traces[-1], lane, inputs["target_name"]
                 )
@@ -726,6 +822,8 @@ def main():
             for lane, name in enumerate(("nominal", "mpc"))
         }
         result["subtask_complete"] = subtask_complete
+        if insertion_acceptance is not None:
+            result["insertion_acceptance"] = insertion_acceptance
         if hang_acceptance is not None:
             result["hang_acceptance"] = hang_acceptance
         checks = {

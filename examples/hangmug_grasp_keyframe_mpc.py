@@ -11,14 +11,16 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-HANG_POSITION_TOLERANCE_M = 0.03
 HANG_SPEED_TOLERANCE_M_S = 0.05
 HANG_STABILITY_STEPS = 30
 TREE_APPROACH_POSITION_TOLERANCE_M = 0.06
-TREE_INSERTION_POSITION_TOLERANCE_M = 0.03
-HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M = (0.004, -0.011, 0.018)
-HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M = (0.0, 0.0, -0.004)
-HANGMUG_INSERT_APPROACH_FRACTION = 0.45
+TREE_INSERTION_POSITION_TOLERANCE_M = 0.01
+TREE_INSERTION_ROTATION_TOLERANCE_RAD = 0.15
+TREE_INSERTION_STABILITY_STEPS = 3
+HANGMUG_INSERT_ANCHOR_STATE = 774
+HANGMUG_INSERT_APPROACH_OFFSET_BRANCH_M = (0.05, 0.0, 0.0)
+HANGMUG_INSERT_SEAT_OFFSET_BRANCH_M = (0.0, 0.0, 0.0)
+HANGMUG_INSERT_APPROACH_FRACTION = 0.35
 HANGMUG_INSERT_SEAT_FRACTION = 0.80
 
 
@@ -111,6 +113,12 @@ def _parser():
     parser.add_argument("--num-elites", type=int, default=4)
     parser.add_argument("--duplicate-nominal", type=int, default=4)
     parser.add_argument("--candidate-repeats", type=int, default=1)
+    parser.add_argument(
+        "--candidate-repeat-reducer",
+        choices=("mean", "min"),
+        default="mean",
+        help="Aggregate duplicate candidate scores by mean or worst repeat.",
+    )
     parser.add_argument("--sigma-min", type=float, default=0.002)
     parser.add_argument("--sigma-max", type=float, default=0.03)
     parser.add_argument("--max-action-delta", type=float, default=0.08)
@@ -160,6 +168,15 @@ def _parser():
         "--insert-seat-fraction",
         type=float,
         default=HANGMUG_INSERT_SEAT_FRACTION,
+    )
+    parser.add_argument(
+        "--insert-anchor-state",
+        type=int,
+        default=HANGMUG_INSERT_ANCHOR_STATE,
+        help=(
+            "Stable released-hang state whose mug-to-branch transform defines "
+            "actual insertion geometry."
+        ),
     )
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
@@ -372,6 +389,20 @@ def _load_demo(args, device):
     return checkpoint, history, nominal, reference, source_history
 
 
+def _load_demo_state_row(args, index):
+    import h5py
+
+    with h5py.File(args.dataset, "r") as handle:
+        group = handle[f"data/{args.episode}"]
+        states = group["states"]
+        state_count = len(group["actions"]) + 1
+        if not 0 <= index < state_count:
+            raise ValueError(
+                f"state index {index} is outside [0, {state_count})"
+            )
+        return _state_row(states, index)
+
+
 def _encode_state(env):
     import torch
 
@@ -471,6 +502,12 @@ def _tree_pose_relative(env):
     return pose.cpu().numpy()
 
 
+def _mug_pose_relative(env):
+    pose = env.scene["mug"].data.root_pose_w[0].detach().clone()
+    pose[:3] -= env.scene.env_origins[0]
+    return pose.cpu().numpy()
+
+
 def _record_right_eef_reference(runner, context, nominal):
     """Replay source controls once and record the environment-relative EEF pose."""
     import torch
@@ -548,7 +585,13 @@ def insert(
     approach_fraction=HANGMUG_INSERT_APPROACH_FRACTION,
     seat_fraction=HANGMUG_INSERT_SEAT_FRACTION,
 ):
-    """Generate approach, seating, and unload-hold poses in a branch frame."""
+    """Approach beyond the branch tip, seat inward, then hold.
+
+    The branch frame's positive X axis runs from the branch root toward its
+    tip. A positive approach X offset therefore backs the mug handle beyond
+    the tip; interpolation to the seated target threads it inward along the
+    branch tangent.
+    """
     if not 0.0 < approach_fraction < seat_fraction < 1.0:
         raise ValueError(
             "insert fractions must satisfy 0 < approach < seat < 1"
@@ -755,6 +798,35 @@ def _quat_rotate(quaternion, vector):
         + quaternion[..., :1] * twice_cross
         + np.cross(q_vector, twice_cross)
     )
+
+
+def _pose_compose(left, right):
+    """Compose two ``[position, wxyz]`` poses."""
+    left = np.asarray(left, dtype=np.float32)
+    right = np.asarray(right, dtype=np.float32)
+    result = np.empty(7, dtype=np.float32)
+    result[:3] = left[:3] + _quat_rotate(left[3:7], right[:3])
+    result[3:7] = _quat_multiply(left[3:7], right[3:7])
+    result[3:7] /= np.linalg.norm(result[3:7])
+    return result
+
+
+def _pose_inverse(pose):
+    """Invert a ``[position, wxyz]`` pose."""
+    pose = np.asarray(pose, dtype=np.float32)
+    result = np.empty(7, dtype=np.float32)
+    result[3:7] = pose[3:7] / np.linalg.norm(pose[3:7])
+    result[4:7] *= -1.0
+    result[:3] = _quat_rotate(result[3:7], -pose[:3])
+    return result
+
+
+def _eef_target_for_mug_target(current_eef_pose, current_mug_pose, target_mug_pose):
+    """Preserve the live grasp transform while moving the mug to a target."""
+    eef_to_mug = _pose_compose(
+        _pose_inverse(current_eef_pose), current_mug_pose
+    )
+    return _pose_compose(target_mug_pose, _pose_inverse(eef_to_mug))
 
 
 def _quat_to_matrix(quaternion):
@@ -1066,6 +1138,10 @@ def _objective_components(
             * right_grasp
             * (position_error <= position_tolerance)
         )
+        if target_name == "inserted_held":
+            target_success *= (
+                rotation_error <= TREE_INSERTION_ROTATION_TOLERANCE_RAD
+            )
         rewards += (
             3.0 * stage2[:, keyframe_offset]
             +3.0 * right_grasp[:, keyframe_offset]
@@ -1082,7 +1158,6 @@ def _objective_components(
     elif target_name == "hang_complete":
         target_success = (
             stage3
-            * (position_error <= HANG_POSITION_TOLERANCE_M)
             * (mug_linear_speed <= HANG_SPEED_TOLERANCE_M_S)
             * (1.0 - left_grasp)
             * (1.0 - right_grasp)
@@ -1095,8 +1170,16 @@ def _objective_components(
     else:
         raise ValueError(f"Unsupported target-name: {target_name}")
     if target_name == "hang_complete":
+        # The task's stage-3 latch already requires 30 stable steps. Requiring
+        # another 30 latched frames here would double-count stabilization.
+        acceptance_fraction = target_success[:, keyframe_offset]
+        rewards += 12.0 * acceptance_fraction
+    elif target_name == "inserted_held":
         acceptance_window = slice(
-            max(0, keyframe_offset - HANG_STABILITY_STEPS + 1),
+            max(
+                0,
+                keyframe_offset - TREE_INSERTION_STABILITY_STEPS + 1,
+            ),
             keyframe_offset + 1,
         )
         acceptance_fraction = target_success[:, acceptance_window].mean(axis=1)
@@ -1257,6 +1340,15 @@ def main():
         checkpoint, history, nominal, reference, source_history = _load_demo(
             args, runner.env.device
         )
+        objective_reference = reference
+        insert_anchor_reference = None
+        if args.target_name == "inserted_held":
+            insert_anchor_reference = _load_demo_state_row(
+                args, args.insert_anchor_state
+            )
+            objective_reference = reference.copy()
+            objective_reference[:, :13] = insert_anchor_reference[:13]
+            objective_reference[:, 29:36] = insert_anchor_reference[29:36]
         context = BranchContext(
             checkpoint_state=checkpoint,
             action_history=history,
@@ -1277,6 +1369,7 @@ def main():
                     target_branch_points[0] - source_branch_points[0]
                 )
         reference_eef_poses = None
+        target_mug_pose = None
         base_controls = nominal
         if args.search_space == "task" and args.task_controller in (
             "pose_tracking",
@@ -1289,24 +1382,53 @@ def main():
                 is_relative=True,
             )
             if args.task_controller == "semantic_pose":
-                target_eef_pose = _record_right_eef_keyframe(
-                    runner, reference_context, nominal
-                )
-                _replay_context(runner, context)
-                current_eef_pose = _right_eef_pose_relative(runner.env)
-                target_tree_pose = _tree_pose_relative(runner.env)
-                if target_branch_points is not None:
-                    target_eef_pose = _correspond_pose_between_branches(
-                        target_eef_pose,
-                        reference[-1, 29:36],
-                        target_tree_pose,
-                        source_branch_points,
-                        target_branch_points,
+                if args.target_name == "inserted_held":
+                    _replay_context(runner, context)
+                    current_eef_pose = _right_eef_pose_relative(runner.env)
+                    current_mug_pose = _mug_pose_relative(runner.env)
+                    target_tree_pose = _tree_pose_relative(runner.env)
+                    if target_branch_points is not None:
+                        target_mug_pose = _correspond_pose_between_branches(
+                            insert_anchor_reference[:7],
+                            insert_anchor_reference[29:36],
+                            target_tree_pose,
+                            source_branch_points,
+                            target_branch_points,
+                        )
+                    else:
+                        mug_in_source_tree = _pose_compose(
+                            _pose_inverse(
+                                insert_anchor_reference[29:36]
+                            ),
+                            insert_anchor_reference[:7],
+                        )
+                        target_mug_pose = _pose_compose(
+                            target_tree_pose, mug_in_source_tree
+                        )
+                    target_eef_pose = _eef_target_for_mug_target(
+                        current_eef_pose,
+                        current_mug_pose,
+                        target_mug_pose,
                     )
                 else:
-                    target_eef_pose[:3] += np.asarray(
-                        task_translation_goal, dtype=np.float32
+                    target_eef_pose = _record_right_eef_keyframe(
+                        runner, reference_context, nominal
                     )
+                    _replay_context(runner, context)
+                    current_eef_pose = _right_eef_pose_relative(runner.env)
+                    target_tree_pose = _tree_pose_relative(runner.env)
+                    if target_branch_points is not None:
+                        target_eef_pose = _correspond_pose_between_branches(
+                            target_eef_pose,
+                            reference[-1, 29:36],
+                            target_tree_pose,
+                            source_branch_points,
+                            target_branch_points,
+                        )
+                    else:
+                        target_eef_pose[:3] += np.asarray(
+                            task_translation_goal, dtype=np.float32
+                        )
                 if (
                     args.target_name == "inserted_held"
                     and target_branch_points is not None
@@ -1421,7 +1543,7 @@ def main():
                 states,
                 sensors,
                 controls,
-                reference=reference,
+                reference=objective_reference,
                 nominal=base_controls,
                 control_reference=objective_control_reference,
                 keyframe_offset=keyframe_offset,
@@ -1462,6 +1584,7 @@ def main():
             num_iterations=args.num_iterations,
             duplicate_nominal=args.duplicate_nominal,
             candidate_repeats=args.candidate_repeats,
+            candidate_repeat_reducer=args.candidate_repeat_reducer,
             min_improvement=0.01,
             noise_std_multiplier=2.0,
             control_expander=expand,
@@ -1488,7 +1611,7 @@ def main():
             states,
             sensors,
             evaluation_controls,
-            reference=reference,
+            reference=objective_reference,
             nominal=base_controls,
             control_reference=objective_control_reference,
             keyframe_offset=keyframe_offset,
@@ -1532,12 +1655,19 @@ def main():
                 "start_state": args.start_state,
                 "target_state": args.target_state,
                 "target_name": args.target_name,
+                "insert_anchor_state": (
+                    args.insert_anchor_state
+                    if args.target_name == "inserted_held"
+                    else None
+                ),
                 "target_frame": evaluation["target_frame"],
-                "acceptance": "task_subtask_success",
+                "acceptance": "strict_geometric_subtask_success",
                 "hang_acceptance": {
-                    "position_tolerance_m": HANG_POSITION_TOLERANCE_M,
+                    "existing_task_stage3": True,
+                    "both_grippers_released": True,
                     "speed_tolerance_m_s": HANG_SPEED_TOLERANCE_M_S,
-                    "consecutive_steps": HANG_STABILITY_STEPS,
+                    "task_stability_steps": HANG_STABILITY_STEPS,
+                    "branch_relative_pose": "diagnostic_only",
                 },
                 "tree_acceptance": {
                     "approach_position_tolerance_m": (
@@ -1545,6 +1675,12 @@ def main():
                     ),
                     "insertion_position_tolerance_m": (
                         TREE_INSERTION_POSITION_TOLERANCE_M
+                    ),
+                    "insertion_rotation_tolerance_rad": (
+                        TREE_INSERTION_ROTATION_TOLERANCE_RAD
+                    ),
+                    "insertion_consecutive_steps": (
+                        TREE_INSERTION_STABILITY_STEPS
                     ),
                 },
                 "right_gripper_held_through_target": (
@@ -1587,6 +1723,9 @@ def main():
                 "num_elites": args.num_elites,
                 "duplicate_nominal": args.duplicate_nominal,
                 "candidate_repeats": args.candidate_repeats,
+                "candidate_repeat_reducer": (
+                    args.candidate_repeat_reducer
+                ),
                 "sigma_min": args.sigma_min,
                 "sigma_max": args.sigma_max,
                 "max_action_delta": args.max_action_delta,
@@ -1669,6 +1808,11 @@ def main():
                     if reference_eef_poses is None
                     else reference_eef_poses
                 ),
+                target_mug_pose=(
+                    np.empty((0, 7), dtype=np.float32)
+                    if target_mug_pose is None
+                    else target_mug_pose[None, :]
+                ),
                 insert_approach_offset_branch=np.asarray(
                     args.insert_approach_offset_branch, dtype=np.float32
                 ),
@@ -1679,6 +1823,13 @@ def main():
                     args.insert_approach_fraction
                 ),
                 insert_seat_fraction=np.float32(args.insert_seat_fraction),
+                insert_anchor_state=np.int64(args.insert_anchor_state),
+                insert_anchor_reference=(
+                    np.empty((0, 36), dtype=np.float32)
+                    if insert_anchor_reference is None
+                    else insert_anchor_reference[None, :]
+                ),
+                objective_reference_states=objective_reference,
                 history_actions=history,
                 history_control_overrides=np.asarray(
                     args.history_controls_npz

@@ -130,6 +130,23 @@ def test_candidate_repeats_average_clone_scores():
     np.testing.assert_allclose(plan.action, [1.0])
 
 
+def test_candidate_repeats_can_rank_by_worst_clone_score():
+    objective = lambda states, sensors, controls: np.array([1.0, 1.0, 5.0, -2.0])
+    mpc = JudoIsaacLabMPC(
+        FakeOptimizer(),
+        FakeBackend(),
+        objective,
+        duplicate_nominal=2,
+        candidate_repeats=2,
+        candidate_repeat_reducer="min",
+    )
+
+    plan = mpc.plan(CONTEXT, np.zeros((2, 1)))
+
+    assert plan.best_rollout == 0
+    np.testing.assert_allclose(plan.rewards, [1.0, 1.0, -2.0, -2.0])
+
+
 def test_action_is_first_expanded_control():
     objective = lambda states, sensors, controls: states[:, -1, 0]
 

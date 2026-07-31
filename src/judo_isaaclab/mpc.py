@@ -43,6 +43,7 @@ class JudoIsaacLabMPC:
         num_iterations: int = 1,
         duplicate_nominal: int = 2,
         candidate_repeats: int = 1,
+        candidate_repeat_reducer: str = "mean",
         min_improvement: float = 0.0,
         noise_std_multiplier: float = 2.0,
     ) -> None:
@@ -59,6 +60,10 @@ class JudoIsaacLabMPC:
                 "candidate_repeats must divide both num_rollouts and "
                 "duplicate_nominal"
             )
+        if candidate_repeat_reducer not in ("mean", "min"):
+            raise ValueError(
+                "candidate_repeat_reducer must be 'mean' or 'min'"
+            )
         self.optimizer = optimizer
         self.backend = backend
         self.objective = objective
@@ -66,6 +71,7 @@ class JudoIsaacLabMPC:
         self.num_iterations = num_iterations
         self.duplicate_nominal = duplicate_nominal
         self.candidate_repeats = candidate_repeats
+        self.candidate_repeat_reducer = candidate_repeat_reducer
         self.min_improvement = min_improvement
         self.noise_std_multiplier = noise_std_multiplier
 
@@ -122,8 +128,13 @@ class JudoIsaacLabMPC:
                 grouped_rewards = rewards.reshape(
                     -1, self.candidate_repeats
                 )
-                grouped_rewards[:] = grouped_rewards.mean(
-                    axis=1, keepdims=True
+                reducer = (
+                    np.mean
+                    if self.candidate_repeat_reducer == "mean"
+                    else np.min
+                )
+                grouped_rewards[:] = reducer(
+                    grouped_rewards, axis=1, keepdims=True
                 )
             if iteration == 0:
                 starting_nominal_rewards = rewards[

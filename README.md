@@ -390,9 +390,9 @@ For `semantic_pose` plus `inserted_held`, the planner now calls an explicit
 Its editable defaults are expressed in the matched target-branch frame:
 
 ```text
-pre-insert offset: (+4, -11, +18) mm
-seat offset:       ( 0,   0,  -4) mm
-phase fractions:   approach=0.45, seat=0.80, hold=0.20
+pre-insert offset: (+50, 0, 0) mm along branch root-to-tip tangent
+seat offset:       (  0, 0, 0) mm at stable-hang-derived target
+phase fractions:   approach=0.35, seat=0.80, hold=0.20
 ```
 
 The corresponding CLI overrides are
@@ -404,11 +404,25 @@ to revise without binding the controller to the source joint path.
 `render_hangmug_mpc_comparison.py --draw-coordinate-axes` draws RGB=`XYZ`
 frames for the matched branch (5 cm), desired EEF (3.5 cm), and live EEF
 (2 cm). The three-point correspondence transfers the full desired EEF pose
-(position and orientation), not only a world-space offset. On the 1.5x tree,
-this corrected the target by 11.2 mm and 10.77 degrees relative to the old
-translation-only mapping. The approach passed 6/6 repeats at 22.81 mm mean
-error, and `insert()` passed 8/8 at 22.61 mm mean and 27.19 mm maximum error.
-Both rendered lanes retained the right grasp and completed the held-insertion
-subtask; the axes make their different terminal poses directly inspectable.
+(position and orientation), not only a world-space offset.
+
+The original state-744 validation was a false positive: it accepted a latched
+handover, retained right grasp, and up to 30 mm mug-pose error, but never proved
+that the branch occupied the mug handle. The corrected primitive derives its
+EEF target from the stable released-hang mug pose at state 774 while preserving
+the live EEF-to-mug grasp transform. Acceptance now requires the mug to match
+that stable branch-relative pose within 10 mm and 0.15 rad for three consecutive
+steps. Released-hang acceptance uses the existing task stage-3 latch, which
+already requires 30 stable steps, plus both grippers open and mug speed at most
+0.05 m/s. Branch-relative pose and orientation remain diagnostics for changed
+geometry rather than duplicating the task's stability gate.
+
+On the 1.5x Z-scaled tree, the 40-step tangent insertion reproduced the strict
+held-pose gate in 6/8 fresh clones. Its all-camera MPC lane finished at 3.58 mm
+and 0.075 rad with the handle visibly around the branch. Continuing those exact
+controls through release passed the existing stable-hang task check in 8/8
+fresh clones with both grippers open and zero terminal mug speed. Contact-heavy
+release candidates use `--candidate-repeat-reducer min` so the worst duplicate,
+not a lucky mean score, determines the CEM update.
 
 See `validation/hangmug_z150_insert_primitive.json`.
