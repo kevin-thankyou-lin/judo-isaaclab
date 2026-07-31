@@ -1,0 +1,54 @@
+{
+  "status": "partial_success",
+  "controller": {
+    "search_space": "task",
+    "mode": "semantic_keyframe_pose_tracking",
+    "reference": "fresh Cartesian spline from live EEF pose to transformed semantic keyframe",
+    "source_demo_usage": [
+      "subtask boundaries",
+      "final semantic EEF keyframe",
+      "matched branch relation",
+      "grasp hold release intent"
+    ],
+    "uses_source_joint_targets": false,
+    "uses_source_eef_trajectory": false,
+    "feedback": "desired EEF pose minus current EEF pose",
+    "solver": "batched damped least squares"
+  },
+  "late_approach": {
+    "start_state": 700,
+    "target_state": 735,
+    "repeat_success": "6/6",
+    "mean_position_error_m": 0.024707431,
+    "max_position_error_m": 0.024944415
+  },
+  "inserted_held": {
+    "start_state": 735,
+    "target_state": 744,
+    "candidate_repeats": 2,
+    "repeat_success": "8/8",
+    "mean_position_error_m": 0.023189813,
+    "max_position_error_m": 0.024592169,
+    "tolerance_m": 0.03
+  },
+  "release_stabilize": {
+    "start_state": 744,
+    "target_state": 825,
+    "candidate_repeats": 2,
+    "repeat_success": "0/6",
+    "repeat_mean_position_error_m": 0.302832991,
+    "repeat_max_position_error_m": 0.352535903
+  },
+  "video": {
+    "path": "/tmp/hangmug_z150_semantic_task_mpc.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 480,
+    "frame_count": 276,
+    "duration_s": 18.4,
+    "size_bytes": 1729857,
+    "sha256": "448a9ae33e08aca9738e0ddfdb8c085a0a082533bb5a3b9474574051de3e4d8f",
+    "full_decode_returncode": 0,
+    "visual_review": "right arm follows the transformed tree keyframes without spring-back; mug becomes unstable after release"
+  }
+}

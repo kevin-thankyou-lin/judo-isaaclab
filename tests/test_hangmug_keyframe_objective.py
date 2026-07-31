@@ -11,6 +11,8 @@ from hangmug_grasp_keyframe_mpc import (
     _expand_control_corrections,
     _expand_task_space_program,
     _objective_components,
+    _semantic_base_controls,
+    _semantic_reference_trajectory,
     _subtask_reached,
     _task_program_knots,
 )
@@ -264,6 +266,43 @@ def test_task_program_preserves_base_actions_and_clips_search_delta():
     )
     assert controls[1, :, 14] - controls[0, :, 14] == pytest.approx(0.02)
     assert controls[1, :, 17] - controls[0, :, 17] == pytest.approx(0.1)
+
+
+def test_semantic_reference_starts_from_live_pose_and_ends_at_keyframe():
+    start = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = np.array(
+        [0.3, -0.2, 0.1, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)]
+    )
+
+    reference = _semantic_reference_trajectory(start, target, horizon=4)
+
+    assert reference.shape == (4, 7)
+    assert reference[-1] == pytest.approx(target)
+    assert np.linalg.norm(reference[0, :3] - start[:3]) < np.linalg.norm(
+        target[:3] - start[:3]
+    )
+    assert np.linalg.norm(reference[:, 3:7], axis=-1) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("target_name", "expected_right_gripper"),
+    (
+        ("inserted_held", [13.0, 13.0, 13.0]),
+        ("hang_complete", [13.0, 27.0, 41.0]),
+    ),
+)
+def test_semantic_base_uses_only_hold_release_intent(
+    target_name, expected_right_gripper
+):
+    nominal = np.arange(42, dtype=np.float32).reshape(3, 14)
+
+    controls = _semantic_base_controls(nominal, target_name)
+
+    assert controls[:, :7] == pytest.approx(
+        np.broadcast_to(nominal[0, :7], (3, 7))
+    )
+    assert controls[:, 7:13] == pytest.approx(nominal[:, 7:13])
+    assert controls[:, 13] == pytest.approx(expected_right_gripper)
 
 
 def test_objective_accepts_task_space_control_reference(rollout_inputs):

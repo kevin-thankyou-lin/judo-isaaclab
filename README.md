@@ -349,3 +349,36 @@ release/stabilization, so release contact—not approach or insertion—is now t
 remaining boundary.
 
 See `validation/hangmug_z150_closed_loop_task_mpc.json`.
+
+#### Semantic-keyframe pose tracking
+
+`--task-controller semantic_pose` removes the remaining source-trajectory
+anchor from the right-arm tree-interaction stages. The demonstration supplies
+only:
+
+- the stage boundary and final semantic end-effector keyframe;
+- the keyframe's transformation to the matched target-tree branch;
+- discrete grasp/hold/release intent.
+
+At each branch, the controller measures the live end-effector pose and creates
+a new smooth Cartesian trajectory to the transformed semantic keyframe. CEM
+searches bounded Cartesian residuals around that trajectory, and batched DLS
+maps closed-loop pose errors from the current joint state to IsaacLab's joint
+targets. The source joint trajectory and intermediate source end-effector
+trajectory are not controller references. Earlier accepted pickup/handover
+stages are still replayed as physical history before the tree branch.
+
+On the fully Z-scaled 1.5x tree:
+
+- late approach passed 6/6 repeats at 24.71 mm mean and 24.94 mm maximum
+  branch-relative error;
+- held insertion passed 8/8 repeats at 23.19 mm mean and 24.59 mm maximum
+  error;
+- release/stabilization remained 0/6, with the mug dropping to 302.83 mm mean
+  terminal error.
+
+This confirms that semantic-keyframe MPC solves the source-path spring-back
+for approach and insertion. Stable release remains a separate contact-planning
+problem.
+
+See `validation/hangmug_z150_semantic_task_mpc.json`.

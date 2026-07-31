@@ -87,11 +87,11 @@ def _parser():
     )
     parser.add_argument(
         "--task-controller",
-        choices=("joint_residual", "pose_tracking"),
+        choices=("joint_residual", "pose_tracking", "semantic_pose"),
         default="joint_residual",
         help=(
-            "Map task residuals around source joint targets or track a recorded "
-            "source EEF trajectory in closed loop."
+            "Map task residuals around source joint targets, track a recorded "
+            "source EEF trajectory, or generate a fresh semantic-keyframe path."
         ),
     )
     parser.add_argument(
@@ -410,8 +410,7 @@ def _encode_sensors(env):
     )
 
 
-def _record_right_eef_reference(runner, context, nominal):
-    """Replay source controls once and record the environment-relative EEF pose."""
+def _replay_context(runner, context):
     import torch
 
     env = runner.env
@@ -428,8 +427,21 @@ def _record_right_eef_reference(runner, context, nominal):
             action, dtype=torch.float32, device=env.device
         ).reshape(1, -1).expand(env.num_envs, -1)
         env.step(repeated)
+
+
+def _right_eef_pose_relative(env):
+    pose = env.scene["right_arm"].data.body_pose_w[0, -1].detach().clone()
+    pose[:3] -= env.scene.env_origins[0]
+    return pose.cpu().numpy()
+
+
+def _record_right_eef_reference(runner, context, nominal):
+    """Replay source controls once and record the environment-relative EEF pose."""
+    import torch
+
+    env = runner.env
+    _replay_context(runner, context)
     poses = []
-    arm = env.scene["right_arm"]
     for action in nominal:
         repeated = torch.as_tensor(
             action, dtype=torch.float32, device=env.device
@@ -437,10 +449,66 @@ def _record_right_eef_reference(runner, context, nominal):
         _, _, terminated, truncated, _ = env.step(repeated)
         if bool(terminated.any()) or bool(truncated.any()):
             raise RuntimeError("Reference EEF replay produced a done signal")
-        pose = arm.data.body_pose_w[0, -1].detach().clone()
-        pose[:3] -= env.scene.env_origins[0]
-        poses.append(pose.cpu().numpy())
+        poses.append(_right_eef_pose_relative(env))
     return np.stack(poses)
+
+
+def _record_right_eef_keyframe(runner, context, nominal):
+    """Replay the demo only to extract its final semantic EEF keyframe."""
+    import torch
+
+    env = runner.env
+    _replay_context(runner, context)
+    for action in nominal:
+        repeated = torch.as_tensor(
+            action, dtype=torch.float32, device=env.device
+        ).reshape(1, -1).expand(env.num_envs, -1)
+        _, _, terminated, truncated, _ = env.step(repeated)
+        if bool(terminated.any()) or bool(truncated.any()):
+            raise RuntimeError("Semantic keyframe replay produced a done signal")
+    return _right_eef_pose_relative(env)
+
+
+def _semantic_reference_trajectory(start_pose, target_pose, horizon):
+    """Build a fresh smooth Cartesian path between two semantic keyframes."""
+    start_pose = np.asarray(start_pose, dtype=np.float32)
+    target_pose = np.asarray(target_pose, dtype=np.float32)
+    phase = np.linspace(
+        1.0 / horizon, 1.0, horizon, dtype=np.float32
+    )
+    smooth = phase * phase * (3.0 - 2.0 * phase)
+    position = (
+        start_pose[None, :3]
+        + smooth[:, None] * (target_pose[:3] - start_pose[:3])
+    )
+    left = start_pose[3:7] / np.linalg.norm(start_pose[3:7])
+    right = target_pose[3:7] / np.linalg.norm(target_pose[3:7])
+    dot = float(np.dot(left, right))
+    if dot < 0.0:
+        right = -right
+        dot = -dot
+    if dot > 0.9995:
+        quaternion = (
+            left[None, :] + smooth[:, None] * (right - left)[None, :]
+        )
+        quaternion /= np.linalg.norm(quaternion, axis=-1, keepdims=True)
+    else:
+        angle = np.arccos(np.clip(dot, -1.0, 1.0))
+        quaternion = (
+            np.sin((1.0 - smooth) * angle)[:, None] * left[None, :]
+            + np.sin(smooth * angle)[:, None] * right[None, :]
+        ) / np.sin(angle)
+    return np.concatenate((position, quaternion), axis=-1).astype(np.float32)
+
+
+def _semantic_base_controls(nominal, target_name):
+    """Keep only stage-level hold/release intent from the demonstration."""
+    controls = np.asarray(nominal, dtype=np.float32).copy()
+    controls[:, :6] = controls[0, :6]
+    controls[:, 6] = controls[0, 6]
+    if target_name != "hang_complete":
+        controls[:, 13] = controls[0, 13]
+    return controls
 
 
 def _quaternion_error(actual, target):
@@ -986,16 +1054,38 @@ def main():
                     target_branch_points[0] - source_branch_points[0]
                 )
         reference_eef_poses = None
-        if args.search_space == "task" and args.task_controller == "pose_tracking":
+        base_controls = nominal
+        if args.search_space == "task" and args.task_controller in (
+            "pose_tracking",
+            "semantic_pose",
+        ):
             reference_context = BranchContext(
                 checkpoint_state=checkpoint,
                 action_history=source_history,
                 rigid_object_states=context.rigid_object_states,
                 is_relative=True,
             )
-            reference_eef_poses = _record_right_eef_reference(
-                runner, reference_context, nominal
-            )
+            if args.task_controller == "semantic_pose":
+                target_eef_pose = _record_right_eef_keyframe(
+                    runner, reference_context, nominal
+                )
+                _replay_context(runner, context)
+                current_eef_pose = _right_eef_pose_relative(runner.env)
+                target_eef_pose[:3] += np.asarray(
+                    task_translation_goal, dtype=np.float32
+                )
+                reference_eef_poses = _semantic_reference_trajectory(
+                    current_eef_pose,
+                    target_eef_pose,
+                    args.horizon,
+                )
+                base_controls = _semantic_base_controls(
+                    nominal, args.target_name
+                )
+            else:
+                reference_eef_poses = _record_right_eef_reference(
+                    runner, reference_context, nominal
+                )
             task_adapter = DampedLeastSquaresPoseTrackingAdapter(
                 reference_poses=reference_eef_poses,
                 damping=args.dls_damping,
@@ -1032,6 +1122,10 @@ def main():
             correction_nominal = np.zeros(
                 (num_control_knots, nominal.shape[1]), dtype=np.float32
             )
+        elif args.task_controller == "semantic_pose":
+            correction_nominal = np.zeros(
+                (num_control_knots, optimizer_dim), dtype=np.float32
+            )
         else:
             correction_nominal = _task_program_knots(
                 num_control_knots,
@@ -1043,7 +1137,7 @@ def main():
             if task_adapter is None:
                 controls = _expand_control_corrections(
                     knots,
-                    nominal,
+                    base_controls,
                     max_action_delta=args.max_action_delta,
                     right_arm_only=args.target_name
                     in ("tree_approach", "inserted_held", "hang_complete"),
@@ -1051,13 +1145,13 @@ def main():
             else:
                 controls = _expand_task_space_program(
                     knots,
-                    nominal,
+                    base_controls,
                     correction_nominal,
                     max_translation_delta=args.max_task_translation_delta,
                     max_rotation_delta=args.max_task_rotation_delta,
                 )
             if args.target_name == "inserted_held":
-                controls[:, : keyframe_offset + 1, 13] = nominal[0, 13]
+                controls[:, : keyframe_offset + 1, 13] = base_controls[0, 13]
             return controls
 
         objective_control_reference = expand(
@@ -1071,7 +1165,7 @@ def main():
                 sensors,
                 controls,
                 reference=reference,
-                nominal=nominal,
+                nominal=base_controls,
                 control_reference=objective_control_reference,
                 keyframe_offset=keyframe_offset,
                 target_name=args.target_name,
@@ -1138,7 +1232,7 @@ def main():
             sensors,
             evaluation_controls,
             reference=reference,
-            nominal=nominal,
+            nominal=base_controls,
             control_reference=objective_control_reference,
             keyframe_offset=keyframe_offset,
             target_name=args.target_name,
@@ -1222,6 +1316,15 @@ def main():
                 "type": "judo.optimizers.cem.CrossEntropyMethod",
                 "search_space": args.search_space,
                 "task_controller": args.task_controller,
+                "task_reference": (
+                    "fresh_live_pose_to_semantic_keyframe"
+                    if args.task_controller == "semantic_pose"
+                    else (
+                        "recorded_source_eef_trajectory"
+                        if args.task_controller == "pose_tracking"
+                        else "source_joint_targets"
+                    )
+                ),
                 "num_rollouts": args.num_rollouts,
                 "num_iterations": args.num_iterations,
                 "num_elites": args.num_elites,
@@ -1272,6 +1375,7 @@ def main():
             np.savez_compressed(
                 args.controls_npz,
                 nominal=nominal,
+                base_controls=base_controls,
                 optimized_mean=expand(plan.optimized_knots[None, ...])[0],
                 best_sample=expand(plan.best_sampled_knots[None, ...])[0],
                 optimized_executed_actions=optimized_executed_actions,
