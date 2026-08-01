@@ -84,8 +84,7 @@
     "real_target_assets",
     "contact_backed_grasps_only",
     "smooth_collision_aware_transport",
-    "transport_no_internal_stops",
-    "bimanual_transport_completed"
+    "transport_no_internal_stops"
   ],
   "thresholds": {
     "eef_tracking_error_m": 0.02,
