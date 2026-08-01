@@ -67,6 +67,10 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--video")
     parser.add_argument("--trace-npz", required=True)
     parser.add_argument("--result-json", required=True)
+    parser.add_argument(
+        "--direct-replay-result",
+        help="Fail-closed direct-source-action replay result for this target pair.",
+    )
     return parser.parse_args()
 
 
@@ -769,6 +773,10 @@ def main() -> None:
         marker_z = np.asarray(marker_poses)[:, 2]
         final = samples[-1]
         video = _probe(args.video) if args.render else None
+        direct_replay_result = None
+        if args.direct_replay_result:
+            with open(args.direct_replay_result, encoding="utf-8") as stream:
+                direct_replay_result = json.load(stream)
         checks = {
             "one_reset": True,
             "zero_inter_stage_resets": True,
@@ -802,6 +810,14 @@ def main() -> None:
             )
         else:
             acceptance_checks = checks
+            if direct_replay_result is not None:
+                acceptance_checks = dict(acceptance_checks)
+                acceptance_checks["direct_source_action_replay_failed"] = bool(
+                    direct_replay_result.get("status") == "passed"
+                    and not direct_replay_result.get("terminal", {}).get(
+                        "task_success", True
+                    )
+                )
         result = {
             "status": "passed" if all(acceptance_checks.values()) else "failed",
             "mode": args.mode,
@@ -877,6 +893,7 @@ def main() -> None:
             "checks": checks,
             "acceptance_checks": acceptance_checks,
             "video": video,
+            "direct_replay_baseline": direct_replay_result,
         }
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         with open(args.result_json, "w", encoding="utf-8") as stream:
