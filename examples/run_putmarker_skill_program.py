@@ -47,6 +47,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--objects-root", required=True)
     parser.add_argument("--mode", choices=("replay", "skill"), required=True)
     parser.add_argument("--replay-actions-from", choices=("source", "target"), default="source")
+    parser.add_argument(
+        "--expect-failure",
+        action="store_true",
+        help="Accept a technically valid replay only when coded task success remains false.",
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
@@ -781,8 +786,24 @@ def main() -> None:
             ),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
+        if args.expect_failure:
+            acceptance_checks = {
+                name: checks[name]
+                for name in (
+                    "one_reset",
+                    "zero_inter_stage_resets",
+                    "real_target_assets",
+                    "h264_nonempty",
+                    "fully_decodable",
+                )
+            }
+            acceptance_checks["expected_coded_task_failure"] = not bool(
+                final["task_success"]
+            )
+        else:
+            acceptance_checks = checks
         result = {
-            "status": "passed" if all(checks.values()) else "failed",
+            "status": "passed" if all(acceptance_checks.values()) else "failed",
             "mode": args.mode,
             "protocol": {
                 "controller": "direct_source_action_replay" if trajectory is None else "semantic_keyframe_cartesian_dls",
@@ -854,6 +875,7 @@ def main() -> None:
             },
             "terminal": final,
             "checks": checks,
+            "acceptance_checks": acceptance_checks,
             "video": video,
         }
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
@@ -861,7 +883,7 @@ def main() -> None:
             json.dump(result, stream, indent=2, sort_keys=True)
         print("PUTMARKER_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
         if result["status"] != "passed":
-            raise RuntimeError(f"acceptance checks failed: {checks}")
+            raise RuntimeError(f"acceptance checks failed: {acceptance_checks}")
     except BaseException:
         traceback.print_exc()
         raise

@@ -41,9 +41,8 @@ def main() -> None:
             errors.append(f"invalid result JSON: {error}")
         if result.get("status") != "passed":
             errors.append(f"result status is {result.get('status')!r}, not 'passed'")
-        failed_checks = [
-            name for name, passed in result.get("checks", {}).items() if not passed
-        ]
+        required_checks = result.get("acceptance_checks", result.get("checks", {}))
+        failed_checks = [name for name, passed in required_checks.items() if not passed]
         if failed_checks:
             errors.append(f"failed result checks: {failed_checks}")
 
