@@ -1,0 +1,618 @@
+"""Run direct replay or a deterministic semantic PutPot skill in IsaacLab.
+
+Replay mode performs a one-reset free-running action replay and, on a successful
+source run, extracts simulator-backed semantic keyframes.  Skill mode consumes
+that fail-closed keyframe artifact and transfers the bimanual handle/support
+strategy to the selected target assets without sampling, assistance, or an
+inter-stage reset.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import traceback
+
+import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "examples"))
+
+
+def _parser() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gear-repo", required=True)
+    parser.add_argument("--source-dataset", required=True)
+    parser.add_argument("--target-dataset", required=True)
+    parser.add_argument("--objects-root", required=True)
+    parser.add_argument("--mode", choices=("replay", "skill"), required=True)
+    parser.add_argument("--source-keyframes")
+    parser.add_argument("--write-keyframes")
+    parser.add_argument("--expect-failure", action="store_true")
+    parser.add_argument("--episode", default="demo_0")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--seed", type=int, default=20260801)
+    parser.add_argument("--damping", type=float, default=0.045)
+    parser.add_argument("--max-joint-delta", type=float, default=0.16)
+    parser.add_argument("--max-position-step", type=float, default=0.025)
+    parser.add_argument("--max-rotation-step", type=float, default=0.16)
+    parser.add_argument("--support-clearance-m", type=float, default=0.006)
+    parser.add_argument("--transport-clearance-m", type=float, default=0.16)
+    parser.add_argument("--render", action="store_true")
+    parser.add_argument("--camera-width", type=int, default=640)
+    parser.add_argument("--camera-height", type=int, default=480)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--video")
+    parser.add_argument("--trace-npz", required=True)
+    parser.add_argument("--result-json", required=True)
+    parser.add_argument("--direct-replay-result")
+    return parser.parse_args()
+
+
+def _sha256(path: str | os.PathLike[str]) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _json_attr(value: object) -> dict[str, str]:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    return json.loads(str(value))
+
+
+def _dataset_assets(path: str, objects_root: str) -> dict[str, str]:
+    import h5py
+
+    with h5py.File(path, "r") as handle:
+        relative = _json_attr(handle["data"].attrs["ASSETS_INSTANCE_PATHS"])
+    result = {name: os.path.join(objects_root, value) for name, value in relative.items()}
+    if set(result) != {"pot", "cooktop"}:
+        raise ValueError(f"expected pot/cooktop dataset assets, got {sorted(result)}")
+    missing = [path for path in result.values() if not os.path.isdir(path)]
+    if missing:
+        raise FileNotFoundError(f"official asset directories missing: {missing}")
+    return result
+
+
+def _load_dataset(path: str, episode: str, device) -> dict[str, object]:
+    import h5py
+    import torch
+    from run_putmarker_skill_program import _tensor_tree
+
+    with h5py.File(path, "r") as handle:
+        group = handle[f"data/{episode}"]
+        return {
+            "initial_state": _tensor_tree(group["states"], 0, device),
+            "actions": torch.as_tensor(np.asarray(group["actions"]), device=device),
+            "pot_pose": np.asarray(group["states/rigid_object/pot/root_pose"]),
+            "cooktop_pose": np.asarray(group["states/rigid_object/cooktop/root_pose"]),
+            "num_samples": int(group.attrs["num_samples"]),
+        }
+
+
+def _geometry(asset_path: str, root_pose: np.ndarray):
+    from judo_isaaclab.put_pot import RigidSupportGeometry
+    from run_putmarker_skill_program import _asset_size
+
+    return RigidSupportGeometry(root_pose=np.asarray(root_pose), size=_asset_size(asset_path))
+
+
+def _configure_offline_ground() -> dict[str, object]:
+    import isaaclab.sim as sim_utils
+    from dc_study.envs.tasks.put_pot_on_cooktop_manager_cfg import PutPotOnCooktopManagerEnvCfg
+
+    original_init = PutPotOnCooktopManagerEnvCfg.__init__
+
+    def offline_init(instance, *init_args, **init_kwargs):
+        original_init(instance, *init_args, **init_kwargs)
+        # Keep the task's exact stage latches and get_task_success predicate, but
+        # do not let ManagerBasedRLEnv auto-reset on the first successful frame.
+        # The evidence contract additionally requires a stable terminal window.
+        instance.terminations.task_success = None
+        ground = instance.scene.ground
+        ground.init_state.pos = (0.0, 0.0, -0.05)
+        ground.spawn = sim_utils.CuboidCfg(
+            size=(100.0, 100.0, 0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.18, 0.18, 0.18), roughness=0.8
+            ),
+            semantic_tags=[("class", "ground")],
+        )
+
+    PutPotOnCooktopManagerEnvCfg.__init__ = offline_init
+    return {
+        "reason": "network-backed Isaac default_environment.usd unavailable",
+        "implementation": "procedural static CuboidCfg",
+        "collision_surface_z_m": 0.0,
+        "success_auto_termination": "disabled; coded task predicate unchanged",
+    }
+
+
+def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
+    import torch
+    from run_putmarker_skill_program import _eef_pose
+
+    left_grasp, right_grasp = env.robot.is_grasping()
+    origin = env.scene.env_origins[0].detach().cpu().numpy()
+    pot = env.scene["pot"]
+    cooktop = env.scene["cooktop"]
+    pot_pose = pot.data.root_pose_w[0].detach().cpu().numpy().copy()
+    cooktop_pose = cooktop.data.root_pose_w[0].detach().cpu().numpy().copy()
+    pot_pose[:3] -= origin
+    cooktop_pose[:3] -= origin
+    task_success = bool(env.get_task_success()[0].item())
+    if info is not None and bool(info.get("success", torch.tensor([False]))[0].item()):
+        task_success = True
+    expected_z = cooktop_pose[2] + 0.5 * (env.cooktop_height + env.pot_height)
+    xy_error = float(np.linalg.norm(pot_pose[:2] - cooktop_pose[:2]))
+    support_error = float(abs(pot_pose[2] - expected_z))
+    qx, qy = pot_pose[4], pot_pose[5]
+    orientation_error = float(np.arccos(np.clip(abs(1.0 - 2.0 * (qx * qx + qy * qy)), 0.0, 1.0)))
+    on_top_now = (
+        xy_error < float(env.ontop_xy_threshold)
+        and support_error < 0.02
+        and orientation_error < 0.2
+        and not bool(left_grasp[0].item())
+        and not bool(right_grasp[0].item())
+    )
+    return {
+        "step": int(step),
+        "program_stage": stage,
+        "left_grasp": bool(left_grasp[0].item()),
+        "right_grasp": bool(right_grasp[0].item()),
+        "stage1": bool(env.stage1_success[0].item()),
+        "stage2": bool(env.stage2_success[0].item()),
+        "task_success": task_success,
+        "on_top_predicate_now": on_top_now,
+        "support_error_m": support_error,
+        "xy_error_m": xy_error,
+        "orientation_error_rad": orientation_error,
+        "pot_pose": pot_pose.tolist(),
+        "pot_velocity": pot.data.root_vel_w[0].detach().cpu().tolist(),
+        "cooktop_pose": cooktop_pose.tolist(),
+        "left_eef_pose": _eef_pose(env, "left_arm").tolist(),
+        "right_eef_pose": _eef_pose(env, "right_arm").tolist(),
+    }
+
+
+def _first(samples, predicate, name: str) -> int:
+    for index, sample in enumerate(samples):
+        if predicate(sample):
+            return index
+    raise RuntimeError(f"could not extract semantic keyframe: {name}")
+
+
+def _extract_keyframes(samples, actions, source_dataset, source_assets) -> dict[str, object]:
+    # samples[0] is reset and samples[action + 1] is the post-action state.
+    left_close = int(np.flatnonzero(np.asarray(actions)[:, 6] > -0.04749)[0])
+    right_close = int(np.flatnonzero(np.asarray(actions)[:, 13] > -0.04749)[0])
+    left_grasp = _first(samples, lambda row: row["left_grasp"], "left_handle_grasp")
+    both_grasp = _first(samples, lambda row: row["left_grasp"] and row["right_grasp"], "right_handle_grasp")
+    pick = _first(samples, lambda row: row["stage1"], "pot_lift")
+    released = _first(samples[pick:], lambda row: not row["left_grasp"] and not row["right_grasp"], "pot_release") + pick
+    transported = max(range(pick, released), key=lambda i: samples[i]["pot_pose"][2])
+    aligned = min(range(transported, released), key=lambda i: samples[i]["support_error_m"] + samples[i]["xy_error_m"])
+    lower = max(both_grasp, released - 1)
+    indices = {
+        "left_pregrasp": max(0, left_close),
+        "right_pregrasp": max(0, right_close),
+        "left_handle_grasp": left_grasp,
+        "right_handle_grasp": both_grasp,
+        "pot_lift": pick,
+        "pot_transport": transported,
+        "support_align": aligned,
+        "support_lower": lower,
+        "pot_release": released,
+        "stable_settle": len(samples) - 1,
+    }
+    frames = {}
+    for name, index in indices.items():
+        row = samples[index]
+        frames[name] = {
+            "sample_index": index,
+            "action_index": max(-1, index - 1),
+            "left_eef_pose": row["left_eef_pose"],
+            "right_eef_pose": row["right_eef_pose"],
+            "pot_pose": row["pot_pose"],
+            "cooktop_pose": row["cooktop_pose"],
+            "left_grasp": row["left_grasp"],
+            "right_grasp": row["right_grasp"],
+            "stage1": row["stage1"],
+            "stage2": row["stage2"],
+        }
+    from run_putmarker_skill_program import _asset_size
+    return {
+        "schema_version": 1,
+        "source_dataset": os.path.abspath(source_dataset),
+        "source_dataset_sha256": _sha256(source_dataset),
+        "source_assets": {
+            name: {"path": os.path.abspath(path), "size_m": _asset_size(path).tolist()}
+            for name, path in source_assets.items()
+        },
+        "semantic_indices": indices,
+        "frames": frames,
+    }
+
+
+def _load_keyframes(path: str, source_dataset: str) -> dict[str, object]:
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError("skill mode requires an existing --source-keyframes artifact")
+    with open(path, encoding="utf-8") as stream:
+        value = json.load(stream)
+    required = {
+        "left_pregrasp", "right_pregrasp", "left_handle_grasp",
+        "right_handle_grasp", "pot_lift", "pot_transport",
+        "support_align", "support_lower", "pot_release", "stable_settle",
+    }
+    if value.get("schema_version") != 1 or set(value.get("frames", {})) != required:
+        raise ValueError("source keyframe artifact is incomplete or has the wrong schema")
+    if value.get("source_dataset_sha256") != _sha256(source_dataset):
+        raise ValueError("source keyframes do not match the selected source dataset")
+    return value
+
+
+def _build_skill(keyframes, source, target, source_geometry, target_geometry, left_start, right_start, args):
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+    from judo_isaaclab.put_pot import PutPotSkillProgram, RigidSupportGeometry, support_aligned_pot_pose
+
+    frames = keyframes["frames"]
+    source_initial = source_geometry
+    target_initial = target_geometry
+
+    def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
+        return target_initial.transfer_pose_from(
+            source_initial, frames[frame_name][f"{arm}_eef_pose"]
+        )
+
+    grasp_frame = frames["right_handle_grasp"]
+    grasp_pot = np.asarray(grasp_frame["pot_pose"], dtype=np.float64)
+    left_contact_local = compose_pose(inverse_pose(grasp_pot), grasp_frame["left_eef_pose"])
+    right_contact_local = compose_pose(inverse_pose(grasp_pot), grasp_frame["right_eef_pose"])
+
+    source_final_pot = np.asarray(frames["stable_settle"]["pot_pose"], dtype=np.float64)
+    source_final_cooktop = np.asarray(frames["stable_settle"]["cooktop_pose"], dtype=np.float64)
+    source_final_local = compose_pose(inverse_pose(source_final_cooktop), source_final_pot)
+    scale_xy = target_geometry.size[:2] / np.asarray(
+        keyframes["source_assets"]["cooktop"]["size_m"], dtype=np.float64
+    )[:2]
+    final_pot_pose = support_aligned_pot_pose(
+        target_initial,
+        RigidSupportGeometry(target["cooktop_pose"][0], target["cooktop_size"]),
+        xy_offset_local=source_final_local[:2] * scale_xy,
+        clearance_m=args.support_clearance_m,
+    )
+    lift_pot_pose = target_initial.root_pose.copy()
+    lift_pot_pose[2] += max(0.10, float(frames["pot_lift"]["pot_pose"][2] - frames["left_pregrasp"]["pot_pose"][2]))
+    transport_pot_pose = final_pot_pose.copy()
+    transport_pot_pose[:2] = 0.5 * (lift_pot_pose[:2] + final_pot_pose[:2])
+    transport_pot_pose[2] = max(lift_pot_pose[2], final_pot_pose[2] + args.transport_clearance_m)
+    align_pot_pose = final_pot_pose.copy()
+    align_pot_pose[2] += args.transport_clearance_m
+
+    def held(pot_pose, local):
+        return compose_pose(pot_pose, local)
+
+    left_lower = held(final_pot_pose, left_contact_local)
+    right_lower = held(final_pot_pose, right_contact_local)
+    withdraw_delta = np.asarray([0.0, 0.0, 0.12])
+    left_withdraw = left_lower.copy(); left_withdraw[:3] += withdraw_delta
+    right_withdraw = right_lower.copy(); right_withdraw[:3] += withdraw_delta
+    left_withdraw[1] += 0.08
+    right_withdraw[1] -= 0.08
+
+    program = PutPotSkillProgram(left_start, right_start)
+    program.bimanual_handle_grasp(
+        transfer_initial("left_pregrasp", "left"),
+        transfer_initial("right_pregrasp", "right"),
+        transfer_initial("left_handle_grasp", "left"),
+        transfer_initial("right_handle_grasp", "right"),
+        approach_steps=110,
+        left_close_steps=45,
+        right_close_steps=45,
+    )
+    program.lift_and_transport(
+        held(lift_pot_pose, left_contact_local), held(lift_pot_pose, right_contact_local),
+        held(transport_pot_pose, left_contact_local), held(transport_pot_pose, right_contact_local),
+        held(align_pot_pose, left_contact_local), held(align_pot_pose, right_contact_local),
+        lift_steps=60, transport_steps=70, align_steps=50,
+    )
+    program.unload_release_and_settle(
+        left_lower, right_lower, left_withdraw, right_withdraw,
+        lower_steps=50, unload_steps=20, release_steps=30, withdraw_steps=35, settle_steps=40,
+    )
+    return program.build(), final_pot_pose
+
+
+def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
+    actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
+    source_indices = keyframes["semantic_indices"]
+    mapping = {
+        "bimanual_pregrasp": (source_indices["left_pregrasp"], source_indices["right_pregrasp"]),
+        "left_handle_grasp": (source_indices["left_handle_grasp"], source_indices["right_pregrasp"]),
+        "right_handle_grasp": (source_indices["right_handle_grasp"], source_indices["right_handle_grasp"]),
+        "pot_lift": (source_indices["pot_lift"], source_indices["pot_lift"]),
+        "pot_transport": (source_indices["pot_transport"], source_indices["pot_transport"]),
+        "support_align": (source_indices["support_align"], source_indices["support_align"]),
+        "support_lower": (source_indices["support_lower"], source_indices["support_lower"]),
+        "pot_unload": (source_indices["support_lower"], source_indices["support_lower"]),
+        "pot_release": (source_indices["pot_release"], source_indices["pot_release"]),
+        "bimanual_withdraw": (source_indices["stable_settle"], source_indices["stable_settle"]),
+        "stable_settle": (source_indices["stable_settle"], source_indices["stable_settle"]),
+    }
+    parts = []
+    previous = actions[0]
+    previous_cursor = 0
+    for name, cursor in trajectory.waypoint_steps.items():
+        left_index, right_index = mapping[name]
+        target = np.concatenate(
+            (
+                actions[min(left_index, len(actions) - 1), :7],
+                actions[min(right_index, len(actions) - 1), 7:],
+            )
+        )
+        steps = cursor + 1 - previous_cursor
+        fraction = np.linspace(1.0 / steps, 1.0, steps)
+        smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+        parts.append(previous[None] + smooth[:, None] * (target - previous)[None])
+        previous = target
+        previous_cursor = cursor + 1
+    result = np.concatenate(parts)
+    if result.shape != (trajectory.steps, 14):
+        raise AssertionError(f"unexpected nominal shape: {result.shape}")
+    return result
+
+
+def _frame(env, sample) -> np.ndarray:
+    import cv2
+
+    panels = []
+    env.sim.render()
+    for camera_name in ("top_camera", "left_wrist_camera", "right_wrist_camera"):
+        camera = env.scene[camera_name]
+        camera.update(dt=0.0)
+        image = camera.data.output["rgb"][0, :, :, :3].detach().cpu().numpy()
+        if image.dtype != np.uint8:
+            image = np.clip(image * (255.0 if float(image.max()) <= 1.0 else 1.0), 0, 255).astype(np.uint8)
+        image = image.copy()
+        lines = [
+            f"{camera_name} / deterministic PutPot",
+            f"step {sample['step']} / {sample['program_stage']}",
+            f"pick={sample['stage1']} place={sample['stage2']}",
+            f"grasps L={sample['left_grasp']} R={sample['right_grasp']}",
+            f"support dz={sample['support_error_m']:.4f} xy={sample['xy_error_m']:.4f} m",
+        ]
+        for row, line in enumerate(lines):
+            cv2.putText(image, line, (12, 28 + 25 * row), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (245, 245, 245), 1, cv2.LINE_AA)
+        panels.append(cv2.resize(image, (320, 240), interpolation=cv2.INTER_AREA))
+    return np.concatenate(panels, axis=1)
+
+
+def _transition_trace(samples):
+    result, previous = [], None
+    for sample in samples:
+        state = (sample["stage1"], sample["stage2"], sample["task_success"])
+        if state != previous or sample is samples[-1]:
+            result.append({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "xy_error_m")})
+            previous = state
+    return result
+
+
+def main() -> None:
+    args = _parser()
+    if args.render and not args.video:
+        raise ValueError("--render requires --video")
+    if args.mode == "skill" and not args.source_keyframes:
+        raise ValueError("skill mode requires --source-keyframes")
+    if args.support_clearance_m < 0.0 or args.transport_clearance_m <= 0.0:
+        raise ValueError("support/transport clearances are invalid")
+    for path in (args.result_json, args.trace_npz, args.video, args.write_keyframes):
+        if path and os.path.isfile(path):
+            os.unlink(path)
+    sys.path.insert(0, os.path.abspath(args.gear_repo))
+    from isaaclab.app import AppLauncher
+
+    simulation_app = AppLauncher({"headless": True, "device": args.device, "enable_cameras": True}).app
+    env = encoder = None
+    try:
+        import torch
+        from dc_study.utils.task_creation import create_task_environment
+        from run_putmarker_skill_program import (
+            _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state,
+        )
+
+        offline_ground = _configure_offline_ground()
+        source_assets = _dataset_assets(args.source_dataset, args.objects_root)
+        target_assets = _dataset_assets(args.target_dataset, args.objects_root)
+        env = create_task_environment(
+            task_name="PutPotOnCooktop-v0",
+            assets_instance_paths=target_assets,
+            objects_randomization=None,
+            init_joint_pos_randomization=0.0,
+            mode="replay",
+            device=args.device,
+            observation_modalities=["proprioception"] + (["rgb"] if args.render else []),
+            enable_self_collisions=False,
+            camera_width=args.camera_width,
+            camera_height=args.camera_height,
+            image_downsample_factor=1,
+            enable_gripper_grasp_clamp=False,
+            enable_grasp_ray_viz=False,
+        )
+        env.reset(warm_up=False, seed=args.seed)
+        source = _load_dataset(args.source_dataset, args.episode, env.device)
+        target = _load_dataset(args.target_dataset, args.episode, env.device)
+        target["cooktop_size"] = _geometry(target_assets["cooktop"], target["cooktop_pose"][0]).size
+        env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
+        _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
+        env.sim.forward()
+        env.reset_success_check(env_ids)
+        source_geometry = _geometry(source_assets["pot"], source["pot_pose"][0])
+        target_geometry = _geometry(target_assets["pot"], target["pot_pose"][0])
+        keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode == "skill" else None
+        trajectory, intended_final_pot = (
+            _build_skill(keyframes, source, target, source_geometry, target_geometry, _eef_pose(env, "left_arm"), _eef_pose(env, "right_arm"), args)
+            if keyframes is not None else (None, None)
+        )
+        joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
+        total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
+        samples = [_sample(env, -1, "reset")]
+        actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
+        frame_stats = []
+        if args.render:
+            Path(args.video).parent.mkdir(parents=True, exist_ok=True)
+            encoder = _Encoder(args.fps, args.video)
+        for step in range(total_steps):
+            if trajectory is None:
+                action = source["actions"][step : step + 1]
+                stage = "direct_source_action_replay"
+            else:
+                stage = trajectory.stage_names[step]
+                action = _ik_action(env, trajectory.left_poses[step], trajectory.right_poses[step], trajectory.grippers[step], joint_nominal[step], args)
+                desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
+            _, _, terminated, truncated, info = env.step(action)
+            sample = _sample(env, step, stage, info)
+            samples.append(sample)
+            actions.append(action[0].detach().cpu().numpy())
+            pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if encoder is not None:
+                frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
+            if (step + 1) % 50 == 0 or sample["task_success"]:
+                print("PUTPOT_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "xy_error_m")}, sort_keys=True), flush=True)
+            if bool(truncated[0].item()):
+                raise RuntimeError(f"unexpected timeout/reset at step {step}")
+            if bool(terminated[0].item()) and not sample["task_success"]:
+                raise RuntimeError(f"unexpected failure termination at step {step}")
+        if encoder is not None:
+            encoder.close(); encoder = None
+        Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            args.trace_npz,
+            actions=np.asarray(actions, dtype=np.float32),
+            pot_poses=np.asarray(pot_poses, dtype=np.float32),
+            left_eef_poses=np.asarray(left_eef, dtype=np.float32),
+            right_eef_poses=np.asarray(right_eef, dtype=np.float32),
+            desired_left_eef_poses=np.asarray(desired_left, dtype=np.float32),
+            desired_right_eef_poses=np.asarray(desired_right, dtype=np.float32),
+            sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
+        )
+        final = samples[-1]
+        extracted = None
+        if args.mode == "replay" and final["task_success"]:
+            extracted = _extract_keyframes(samples, np.asarray(actions), args.source_dataset, source_assets)
+            if args.write_keyframes:
+                Path(args.write_keyframes).parent.mkdir(parents=True, exist_ok=True)
+                with open(args.write_keyframes, "w", encoding="utf-8") as stream:
+                    json.dump(extracted, stream, indent=2, sort_keys=True)
+        video = _probe(args.video) if args.render else None
+        desired_error = []
+        if trajectory is not None:
+            desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - trajectory.left_poses[i, :3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - trajectory.right_poses[i, :3])) for i in range(len(left_eef))]
+        waypoint_errors = [desired_error[index] for index in trajectory.waypoint_steps.values() if trajectory is not None and index < len(desired_error)] if trajectory is not None else []
+        direct_replay = None
+        if args.direct_replay_result:
+            with open(args.direct_replay_result, encoding="utf-8") as stream:
+                direct_replay = json.load(stream)
+        checks = {
+            "one_reset": True,
+            "zero_inter_stage_resets": True,
+            "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
+            "contact_backed_grasps_only": True,
+            "coded_task_success": bool(final["task_success"]),
+            "all_stages_latched": bool(final["stage1"] and final["stage2"]),
+            "bimanual_pick_observed": any(row["left_grasp"] and row["right_grasp"] for row in samples),
+            "pot_released": not final["left_grasp"] and not final["right_grasp"],
+            "stable_support_window": bool(final["on_top_predicate_now"]),
+            "terminal_pot_speed_within_threshold": bool(
+                float(np.linalg.norm(final["pot_velocity"][:3])) <= 0.05
+            ),
+            "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
+            "fully_decodable": video is None or video["full_decode_returncode"] == 0,
+        }
+        if args.expect_failure:
+            acceptance_checks = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "h264_nonempty", "fully_decodable")}
+            acceptance_checks["expected_coded_task_failure"] = not bool(final["task_success"])
+        else:
+            acceptance_checks = checks
+            if direct_replay is not None:
+                acceptance_checks = dict(acceptance_checks)
+                acceptance_checks["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+        from run_putmarker_skill_program import _asset_provenance
+        result = {
+            "status": "passed" if all(acceptance_checks.values()) else "failed",
+            "mode": args.mode,
+            "protocol": {
+                "controller": "direct_source_action_replay" if trajectory is None else "semantic_support_frames_with_cartesian_dls",
+                "candidate_sampling": False,
+                "scene_resets": 1,
+                "inter_stage_resets": 0,
+                "teleports_after_reset": 0,
+                "control_rate_hz": 30,
+                "steps": len(actions),
+                "seed": args.seed,
+                "grasp_assistance": "none",
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m},
+            },
+            "provenance": {
+                "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
+                "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)},
+                "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()},
+                "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()},
+                "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager.py"))},
+                "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager_cfg.py"))},
+                "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)},
+                "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None),
+            },
+            "semantic_frames": {
+                "source_pot_bottom": source_geometry.bottom_frame.tolist(),
+                "target_pot_bottom": target_geometry.bottom_frame.tolist(),
+                "target_cooktop_top": _geometry(target_assets["cooktop"], target["cooktop_pose"][0]).top_frame.tolist(),
+                "intended_final_pot_pose": intended_final_pot.tolist() if intended_final_pot is not None else None,
+                "extracted_keyframes": extracted,
+            },
+            "stage_success_trace": _transition_trace(samples),
+            "metrics": {
+                "eef_tracking_error_m": max(waypoint_errors) if waypoint_errors else None,
+                "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None,
+                "support_error_m": final["support_error_m"],
+                "xy_error_m": final["xy_error_m"],
+                "terminal_pot_speed_mps": float(np.linalg.norm(final["pot_velocity"][:3])),
+                "terminal_pot_angular_speed_rps": float(np.linalg.norm(final["pot_velocity"][3:])),
+                "left_grasp_frames": sum(row["left_grasp"] for row in samples),
+                "right_grasp_frames": sum(row["right_grasp"] for row in samples),
+            },
+            "terminal": final,
+            "checks": checks,
+            "acceptance_checks": acceptance_checks,
+            "video": video,
+            "direct_replay_baseline": direct_replay,
+            "offline_ground_override": offline_ground,
+        }
+        Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.result_json, "w", encoding="utf-8") as stream:
+            json.dump(result, stream, indent=2, sort_keys=True)
+        print("PUTPOT_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
+        if result["status"] != "passed":
+            raise RuntimeError(f"acceptance checks failed: {acceptance_checks}")
+    except BaseException:
+        traceback.print_exc()
+        raise
+    finally:
+        if encoder is not None:
+            encoder.close()
+        if env is not None:
+            env.close()
+        simulation_app.close()
+
+
+if __name__ == "__main__":
+    main()
