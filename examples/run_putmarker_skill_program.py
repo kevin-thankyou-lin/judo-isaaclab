@@ -323,18 +323,40 @@ def _build_skill(
     return trajectory
 
 
+def _sparse_joint_nominal(source) -> np.ndarray:
+    """Interpolate only the semantic joint keyframes, never the full demo path."""
+    actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
+    endpoints = list(SEMANTIC_INDICES.values())
+    parts = []
+    previous_index = 0
+    previous = actions[0]
+    for index in endpoints:
+        steps = index - previous_index
+        fraction = np.linspace(1.0 / steps, 1.0, steps)
+        smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+        parts.append(previous[None] + smooth[:, None] * (actions[index] - previous)[None])
+        previous = actions[index]
+        previous_index = index
+    nominal = np.concatenate(parts)
+    if nominal.shape != (607, 14):
+        raise AssertionError(f"unexpected sparse joint nominal shape {nominal.shape}")
+    return nominal
+
+
 def _clamp_norm(value, maximum: float):
     norm = value.norm(dim=-1, keepdim=True)
     return value * (maximum / norm.clamp_min(1.0e-8)).clamp(max=1.0)
 
 
-def _ik_action(env, desired_left, desired_right, grippers, args):
+def _ik_action(env, desired_left, desired_right, grippers, joint_nominal, args):
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
 
     from judo_isaaclab.task_space import damped_least_squares, resolve_end_effector_body_index
 
-    action = torch.zeros((1, 14), dtype=torch.float32, device=env.device)
+    action = torch.as_tensor(
+        joint_nominal, dtype=torch.float32, device=env.device
+    ).reshape(1, 14).clone()
     for arm_name, desired, action_start in (
         ("left_arm", desired_left, 0),
         ("right_arm", desired_right, 7),
@@ -371,7 +393,7 @@ def _ik_action(env, desired_left, desired_right, grippers, args):
         delta = damped_least_squares(jacobian, twist, args.damping).clamp(
             -args.max_joint_delta, args.max_joint_delta
         )
-        targets = arm.data.joint_pos[:, :6] + delta
+        targets = action[:, action_start : action_start + 6] + delta
         limits = arm.data.joint_pos_limits[:, :6]
         action[:, action_start : action_start + 6] = torch.maximum(
             torch.minimum(targets, limits[:, :, 1]), limits[:, :, 0]
@@ -710,6 +732,7 @@ def main() -> None:
             )
             if args.mode == "skill" else None
         )
+        joint_nominal = _sparse_joint_nominal(source) if trajectory is not None else None
         replay_data = source if args.replay_actions_from == "source" else target
         total_steps = trajectory.steps if trajectory is not None else len(replay_data["actions"])
 
@@ -747,7 +770,12 @@ def main() -> None:
                 desired_left = trajectory.left_poses[step]
                 desired_right = trajectory.right_poses[step]
                 action = _ik_action(
-                    env, desired_left, desired_right, trajectory.grippers[step], args
+                    env,
+                    desired_left,
+                    desired_right,
+                    trajectory.grippers[step],
+                    joint_nominal[step],
+                    args,
                 )
                 stage = trajectory.stage_names[step]
                 desired_left_trace.append(desired_left)
@@ -805,6 +833,10 @@ def main() -> None:
             right_eef_poses=np.asarray(right_eef, dtype=np.float32),
             desired_left_eef_poses=np.asarray(desired_left_trace, dtype=np.float32),
             desired_right_eef_poses=np.asarray(desired_right_trace, dtype=np.float32),
+            sparse_joint_nominal=(
+                np.asarray(joint_nominal, dtype=np.float32)
+                if joint_nominal is not None else np.empty((0, 14), dtype=np.float32)
+            ),
         )
         marker_z = np.asarray(marker_poses)[:, 2]
         final = samples[-1]
@@ -858,7 +890,11 @@ def main() -> None:
             "status": "passed" if all(acceptance_checks.values()) else "failed",
             "mode": args.mode,
             "protocol": {
-                "controller": "direct_source_action_replay" if trajectory is None else "semantic_keyframe_cartesian_dls",
+                "controller": (
+                    "direct_source_action_replay"
+                    if trajectory is None
+                    else "semantic_keyframe_joint_spline_with_cartesian_dls"
+                ),
                 "candidate_sampling": False,
                 "scene_resets": 1,
                 "inter_stage_resets": 0,
