@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any, Iterable
@@ -16,6 +17,16 @@ PROOF_PHASES = (
     "target_skill",
     "final_render",
 )
+
+
+def _expand_environment(value: Any) -> Any:
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [_expand_environment(item) for item in value]
+    if isinstance(value, dict):
+        return {name: _expand_environment(item) for name, item in value.items()}
+    return value
 
 
 def _digest(path: str | Path) -> str:
@@ -61,7 +72,9 @@ class EvidenceContract:
 
     @classmethod
     def load(cls, path: str | Path) -> "EvidenceContract":
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = _expand_environment(
+            json.loads(Path(path).read_text(encoding="utf-8"))
+        )
         value.pop("schema_version", None)
         value["stages"] = tuple(value["stages"])
         value["required_protocol_checks"] = tuple(

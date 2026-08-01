@@ -124,3 +124,12 @@ def test_contract_rejects_missing_replay_failure_gate(tmp_path):
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="replay failure"):
         EvidenceContract.load(path)
+
+
+def test_contract_expands_environment_paths(tmp_path, monkeypatch):
+    path = _contract(tmp_path)
+    value = json.loads(path.read_text())
+    value["source"]["dataset"] = "${TASK_DATA_ROOT}/source.hdf5"
+    path.write_text(json.dumps(value))
+    monkeypatch.setenv("TASK_DATA_ROOT", "/verified/data")
+    assert EvidenceContract.load(path).source["dataset"] == "/verified/data/source.hdf5"

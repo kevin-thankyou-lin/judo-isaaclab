@@ -3,16 +3,16 @@
   "task_name": "PutPotOnCooktop-v0",
   "success_check": "dc_study.envs.tasks.put_pot_on_cooktop_manager_cfg.check_task_success",
   "source": {
-    "dataset": "/tmp/putpot_canonical_dataset_20260730/tasks_data/PutPotOnCooktop/teleop/putpot_000.hdf5",
+    "dataset": "${PUTPOT_DATA_ROOT}/teleop/putpot_000.hdf5",
     "episode": "demo_0",
-    "objects_root": "/tmp/putpot_canonical_dataset_20260730/tasks_data/PutPotOnCooktop/objects",
+    "objects_root": "${PUTPOT_DATA_ROOT}/objects",
     "assets": {
       "pot": "Pot/pot_000",
       "cooktop": "Cooktop/cooktop_000"
     }
   },
   "target_search": {
-    "dataset_glob": "/tmp/putpot_canonical_dataset_20260730/tasks_data/PutPotOnCooktop/teleop/putpot_*.hdf5",
+    "dataset_glob": "${PUTPOT_DATA_ROOT}/teleop/putpot_*.hdf5",
     "exclude_source": true,
     "require_replay_failure": true,
     "rank_by": [

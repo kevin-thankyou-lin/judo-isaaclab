@@ -65,6 +65,7 @@ latched bimanual pick followed by released, stable on-top placement.
 Initialize a ledger:
 
 ```bash
+export PUTPOT_DATA_ROOT=/path/to/PutPotOnCooktop
 python examples/evidence_adaptation_harness.py \
   --bundle configs/putpot_evidence_agent.json \
   --workspace /tmp/putpot_adaptation init
