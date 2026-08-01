@@ -60,6 +60,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
     parser.add_argument("--handle-pull-dls-gain", type=float, default=0.0)
+    parser.add_argument("--handle-pull-joint-extension", type=float, default=0.10)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--render", action="store_true")
@@ -344,7 +345,7 @@ def _build_skill(
     return trajectory
 
 
-def _sparse_joint_nominal(source) -> np.ndarray:
+def _sparse_joint_nominal(source, handle_pull_joint_extension: float) -> np.ndarray:
     """Interpolate only the semantic joint keyframes, never the full demo path."""
     actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
     endpoints = list(SEMANTIC_INDICES.values())
@@ -352,11 +353,17 @@ def _sparse_joint_nominal(source) -> np.ndarray:
     previous_index = 0
     previous = actions[0]
     for index in endpoints:
+        target = actions[index].copy()
+        if index == SEMANTIC_INDICES["drawer_open"]:
+            grasp = actions[SEMANTIC_INDICES["handle_grasp"]]
+            target[7:13] += float(handle_pull_joint_extension) * (
+                target[7:13] - grasp[7:13]
+            )
         steps = index - previous_index
         fraction = np.linspace(1.0 / steps, 1.0, steps)
         smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
-        parts.append(previous[None] + smooth[:, None] * (actions[index] - previous)[None])
-        previous = actions[index]
+        parts.append(previous[None] + smooth[:, None] * (target - previous)[None])
+        previous = target
         previous_index = index
     nominal = np.concatenate(parts)
     if nominal.shape != (607, 14):
@@ -698,6 +705,8 @@ def main() -> None:
         raise ValueError("--render requires --video")
     if not 0.0 <= args.handle_pull_dls_gain <= 1.0:
         raise ValueError("--handle-pull-dls-gain must be in [0, 1]")
+    if not 0.0 <= args.handle_pull_joint_extension <= 0.5:
+        raise ValueError("--handle-pull-joint-extension must be in [0, 0.5]")
     # Exact task-owned outputs are removed up front so a crashed process cannot
     # leave a stale artifact that a wrapper mistakes for this run's evidence.
     for path in (args.result_json, args.trace_npz, args.video):
@@ -766,7 +775,10 @@ def main() -> None:
             )
             if args.mode == "skill" else None
         )
-        joint_nominal = _sparse_joint_nominal(source) if trajectory is not None else None
+        joint_nominal = (
+            _sparse_joint_nominal(source, args.handle_pull_joint_extension)
+            if trajectory is not None else None
+        )
         replay_data = source if args.replay_actions_from == "source" else target
         total_steps = trajectory.steps if trajectory is not None else len(replay_data["actions"])
 
@@ -952,6 +964,7 @@ def main() -> None:
                     "max_position_step": args.max_position_step,
                     "max_rotation_step": args.max_rotation_step,
                     "handle_pull_dls_gain": args.handle_pull_dls_gain,
+                    "handle_pull_joint_extension": args.handle_pull_joint_extension,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                 },
