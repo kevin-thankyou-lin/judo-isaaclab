@@ -304,7 +304,9 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
         target_geometry.size,
     )
     right_grasp = target_handover_mug.transfer_pose_from(
-        source_dual_mug, source_dual["right_eef_pose"]
+        source_dual_mug,
+        source_dual["right_eef_pose"],
+        scale_local_position=False,
     )
     right_contact = compose_pose(inverse_pose(target_handover_mug.root_pose), right_grasp)
 
@@ -352,7 +354,10 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
     )
     program.physical_handover(
         left_lift,
-        target_handover_mug.transfer_pose_from(source_dual_mug, frames["right_pregrasp"]["right_eef_pose"]),
+        target_handover_mug.transfer_pose_from(
+            source_dual_mug,
+            frames["right_pregrasp"]["right_eef_pose"],
+        ),
         right_grasp,
         left_release,
         approach_steps=100,
@@ -374,7 +379,7 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
         release_steps=40,
         settle_steps=60,
     )
-    return program.build(), final_mug_pose
+    return program.build(), final_mug_pose, target_handover_mug.root_pose
 
 
 def _sparse_joint_nominal(source, trajectory, keyframes):
@@ -483,9 +488,9 @@ def main() -> None:
         source_tree = _geometry(source_assets["mug_tree"], source["tree_pose"][0])
         target_tree = _geometry(target_assets["mug_tree"], target["tree_pose"][0])
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode == "skill" else None
-        trajectory, intended_final = (
+        trajectory, intended_final, nominal_handover_mug = (
             _build_skill(keyframes, source_mug, target_mug, source_tree, target_tree, _eef_pose(env, "left_arm"), _eef_pose(env, "right_arm"), args)
-            if keyframes is not None else (None, None)
+            if keyframes is not None else (None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
@@ -516,6 +521,15 @@ def main() -> None:
             sample = _sample(env, step, stage, info)
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if trajectory is not None and step == trajectory.waypoint_steps["left_lift"]:
+                from judo_isaaclab.hang_mug import reanchor_physical_handover
+
+                trajectory = reanchor_physical_handover(
+                    trajectory,
+                    nominal_handover_mug,
+                    sample["mug_pose"],
+                    sample["right_eef_pose"],
+                )
             if encoder is not None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
@@ -577,7 +591,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "grasp_assistance": "none", "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "grasp_assistance": "none", "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "handover_pregrasp_position_scaling": True, "handover_contact_position_scaling": False}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {"source_mug": source_mug.root_pose.tolist(), "target_mug": target_mug.root_pose.tolist(), "source_tree": source_tree.root_pose.tolist(), "target_tree": target_tree.root_pose.tolist(), "intended_final_mug_pose": intended_final.tolist() if intended_final is not None else None, "extracted_keyframes": extracted},
             "metrics": {"eef_tracking_error_m": max(desired_error) if desired_error else None, "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None, "handle_branch_error_m": final["mug_tree_xy_error_m"], "terminal_mug_speed_mps": terminal_speed, "terminal_mug_angular_speed_rps": float(np.linalg.norm(final["mug_velocity"][3:])), "left_grasp_frames": sum(row["left_grasp"] for row in samples), "right_grasp_frames": sum(row["right_grasp"] for row in samples)},
