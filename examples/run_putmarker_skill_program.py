@@ -63,6 +63,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--handle-pull-joint-extension", type=float, default=-0.05)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
+    parser.add_argument("--rigid-handle-pull-m", type=float, default=0.075)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--draw-coordinate-axes", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -231,6 +232,8 @@ def _build_skill(
     target_right_start,
     drawer_placement_q_m,
     drawer_pull_extra_m,
+    rigid_target_handle_pull,
+    rigid_handle_pull_m,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
@@ -294,10 +297,16 @@ def _build_skill(
             source_geometry, source_attach("right", index), source_q
         )
 
-    handle_open = right_handle("drawer_open")
-    handle_open[:3] += quaternion_rotate(
-        target_geometry.root_pose[3:], target_geometry.slide_axis_local
-    ) * float(drawer_pull_extra_m)
+    if rigid_target_handle_pull:
+        handle_open = right_handle("handle_grasp")
+        handle_open[:3] += quaternion_rotate(
+            target_geometry.root_pose[3:], target_geometry.slide_axis_local
+        ) * float(rigid_handle_pull_m)
+    else:
+        handle_open = right_handle("drawer_open")
+        handle_open[:3] += quaternion_rotate(
+            target_geometry.root_pose[3:], target_geometry.slide_axis_local
+        ) * float(drawer_pull_extra_m)
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -713,6 +722,8 @@ def main() -> None:
         raise ValueError("--handle-pull-dls-gain must be in [0, 1]")
     if not -0.5 <= args.handle_pull_joint_extension <= 0.5:
         raise ValueError("--handle-pull-joint-extension must be in [-0.5, 0.5]")
+    if not 0.05 <= args.rigid_handle_pull_m <= 0.15:
+        raise ValueError("--rigid-handle-pull-m must be in [0.05, 0.15]")
     # Exact task-owned outputs are removed up front so a crashed process cannot
     # leave a stale artifact that a wrapper mistakes for this run's evidence.
     for path in (args.result_json, args.trace_npz, args.video):
@@ -785,6 +796,8 @@ def main() -> None:
                 _eef_pose(env, "right_arm"),
                 args.drawer_placement_q_m,
                 args.drawer_pull_extra_m,
+                integrated_target_handle_ik,
+                args.rigid_handle_pull_m,
             )
             if args.mode == "skill" else None
         )
@@ -985,6 +998,8 @@ def main() -> None:
                     "handle_pull_joint_extension": args.handle_pull_joint_extension,
                     "handle_displacement_m": handle_displacement_m,
                     "integrated_target_handle_ik": integrated_target_handle_ik,
+                    "rigid_target_handle_pull": integrated_target_handle_ik,
+                    "rigid_handle_pull_m": args.rigid_handle_pull_m,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                 },
