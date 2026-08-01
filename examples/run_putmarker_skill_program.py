@@ -182,7 +182,6 @@ def _drawer_geometry(asset_path: str, root_pose: np.ndarray):
     axis[{"X": 0, "Y": 1, "Z": 2}[axis_name]] = 1.0
     origin = np.asarray(joint.GetLocalPos0Attr().Get(), dtype=np.float64)
 
-    cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
     handle_prims = [
         prim
         for prim in stage.TraverseAll()
@@ -191,12 +190,15 @@ def _drawer_geometry(asset_path: str, root_pose: np.ndarray):
     ]
     if not handle_prims:
         raise ValueError("lower drawer handle collision prims are missing")
-    points = []
+    handle_points = []
     for prim in handle_prims:
-        bounds = cache.ComputeWorldBound(prim).ComputeAlignedRange()
-        points.extend((np.asarray(bounds.GetMin()), np.asarray(bounds.GetMax())))
-    points = np.asarray(points, dtype=np.float64)
-    handle = 0.5 * (points.min(axis=0) + points.max(axis=0))
+        transform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        handle_points.append(np.asarray(transform.ExtractTranslation(), dtype=np.float64))
+    # The central grip bar is the handle component furthest along the pull axis;
+    # the two symmetric lower-X components attach it to the drawer face.
+    handle = max(handle_points, key=lambda point: float(np.dot(point, axis)))
     size = _asset_size(asset_path)
     cavity_size = np.asarray([0.72 * size[0], 0.82 * size[1], 0.22 * size[2]])
     return DrawerGeometry(
@@ -662,8 +664,6 @@ def main() -> None:
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
         env.sim.forward()
         env.reset_success_check(env_ids)
-        env.marker_init_z = float(np.asarray(target["marker_pose"])[0, 2])
-
         source_geometry = _drawer_geometry(
             source_assets["obj_1"], np.asarray(source["cabinet_pose"])[0]
         )
