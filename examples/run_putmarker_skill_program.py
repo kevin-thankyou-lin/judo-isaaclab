@@ -59,6 +59,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-joint-delta", type=float, default=0.16)
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
+    parser.add_argument("--drawer-pull-extra-m", type=float, default=0.075)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--draw-coordinate-axes", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -225,11 +226,13 @@ def _build_skill(
     target_geometry,
     target_left_start,
     target_right_start,
+    drawer_pull_extra_m,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
         compose_pose,
         inverse_pose,
+        quaternion_rotate,
         transfer_pose,
     )
 
@@ -277,6 +280,11 @@ def _build_skill(
             source_geometry, source_attach("right", index), source_q
         )
 
+    handle_open = right_handle("drawer_open")
+    handle_open[:3] += quaternion_rotate(
+        target_geometry.root_pose[3:], target_geometry.slide_axis_local
+    ) * float(drawer_pull_extra_m)
+
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
     )
@@ -292,7 +300,7 @@ def _build_skill(
         left_marker("marker_clear_hold"),
         right_handle("handle_pregrasp"),
         right_handle("handle_grasp"),
-        right_handle("drawer_open"),
+        handle_open,
         hold_steps=60,
         approach_steps=118,
         close_steps=8,
@@ -305,10 +313,10 @@ def _build_skill(
         lower_steps=43,
     )
     program.release_marker(
-        left_drawer("marker_release"),
+        left_drawer("marker_cavity"),
         left_drawer("left_withdraw"),
-        release_steps=31,
-        settle_steps=8,
+        release_steps=12,
+        settle_steps=27,
         withdraw_steps=12,
     )
     program.close_drawer(
@@ -729,6 +737,7 @@ def main() -> None:
                 target_geometry,
                 _eef_pose(env, "left_arm"),
                 _eef_pose(env, "right_arm"),
+                args.drawer_pull_extra_m,
             )
             if args.mode == "skill" else None
         )
@@ -911,6 +920,7 @@ def main() -> None:
                     "max_joint_delta": args.max_joint_delta,
                     "max_position_step": args.max_position_step,
                     "max_rotation_step": args.max_rotation_step,
+                    "drawer_pull_extra_m": args.drawer_pull_extra_m,
                 },
             },
             "provenance": {
