@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task_name": "HangMugOnTree-v0",
+  "success_check": "dc_study.envs.tasks.hang_mug_on_tree_manager_cfg.check_task_success",
+  "source": {
+    "dataset": "${HANGMUG_DATA_ROOT}/teleop/hangmug_000.hdf5",
+    "episode": "demo_0",
+    "objects_root": "${HANGMUG_DATA_ROOT}/objects",
+    "assets": {
+      "mug": "Mug/mug_000",
+      "mug_tree": "MugTree/mug_tree_000"
+    }
+  },
+  "target_search": {
+    "dataset_glob": "${HANGMUG_DATA_ROOT}/teleop/hangmug_*.hdf5",
+    "exclude_source": true,
+    "require_replay_failure": true,
+    "rank_by": [
+      "mug_size_difference",
+      "mug_tree_branch_frame_difference",
+      "initial_pose_difference"
+    ]
+  },
+  "stages": [
+    "pick",
+    "handover",
+    "hang"
+  ],
+  "semantic_frames": {
+    "mug.left_grasp": "left grasp contact frame",
+    "mug.right_grasp": "right handover contact frame",
+    "mug.handle": "handle-hole center and insertion axis",
+    "mug_tree.branch": "branch root, tip, tangent, and support normal"
+  },
+  "result_paths": {
+    "task_success": [
+      "checks.coded_task_success",
+      "terminal.task_success"
+    ],
+    "stages": {
+      "pick": [
+        "terminal.stage1"
+      ],
+      "handover": [
+        "terminal.stage2"
+      ],
+      "hang": [
+        "terminal.stage3"
+      ]
+    },
+    "metrics": {
+      "eef_tracking_error_m": [
+        "metrics.eef_tracking_error_m",
+        "metrics.maximum_eef_tracking_error_m"
+      ],
+      "handle_branch_error_m": [
+        "metrics.handle_branch_error_m"
+      ],
+      "terminal_mug_speed_mps": [
+        "metrics.terminal_mug_speed_mps"
+      ]
+    }
+  },
+  "required_protocol_checks": [
+    "one_reset",
+    "zero_inter_stage_resets",
+    "real_target_assets",
+    "contact_backed_grasps_only",
+    "no_grasp_assistance"
+  ],
+  "thresholds": {
+    "eef_tracking_error_m": 0.02,
+    "handle_branch_error_m": 0.03,
+    "terminal_mug_speed_mps": 0.05
+  },
+  "metadata": {
+    "strategy": [
+      "semantic left grasp",
+      "physical right-hand handover",
+      "handle-to-branch insertion",
+      "release and stable support"
+    ],
+    "forbidden": [
+      "MPC",
+      "CEM",
+      "MPPI",
+      "candidate sampling",
+      "inter-stage reset",
+      "state teleport",
+      "grasp assistance"
+    ]
+  }
+}
