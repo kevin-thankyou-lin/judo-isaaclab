@@ -218,19 +218,46 @@ def _pose_at(matrices: np.ndarray, index: int) -> np.ndarray:
     return pose_from_matrix(matrices[index])
 
 
-def _build_skill(source, target, source_geometry, target_geometry):
-    from judo_isaaclab.put_marker import PutMarkerSkillProgram, transfer_pose
+def _build_skill(
+    source,
+    target,
+    source_geometry,
+    target_geometry,
+    target_left_start,
+    target_right_start,
+):
+    from judo_isaaclab.put_marker import (
+        PutMarkerSkillProgram,
+        compose_pose,
+        inverse_pose,
+        transfer_pose,
+    )
 
     source_marker = np.asarray(source["marker_pose"])[0]
     target_marker = np.asarray(target["marker_pose"])[0]
     source_marker_size = _asset_size(source["assets"]["obj_0"])
     target_marker_size = _asset_size(target["assets"]["obj_0"])
     marker_scale = target_marker_size / source_marker_size
+    # MimicGen's datagen EEF frame is a calibrated tool-center frame, while
+    # IsaacLab exposes the arm attachment link for Jacobians. Their rigid
+    # transform is recovered once at reset and applied to every sparse source
+    # keyframe; this is not a trajectory binding.
+    left_tool_to_attach = compose_pose(
+        inverse_pose(_pose_at(target["eef_left"], 0)), target_left_start
+    )
+    right_tool_to_attach = compose_pose(
+        inverse_pose(_pose_at(target["eef_right"], 0)), target_right_start
+    )
+
+    def source_attach(arm: str, index: int) -> np.ndarray:
+        matrices = source[f"eef_{arm}"]
+        offset = left_tool_to_attach if arm == "left" else right_tool_to_attach
+        return compose_pose(_pose_at(matrices, index), offset)
 
     def left_marker(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         return transfer_pose(
-            _pose_at(source["eef_left"], index),
+            source_attach("left", index),
             source_marker,
             target_marker,
             local_position_scale=marker_scale,
@@ -240,18 +267,18 @@ def _build_skill(source, target, source_geometry, target_geometry):
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
         return target_geometry.transfer_drawer_pose(
-            source_geometry, _pose_at(source["eef_left"], index), source_q
+            source_geometry, source_attach("left", index), source_q
         )
 
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
         return target_geometry.transfer_handle_pose(
-            source_geometry, _pose_at(source["eef_right"], index), source_q
+            source_geometry, source_attach("right", index), source_q
         )
 
     program = PutMarkerSkillProgram(
-        _pose_at(target["eef_left"], 0), _pose_at(target["eef_right"], 0)
+        target_left_start, target_right_start
     )
     program.grasp_marker(
         left_marker("marker_pregrasp"),
@@ -673,7 +700,14 @@ def main() -> None:
             target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
         )
         trajectory = (
-            _build_skill(source, target, source_geometry, target_geometry)
+            _build_skill(
+                source,
+                target,
+                source_geometry,
+                target_geometry,
+                _eef_pose(env, "left_arm"),
+                _eef_pose(env, "right_arm"),
+            )
             if args.mode == "skill" else None
         )
         replay_data = source if args.replay_actions_from == "source" else target
