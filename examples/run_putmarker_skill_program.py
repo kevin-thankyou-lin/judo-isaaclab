@@ -59,6 +59,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-joint-delta", type=float, default=0.16)
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
+    parser.add_argument("--handle-pull-dls-gain", type=float, default=0.0)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--render", action="store_true")
@@ -368,7 +369,16 @@ def _clamp_norm(value, maximum: float):
     return value * (maximum / norm.clamp_min(1.0e-8)).clamp(max=1.0)
 
 
-def _ik_action(env, desired_left, desired_right, grippers, joint_nominal, args):
+def _ik_action(
+    env,
+    desired_left,
+    desired_right,
+    grippers,
+    joint_nominal,
+    args,
+    *,
+    right_dls_gain: float = 1.0,
+):
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
 
@@ -377,9 +387,9 @@ def _ik_action(env, desired_left, desired_right, grippers, joint_nominal, args):
     action = torch.as_tensor(
         joint_nominal, dtype=torch.float32, device=env.device
     ).reshape(1, 14).clone()
-    for arm_name, desired, action_start in (
-        ("left_arm", desired_left, 0),
-        ("right_arm", desired_right, 7),
+    for arm_name, desired, action_start, gain in (
+        ("left_arm", desired_left, 0, 1.0),
+        ("right_arm", desired_right, 7, right_dls_gain),
     ):
         arm = env.scene[arm_name]
         body_index = resolve_end_effector_body_index(env, arm_name)
@@ -413,7 +423,7 @@ def _ik_action(env, desired_left, desired_right, grippers, joint_nominal, args):
         delta = damped_least_squares(jacobian, twist, args.damping).clamp(
             -args.max_joint_delta, args.max_joint_delta
         )
-        targets = action[:, action_start : action_start + 6] + delta
+        targets = action[:, action_start : action_start + 6] + float(gain) * delta
         limits = arm.data.joint_pos_limits[:, :6]
         action[:, action_start : action_start + 6] = torch.maximum(
             torch.minimum(targets, limits[:, :, 1]), limits[:, :, 0]
@@ -686,6 +696,8 @@ def main() -> None:
     args = _parser()
     if args.render and not args.video:
         raise ValueError("--render requires --video")
+    if not 0.0 <= args.handle_pull_dls_gain <= 1.0:
+        raise ValueError("--handle-pull-dls-gain must be in [0, 1]")
     # Exact task-owned outputs are removed up front so a crashed process cannot
     # leave a stale artifact that a wrapper mistakes for this run's evidence.
     for path in (args.result_json, args.trace_npz, args.video):
@@ -791,6 +803,12 @@ def main() -> None:
             else:
                 desired_left = trajectory.left_poses[step]
                 desired_right = trajectory.right_poses[step]
+                stage = trajectory.stage_names[step]
+                right_dls_gain = (
+                    args.handle_pull_dls_gain
+                    if stage == "open_drawer" and step >= SEMANTIC_INDICES["handle_grasp"]
+                    else 1.0
+                )
                 action = _ik_action(
                     env,
                     desired_left,
@@ -798,8 +816,8 @@ def main() -> None:
                     trajectory.grippers[step],
                     joint_nominal[step],
                     args,
+                    right_dls_gain=right_dls_gain,
                 )
-                stage = trajectory.stage_names[step]
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
             _, _, terminated, truncated, info = env.step(action)
@@ -933,6 +951,7 @@ def main() -> None:
                     "max_joint_delta": args.max_joint_delta,
                     "max_position_step": args.max_position_step,
                     "max_rotation_step": args.max_rotation_step,
+                    "handle_pull_dls_gain": args.handle_pull_dls_gain,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                 },
