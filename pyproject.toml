@@ -19,6 +19,7 @@ test = [
     "pytest>=8",
 ]
 collision-screening = [
+    "python-fcl>=0.7.0.8",
     "scipy>=1.10",
     "trimesh>=4.5",
 ]

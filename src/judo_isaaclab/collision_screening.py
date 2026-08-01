@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -103,9 +104,29 @@ def _triangulate(counts, indices, offset):
     return triangles
 
 
-@lru_cache(maxsize=16)
-def load_usd_collision_mesh(asset_path: str):
-    """Load composed USD collision meshes into one root-local Trimesh."""
+def load_usd_collision_mesh(
+    asset_path: str,
+    collision_indices: tuple[int, ...] | list[int] | None = None,
+):
+    """Load selected composed USD collision meshes into one root-local mesh.
+
+    ``collision_indices`` refers to the numeric suffix in prim names such as
+    ``obj_link_collision_25``. Omitting it preserves the original all-mesh
+    behavior.
+    """
+    indices = (
+        None
+        if collision_indices is None
+        else tuple(sorted({int(index) for index in collision_indices}))
+    )
+    return _load_usd_collision_mesh(str(asset_path), indices)
+
+
+@lru_cache(maxsize=32)
+def _load_usd_collision_mesh(
+    asset_path: str,
+    collision_indices: tuple[int, ...] | None,
+):
     import trimesh
     from pxr import Gf, Usd, UsdGeom
 
@@ -114,8 +135,13 @@ def load_usd_collision_mesh(asset_path: str):
     vertices = []
     faces = []
     for prim in stage.Traverse():
-        if not prim.IsA(UsdGeom.Mesh) or "/collisions/" not in str(prim.GetPath()):
+        prim_path = str(prim.GetPath())
+        if not prim.IsA(UsdGeom.Mesh) or "/collisions/" not in prim_path:
             continue
+        if collision_indices is not None:
+            match = re.search(r"obj_link_collision_(\d+)(?:/|$)", prim_path)
+            if match is None or int(match.group(1)) not in collision_indices:
+                continue
         mesh = UsdGeom.Mesh(prim)
         points = mesh.GetPointsAttr().Get()
         if not points:
@@ -141,6 +167,11 @@ def load_usd_collision_mesh(asset_path: str):
         faces=np.asarray(faces, dtype=np.int64),
         process=False,
     )
+
+
+def _quaternion_distance(left: np.ndarray, right: np.ndarray) -> float:
+    dot = float(abs(np.dot(left, right)))
+    return float(2.0 * np.arccos(np.clip(dot, 0.0, 1.0)))
 
 
 def _sample_vertices(vertices: np.ndarray, maximum: int) -> np.ndarray:
@@ -232,6 +263,144 @@ def screen_object_paths(
             ),
         )
     )
+    return selected["candidate_index"], reports
+
+
+def object_path_clearance_reports(
+    object_paths: list[np.ndarray] | np.ndarray,
+    *,
+    tree_pose: np.ndarray,
+    object_mesh,
+    tree_mesh,
+    required_clearance_m: float = 0.002,
+    sample_stride: int = 1,
+    maximum_vertices: int = 1500,
+):
+    """Measure whole-path body-to-tree clearance for semantic collision gates."""
+    paths = np.asarray(object_paths, dtype=np.float64)
+    if paths.ndim == 2:
+        paths = paths[None, ...]
+    _, reports = screen_object_paths(
+        list(paths),
+        tree_pose=np.asarray(tree_pose, dtype=np.float64),
+        object_mesh=object_mesh,
+        tree_mesh=tree_mesh,
+        preinsert_end_step=paths.shape[1] - 1,
+        required_clearance_m=required_clearance_m,
+        sample_stride=sample_stride,
+        maximum_vertices=maximum_vertices,
+    )
+    for report in reports:
+        minimum_index = int(np.argmin(report["sampled_clearance_m"]))
+        report["minimum_clearance_step"] = int(
+            report["sampled_steps"][minimum_index]
+        )
+        report["semantic_surface"] = "object_body"
+        report["allowed_tree_contact"] = False
+    return reports
+
+
+def object_path_collision_reports(
+    object_paths: list[np.ndarray] | np.ndarray,
+    *,
+    tree_pose: np.ndarray,
+    object_mesh,
+    tree_mesh,
+    sample_stride: int = 1,
+):
+    """Report exact FCL mesh intersections along one or more object paths."""
+    import trimesh
+
+    paths = np.asarray(object_paths, dtype=np.float64)
+    if paths.ndim == 2:
+        paths = paths[None, ...]
+    manager = trimesh.collision.CollisionManager()
+    manager.add_object("tree", tree_mesh, transform=_pose_matrix(tree_pose))
+    manager.add_object("object_body", object_mesh)
+    reports = []
+    for candidate_index, object_poses in enumerate(paths):
+        sampled_steps = list(range(0, len(object_poses), sample_stride))
+        if sampled_steps[-1] != len(object_poses) - 1:
+            sampled_steps.append(len(object_poses) - 1)
+        collision_steps = []
+        for step in sampled_steps:
+            manager.set_transform(
+                "object_body", _pose_matrix(object_poses[step])
+            )
+            if manager.in_collision_internal():
+                collision_steps.append(step)
+        reports.append(
+            {
+                "candidate_index": candidate_index,
+                "sampled_steps": sampled_steps,
+                "collision_steps": collision_steps,
+                "collision_count": len(collision_steps),
+                "first_collision_step": (
+                    None if not collision_steps else int(collision_steps[0])
+                ),
+                "valid": not collision_steps,
+                "semantic_surface": "object_body",
+                "allowed_tree_contact": False,
+                "method": "python-fcl exact mesh intersection",
+            }
+        )
+    return reports
+
+
+def select_robot_feasible_object_path(
+    object_paths: np.ndarray,
+    *,
+    current_eef_pose: np.ndarray,
+    current_object_pose: np.ndarray,
+):
+    """Select a supported object path with the easiest rigid-weld EEF motion.
+
+    Translation and orientation travel are scored independently. The terminal
+    orientation change is weighted most heavily because the right-arm tracker
+    previously rotated the mug body into the branch while chasing a supported
+    but awkward floating-object pose.
+    """
+    paths = np.asarray(object_paths, dtype=np.float64)
+    if paths.ndim == 2:
+        paths = paths[None, ...]
+    reports = []
+    for candidate_index, object_path in enumerate(paths):
+        eef_path = rigid_weld_eef_poses(
+            object_path, current_eef_pose, current_object_pose
+        )
+        translation_steps = np.linalg.norm(
+            np.diff(eef_path[:, :3], axis=0), axis=-1
+        )
+        rotation_steps = np.asarray(
+            [
+                _quaternion_distance(left, right)
+                for left, right in zip(eef_path[:-1, 3:7], eef_path[1:, 3:7])
+            ]
+        )
+        terminal_rotation = _quaternion_distance(
+            eef_path[0, 3:7], eef_path[-1, 3:7]
+        )
+        translation_length = float(translation_steps.sum())
+        rotation_length = float(rotation_steps.sum())
+        score = (
+            translation_length
+            + 0.05 * rotation_length
+            + 0.20 * terminal_rotation
+            + 0.10 * float(rotation_steps.max(initial=0.0))
+        )
+        reports.append(
+            {
+                "candidate_index": candidate_index,
+                "robot_feasibility_score": score,
+                "eef_translation_length_m": translation_length,
+                "eef_rotation_length_rad": rotation_length,
+                "eef_terminal_rotation_rad": terminal_rotation,
+                "eef_max_rotation_step_rad": float(
+                    rotation_steps.max(initial=0.0)
+                ),
+            }
+        )
+    selected = min(reports, key=lambda report: report["robot_feasibility_score"])
     return selected["candidate_index"], reports
 
 

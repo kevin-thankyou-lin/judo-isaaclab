@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
 import render_hangmug_mpc_comparison as render
 from hangmug_grasp_keyframe_mpc import (
+    _asset_root_usd,
     _branch_frame,
     _quat_to_matrix,
     insert,
@@ -37,6 +38,14 @@ def _parser():
     parser.add_argument("--path-steps", type=int, default=120)
     parser.add_argument("--release-steps", type=int, default=90)
     parser.add_argument("--seed", type=int, default=20260731)
+    parser.add_argument(
+        "--mug-handle-collision-start-index",
+        type=int,
+        default=25,
+        help="Collision indices below this value are treated as cup body.",
+    )
+    parser.add_argument("--body-clearance-m", type=float, default=0.002)
+    parser.add_argument("--clearance-sample-stride", type=int, default=3)
     return parser.parse_args()
 
 
@@ -108,6 +117,10 @@ def main():
     try:
         import torch
         from dc_study.planning import RigidObjectMpcState, create_cpu_batched_planning_runner
+        from judo_isaaclab.collision_screening import (
+            load_usd_collision_mesh,
+            object_path_clearance_reports,
+        )
 
         rng = np.random.default_rng(args.seed)
         runner = create_cpu_batched_planning_runner(
@@ -137,6 +150,13 @@ def main():
         branch_rotation = (
             _quat_to_matrix(tree_pose[3:7].detach().cpu().numpy()) @ branch_local
         ).astype(np.float32)
+        mug_usd = _asset_root_usd(args.target_mug)
+        tree_usd = _asset_root_usd(args.target_mug_tree)
+        mug_body_mesh = load_usd_collision_mesh(
+            mug_usd,
+            tuple(range(args.mug_handle_collision_start_index)),
+        )
+        tree_mesh = load_usd_collision_mesh(tree_usd)
 
         # Parameters: target xyz, target rotation-vector xyz, clearance radial yz,
         # all in the matched branch frame. Candidate zero is always the exact seed.
@@ -153,6 +173,11 @@ def main():
         best = None
         best_path = None
         best_score = -np.inf
+        successful_paths = np.empty((0, args.path_steps, 7), dtype=np.float32)
+        successful_parameters = np.empty((0, 8), dtype=np.float32)
+        successful_body_clearance = np.empty((0,), dtype=np.float32)
+        successful_terminal_drift = np.empty((0,), dtype=np.float32)
+        successful_peak_speed = np.empty((0,), dtype=np.float32)
         env_ids = torch.arange(args.num_envs, device=env.device)
         zero_velocity = torch.zeros((args.num_envs, 6), device=env.device)
 
@@ -175,6 +200,18 @@ def main():
             start_pose[:3] -= env.scene.env_origins[0].detach().cpu().numpy()
             paths = _candidate_paths(
                 start_pose, seed_pose, branch_rotation, parameters, args.path_steps
+            )
+            body_clearance_reports = object_path_clearance_reports(
+                paths,
+                tree_pose=tree_pose.detach().cpu().numpy(),
+                object_mesh=mug_body_mesh,
+                tree_mesh=tree_mesh,
+                required_clearance_m=args.body_clearance_m,
+                sample_stride=args.clearance_sample_stride,
+            )
+            geometry_valid = np.asarray(
+                [report["valid"] for report in body_clearance_reports],
+                dtype=bool,
             )
             mug = env.scene["mug"]
             for step in range(args.path_steps):
@@ -206,13 +243,15 @@ def main():
             drift = torch.linalg.vector_norm(
                 terminal_pose[:, :3] - initial_pose[:, :3], dim=-1
             )
-            success = env.stage3_success.detach().cpu().numpy()
+            physical_success = env.stage3_success.detach().cpu().numpy()
+            success = np.logical_and(physical_success, geometry_valid)
             scores = _score(
                 success,
                 drift.cpu().numpy(),
                 peak_speed.cpu().numpy(),
                 terminal_pose[:, 2].cpu().numpy(),
             )
+            scores = np.where(geometry_valid, scores, -1.0e6)
             order = np.argsort(scores)[::-1]
             elites = parameters[order[: args.num_elites]]
             mean = elites.mean(axis=0)
@@ -222,13 +261,35 @@ def main():
                 best_score = float(scores[winner])
                 best = parameters[winner].copy()
                 best_path = paths[winner].copy()
+            successful_indices = np.flatnonzero(success)
+            if len(successful_indices):
+                successful_paths = paths[successful_indices].copy()
+                successful_parameters = parameters[successful_indices].copy()
+                successful_body_clearance = np.asarray(
+                    [
+                        body_clearance_reports[index]["minimum_clearance_m"]
+                        for index in successful_indices
+                    ],
+                    dtype=np.float32,
+                )
+                successful_terminal_drift = (
+                    drift[successful_indices].detach().cpu().numpy()
+                )
+                successful_peak_speed = (
+                    peak_speed[successful_indices].detach().cpu().numpy()
+                )
             summary = {
                 "iteration": iteration,
                 "success_count": int(success.sum()),
+                "physical_success_count": int(physical_success.sum()),
+                "body_clearance_valid_count": int(geometry_valid.sum()),
                 "best_score": float(scores[winner]),
                 "best_terminal_drift_m": float(drift[winner]),
                 "best_peak_speed_m_s": float(peak_speed[winner]),
                 "best_parameters": parameters[winner].tolist(),
+                "best_body_clearance_m": float(
+                    body_clearance_reports[winner]["minimum_clearance_m"]
+                ),
             }
             iteration_results.append(summary)
             print("FLOATING_SUPPORT_ITERATION=" + json.dumps(summary, sort_keys=True))
@@ -244,10 +305,18 @@ def main():
                 "release_steps": args.release_steps,
                 "robot_tracking_used": False,
                 "cold_reset_each_iteration": True,
+                "semantic_collision_contract": (
+                    "cup body never contacts tree; handle contact allowed"
+                ),
+                "mug_body_collision_indices": list(
+                    range(args.mug_handle_collision_start_index)
+                ),
+                "required_body_clearance_m": args.body_clearance_m,
             },
             "seed_pose": seed_pose.tolist(),
             "best_score": best_score,
-            "best_parameters": best.tolist(),
+            "best_parameters": None if best is None else best.tolist(),
+            "successful_supported_paths": int(len(successful_paths)),
             "iterations": iteration_results,
         }
         with open(args.result_json, "w", encoding="utf-8") as stream:
@@ -258,6 +327,11 @@ def main():
             best_parameters=best,
             seed_pose=seed_pose,
             branch_rotation=branch_rotation,
+            successful_object_paths=successful_paths,
+            successful_parameters=successful_parameters,
+            successful_body_clearance_m=successful_body_clearance,
+            successful_terminal_drift_m=successful_terminal_drift,
+            successful_peak_speed_m_s=successful_peak_speed,
         )
         print("FLOATING_SUPPORT_FINAL=" + json.dumps(result, sort_keys=True))
         if result["status"] != "passed":

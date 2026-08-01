@@ -259,12 +259,23 @@ questions that an end-effector-only optimizer otherwise conflates:
 1. `examples/search_floating_object_hang.py` treats the mug as a controlled
    six-DoF floating body. It searches continuous beyond-tip, tangent-seat paths
    and accepts a candidate only when the normal coded stage-3 predicate remains
-   true after release.
+   true after release and the cup-body collision meshes remain clear of the
+   tree. The handle collision meshes are deliberately excluded from this gate.
 2. `--insert-reference-mode floating_object --insert-object-path-npz PATH`
    maps the validated mug path through the live mug-to-gripper transform into
    right-EEF targets.
 3. The normal batched MPC and uninterrupted renderer determine whether the
    robot can realize the path and whether the final task still succeeds.
+
+For a rigid transport grasp, `--right-grasp-assist fixed_joint` preserves the
+live mug-to-wrist transform until the right gripper opens. This prevents
+contact-only grasp slip from rotating the cup body into the tree. Final
+acceptance uses exact FCL mesh intersections: the cup body must be clear during
+approach/insertion and at the terminal stable hang. Transient cup/tree contact
+is reported but allowed after release starts, while the mug physically settles
+onto the branch. The `mug_012` / `mug_tree_037` proof had zero insertion
+intersections, 16 transient release/settling intersection frames, zero terminal
+intersection, coded stage-3 success for 30 steps, and zero terminal speed.
 
 `examples/validate_floating_object_hang.py` is the focused one-environment
 release check. A cold teleport to a geometrically plausible pose is expected

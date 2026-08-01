@@ -16,6 +16,7 @@ from hangmug_grasp_keyframe_mpc import (
     _expand_task_space_program,
     _eef_target_for_mug_target,
     _initialize_task_stage,
+    _mug_body_branch_clearance,
     _objective_components,
     _pose_compose,
     _pose_inverse,
@@ -39,6 +40,22 @@ class _FillValue:
 
     def fill_(self, value):
         self.value = value
+
+
+def test_mug_body_branch_clearance_distinguishes_collision_and_detour():
+    positions = np.asarray([[[0.02, 0.0, 0.0], [0.02, 0.04, 0.0]]])
+    rotations = np.broadcast_to(np.eye(3), (1, 2, 3, 3)).copy()
+    body_points = np.asarray([[0.0, 0.0, 0.0]])
+
+    clearance = _mug_body_branch_clearance(
+        positions,
+        rotations,
+        body_points,
+        branch_length=0.08,
+        branch_radius=0.01,
+    )
+
+    np.testing.assert_allclose(clearance, [[-0.01, 0.03]])
 
 
 def test_initial_task_stage_restores_phase_latches_only():
@@ -407,6 +424,50 @@ def test_repeat_verified_optimizer_mean_replaces_failing_raw_sample():
     assert _selected_candidate_group(groups) == "optimized_mean"
     groups["best_sample"]["acceptance_success_count"] = 8
     assert _selected_candidate_group(groups) == "best_sample"
+
+
+def test_hang_release_promotes_slowest_fully_successful_candidate():
+    groups = {
+        "nominal": {
+            "acceptance_success_count": 8,
+            "count": 8,
+            "keyframe_mug_linear_speed_m_s_max": 0.01,
+        },
+        "optimized_mean": {
+            "acceptance_success_count": 7,
+            "count": 8,
+            "keyframe_mug_linear_speed_m_s_max": 0.005,
+        },
+        "best_sample": {
+            "acceptance_success_count": 8,
+            "count": 8,
+            "keyframe_mug_linear_speed_m_s_max": 0.04,
+        },
+    }
+
+    assert _selected_candidate_group(groups, "hang_complete") == "nominal"
+
+
+def test_hang_release_fallback_promotes_most_repeatable_candidate():
+    groups = {
+        "nominal": {
+            "acceptance_success_count": 3,
+            "count": 4,
+            "keyframe_mug_linear_speed_m_s_max": 0.0,
+        },
+        "optimized_mean": {
+            "acceptance_success_count": 3,
+            "count": 4,
+            "keyframe_mug_linear_speed_m_s_max": 0.02,
+        },
+        "best_sample": {
+            "acceptance_success_count": 2,
+            "count": 4,
+            "keyframe_mug_linear_speed_m_s_max": 0.01,
+        },
+    }
+
+    assert _selected_candidate_group(groups, "hang_complete") == "nominal"
 
 
 def test_hang_completion_uses_existing_stable_task_latch(rollout_inputs):

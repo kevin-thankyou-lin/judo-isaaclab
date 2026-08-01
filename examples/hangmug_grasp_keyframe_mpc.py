@@ -348,6 +348,18 @@ def _parser():
         help="Control-step stride used for pre-insertion mesh screening.",
     )
     parser.add_argument(
+        "--insert-mug-handle-collision-start-index", type=int, default=25
+    )
+    parser.add_argument(
+        "--insert-body-clearance-m", type=float, default=0.002
+    )
+    parser.add_argument(
+        "--insert-branch-collision-radius-m", type=float, default=0.012
+    )
+    parser.add_argument(
+        "--insert-body-collision-weight", type=float, default=1000.0
+    )
+    parser.add_argument(
         "--insert-anchor-state",
         type=int,
         default=HANGMUG_INSERT_ANCHOR_STATE,
@@ -450,6 +462,12 @@ def _parser():
     parser.add_argument("--right-joint-jerk-weight", type=float, default=0.0)
     parser.add_argument("--friction-high", type=float, default=30.0)
     parser.add_argument("--friction-low", type=float, default=0.5)
+    parser.add_argument(
+        "--right-grasp-assist",
+        choices=("none", "friction", "fixed_joint"),
+        default="none",
+        help="Optional right-hand friction assist for rigid-weld tracking.",
+    )
     parser.add_argument(
         "--tree-offset-xyz",
         type=float,
@@ -798,6 +816,12 @@ def _encode_sensors(env):
             env.stage3_success,
         )
     ]
+    right_assist = env.grasp_assists.get("right")
+    right_assist_engaged = (
+        torch.zeros((env.num_envs, 1), device=env.device)
+        if right_assist is None
+        else right_assist.engaged.float().reshape(-1, 1)
+    )
     return (
         torch.cat(
             (
@@ -807,6 +831,7 @@ def _encode_sensors(env):
                 *right_forces,
                 right_grasp,
                 *stages,
+                right_assist_engaged,
             ),
             dim=1,
         )
@@ -854,6 +879,15 @@ def _initialize_task_stage(env, stage):
         tensor = getattr(env, name, None)
         if tensor is not None:
             tensor.fill_(value)
+
+
+def _update_right_grasp_assist(env):
+    """Drive an optional right assist from the live right-grasp predicate."""
+    assist = getattr(env, "grasp_assists", {}).get("right")
+    if assist is None:
+        return
+    _, right_grasping = env.robot.is_grasping()
+    assist.update(engage=right_grasping, disable=~right_grasping)
 
 
 def _eef_pose_relative(env, arm_name):
@@ -1760,6 +1794,31 @@ def _mug_in_branch_frame(rows, points):
     return position, rotation
 
 
+def _mug_body_branch_clearance(
+    relative_position,
+    relative_rotation,
+    mug_body_points,
+    branch_length,
+    branch_radius,
+):
+    """Approximate cup-body clearance from the matched branch cylinder."""
+    points = (
+        relative_position[..., None, :]
+        + np.einsum(
+            "...ij,pj->...pi",
+            relative_rotation,
+            np.asarray(mug_body_points, dtype=np.float32),
+        )
+    )
+    axial = points[..., 0]
+    radial = np.linalg.norm(points[..., 1:3], axis=-1)
+    near_segment = (axial >= -branch_radius) & (
+        axial <= branch_length + branch_radius
+    )
+    clearance = np.where(near_segment, radial - branch_radius, np.inf)
+    return clearance.min(axis=-1)
+
+
 def _objective_components(
     states,
     sensors,
@@ -1777,6 +1836,10 @@ def _objective_components(
     right_joint_path_weight=0.0,
     right_joint_accel_weight=0.0,
     right_joint_jerk_weight=0.0,
+    mug_body_points=None,
+    branch_collision_radius_m=0.012,
+    required_body_clearance_m=0.002,
+    body_collision_weight=1000.0,
 ):
     world_position_error = np.linalg.norm(
         states[:, :, :3] - reference[None, :, :3], axis=-1
@@ -1888,6 +1951,25 @@ def _objective_components(
             axis=-1,
         )
     )
+    body_branch_clearance = np.full_like(position_error, np.inf)
+    if (
+        target_name == "inserted_held"
+        and mug_body_points is not None
+        and target_branch_points is not None
+    ):
+        branch_length = float(
+            np.linalg.norm(
+                np.asarray(target_branch_points, dtype=np.float32)[1]
+                - np.asarray(target_branch_points, dtype=np.float32)[0]
+            )
+        )
+        body_branch_clearance = _mug_body_branch_clearance(
+            relative_position,
+            relative_rotation,
+            mug_body_points,
+            branch_length,
+            branch_collision_radius_m,
+        )
     right_joint_error = np.sqrt(
         np.mean(
             np.square(
@@ -1925,6 +2007,11 @@ def _objective_components(
     stage1 = sensors[:, :, 7]
     stage2 = sensors[:, :, 8]
     stage3 = sensors[:, :, 9]
+    right_assist = (
+        sensors[:, :, 10]
+        if sensors.shape[-1] > 10
+        else np.zeros_like(right_grasp)
+    )
     mug_linear_speed = np.linalg.norm(states[:, :, 7:10], axis=-1)
     post_keyframe = slice(keyframe_offset, None)
     rewards = (
@@ -1939,6 +2026,15 @@ def _objective_components(
         -right_joint_accel_weight * right_joint_accel
         -right_joint_jerk_weight * right_joint_jerk
     )
+    if target_name == "inserted_held" and mug_body_points is not None:
+        body_clearance_deficit = np.maximum(
+            required_body_clearance_m - body_branch_clearance,
+            0.0,
+        )
+        rewards -= body_collision_weight * (
+            body_clearance_deficit.max(axis=1)
+            + 0.25 * body_clearance_deficit.mean(axis=1)
+        )
     if target_name == "left_grasp":
         target_success = left_grasp
         rewards += (
@@ -1981,6 +2077,9 @@ def _objective_components(
                 rotation_error <= TREE_INSERTION_ROTATION_TOLERANCE_RAD
             )
             target_success *= insertion_depth_supported
+            target_success *= (
+                body_branch_clearance >= required_body_clearance_m
+            )
         rewards += (
             3.0 * stage2[:, keyframe_offset]
             +3.0 * right_grasp[:, keyframe_offset]
@@ -2036,6 +2135,10 @@ def _objective_components(
         "keyframe_insertion_depth_supported": insertion_depth_supported[
             :, keyframe_offset
         ],
+        "keyframe_body_branch_clearance_m": body_branch_clearance[
+            :, keyframe_offset
+        ],
+        "minimum_body_branch_clearance_m": body_branch_clearance.min(axis=1),
         "keyframe_left_joint_rms_rad": left_joint_error[:, keyframe_offset],
         "keyframe_right_joint_rms_rad": right_joint_error[:, keyframe_offset],
         "action_delta_rms": action_delta,
@@ -2045,6 +2148,7 @@ def _objective_components(
         "keyframe_target_success": target_success[:, keyframe_offset] > 0.5,
         "keyframe_left_grasp": left_grasp[:, keyframe_offset] > 0.5,
         "keyframe_right_grasp": right_grasp[:, keyframe_offset] > 0.5,
+        "keyframe_right_assist": right_assist[:, keyframe_offset] > 0.5,
         "keyframe_left_assist": left_assist[:, keyframe_offset] > 0.5,
         "keyframe_stage2": stage2[:, keyframe_offset] > 0.5,
         "post_keyframe_target_fraction": target_success[
@@ -2061,6 +2165,12 @@ def _group_summary(name, rows, components):
     position_vector = components["keyframe_position_error_vector_m"][rows]
     rotation = components["keyframe_rotation_error_rad"][rows]
     depth_supported = components["keyframe_insertion_depth_supported"][rows]
+    keyframe_body_clearance = components[
+        "keyframe_body_branch_clearance_m"
+    ][rows]
+    minimum_body_clearance = components[
+        "minimum_body_branch_clearance_m"
+    ][rows]
     action_delta = components["action_delta_rms"][rows]
     right_joint_path = components["right_joint_path_l2"][rows]
     right_joint_accel = components["right_joint_accel_l2"][rows]
@@ -2068,6 +2178,7 @@ def _group_summary(name, rows, components):
     target_success = components["keyframe_target_success"][rows]
     left_grasp = components["keyframe_left_grasp"][rows]
     right_grasp = components["keyframe_right_grasp"][rows]
+    right_assist = components["keyframe_right_assist"][rows]
     left_assist = components["keyframe_left_assist"][rows]
     stage2 = components["keyframe_stage2"][rows]
     retention = components["post_keyframe_target_fraction"][rows]
@@ -2088,6 +2199,16 @@ def _group_summary(name, rows, components):
         "keyframe_insertion_depth_supported_count": int(
             depth_supported.sum()
         ),
+        "keyframe_body_branch_clearance_m_min": (
+            None
+            if not np.isfinite(keyframe_body_clearance).any()
+            else float(np.min(keyframe_body_clearance))
+        ),
+        "trajectory_body_branch_clearance_m_min": (
+            None
+            if not np.isfinite(minimum_body_clearance).any()
+            else float(np.min(minimum_body_clearance))
+        ),
         "action_delta_rms_mean": float(action_delta.mean()),
         "right_joint_path_l2_mean": float(right_joint_path.mean()),
         "right_joint_path_l2_max": float(right_joint_path.max()),
@@ -2098,6 +2219,7 @@ def _group_summary(name, rows, components):
         "keyframe_target_success_count": int(target_success.sum()),
         "keyframe_left_grasp_count": int(left_grasp.sum()),
         "keyframe_right_grasp_count": int(right_grasp.sum()),
+        "keyframe_right_assist_count": int(right_assist.sum()),
         "keyframe_left_assist_count": int(left_assist.sum()),
         "keyframe_stage2_count": int(stage2.sum()),
         "post_keyframe_target_fraction_mean": float(retention.mean()),
@@ -2112,8 +2234,26 @@ def _subtask_reached(group):
     return group["acceptance_success_count"] == group["count"]
 
 
-def _selected_candidate_group(groups):
-    """Prefer a repeat-verified optimizer mean over a failing raw sample."""
+def _selected_candidate_group(groups, target_name=None):
+    """Promote a repeat-verified candidate suited to the current subtask."""
+    if target_name == "hang_complete":
+        stable = [
+            name for name, group in groups.items() if _subtask_reached(group)
+        ]
+        if stable:
+            return min(
+                stable,
+                key=lambda name: groups[name][
+                    "keyframe_mug_linear_speed_m_s_max"
+                ],
+            )
+        return max(
+            groups,
+            key=lambda name: (
+                groups[name]["acceptance_success_count"],
+                -groups[name]["keyframe_mug_linear_speed_m_s_max"],
+            ),
+        )
     if _subtask_reached(groups["best_sample"]):
         return "best_sample"
     if _subtask_reached(groups["optimized_mean"]):
@@ -2201,6 +2341,12 @@ def main():
         raise ValueError("insert screening radial offset must be positive")
     if args.insert_screening_sample_stride < 1:
         raise ValueError("insert screening sample stride must be positive")
+    if args.insert_body_clearance_m < 0.0:
+        raise ValueError("insert body clearance must be nonnegative")
+    if args.insert_branch_collision_radius_m <= 0.0:
+        raise ValueError("insert branch collision radius must be positive")
+    if args.insert_body_collision_weight < 0.0:
+        raise ValueError("insert body collision weight must be nonnegative")
     motion_weights = (
         args.right_joint_path_weight,
         args.right_joint_accel_weight,
@@ -2236,6 +2382,7 @@ def main():
         from judo_isaaclab.collision_screening import (
             load_usd_collision_mesh,
             rigid_weld_eef_poses,
+            select_robot_feasible_object_path,
             screen_object_paths,
             screen_rigid_weld_paths,
         )
@@ -2245,6 +2392,20 @@ def main():
             "mug": _target_mug_path(args),
             "mug_tree": _target_tree_path(args),
         }
+        mug_body_points = None
+        if args.target_name == "inserted_held":
+            mug_body_mesh = load_usd_collision_mesh(
+                _asset_root_usd(_target_mug_path(args)),
+                tuple(range(args.insert_mug_handle_collision_start_index)),
+            )
+            vertices = np.asarray(mug_body_mesh.vertices, dtype=np.float32)
+            mug_body_points = vertices[
+                np.linspace(
+                    0,
+                    len(vertices) - 1,
+                    min(256, len(vertices)),
+                ).round().astype(int)
+            ]
         assist_config = {
             "left": {
                 "arm": "left_arm",
@@ -2257,6 +2418,28 @@ def main():
                 },
             }
         }
+        if args.right_grasp_assist == "friction":
+            assist_config["right"] = {
+                "arm": "right_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "friction",
+                "friction": {
+                    "high": args.friction_high,
+                    "low": args.friction_low,
+                },
+            }
+        elif args.right_grasp_assist == "fixed_joint":
+            assist_config["right"] = {
+                "arm": "right_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "fixed_joint",
+                "fixed_joint": {
+                    "joint_type": "fixed",
+                    "disable_pair_collision": True,
+                },
+            }
         runner = create_cpu_batched_planning_runner(
             task_name="HangMugOnTree-v0",
             assets_instance_paths=assets,
@@ -2268,7 +2451,7 @@ def main():
             init_joint_pos_randomization=0.0,
             enable_gripper_grasp_clamp=False,
             planning_substep_contact_sensors=True,
-            replicate_physics=True,
+            replicate_physics=args.right_grasp_assist != "fixed_joint",
         )
         runner.env.reset(warm_up=False, seed=args.seed)
         checkpoint, history, nominal, reference, source_history = _load_demo(
@@ -2505,9 +2688,28 @@ def main():
                                 "insert-reference-mode=floating_object"
                             )
                         artifact = np.load(args.insert_object_path_npz)
-                        reference_object_poses = np.asarray(
-                            artifact["best_object_path"], dtype=np.float32
+                        supported_paths = (
+                            np.asarray(
+                                artifact["successful_object_paths"],
+                                dtype=np.float32,
+                            )
+                            if "successful_object_paths" in artifact.files
+                            and artifact["successful_object_paths"].size
+                            else np.asarray(
+                                artifact["best_object_path"],
+                                dtype=np.float32,
+                            )[None, ...]
                         )
+                        selected_object_path, feasibility_reports = (
+                            select_robot_feasible_object_path(
+                                supported_paths,
+                                current_eef_pose=current_eef_pose,
+                                current_object_pose=current_mug_pose,
+                            )
+                        )
+                        reference_object_poses = supported_paths[
+                            selected_object_path
+                        ]
                         if reference_object_poses.shape != (args.horizon, 7):
                             raise ValueError(
                                 "best_object_path shape must match "
@@ -2525,7 +2727,25 @@ def main():
                             "reference_mode": "floating_object",
                             "source": args.insert_object_path_npz,
                             "simulator_validated_support_path": True,
+                            "supported_path_count": int(len(supported_paths)),
+                            "robot_feasible_selected_path": int(
+                                selected_object_path
+                            ),
+                            "robot_feasibility_candidates": (
+                                feasibility_reports
+                            ),
+                            "selected_body_clearance_m": (
+                                None
+                                if "successful_body_clearance_m"
+                                not in artifact.files
+                                else float(
+                                    artifact[
+                                        "successful_body_clearance_m"
+                                    ][selected_object_path]
+                                )
+                            ),
                             "allowed_contact_phase": "tangent_insertion_only",
+                            "allowed_contact_surface": "handle_only",
                         }
                     elif args.insert_rigid_weld_screening:
                         calibrated_target_position = (
@@ -2763,20 +2983,18 @@ def main():
             )
         else:
             task_adapter = None
+        def observe_planning_step(env, phase, _step):
+            if phase == "reset" and args.initial_task_stage != 0:
+                _initialize_task_stage(env, args.initial_task_stage)
+            if args.right_grasp_assist != "none":
+                _update_right_grasp_assist(env)
+
         backend = HistoryConditionedIsaacLabBackend(
             runner,
             state_encoder=_encode_state,
             sensor_encoder=_encode_sensors,
             candidate_action_adapter=task_adapter,
-            step_observer=(
-                None
-                if args.initial_task_stage == 0
-                else lambda env, phase, _step: (
-                    _initialize_task_stage(env, args.initial_task_stage)
-                    if phase == "reset"
-                    else None
-                )
-            ),
+            step_observer=observe_planning_step,
         )
         optimizer_dim = 6 if task_adapter is not None else nominal.shape[1]
         optimizer = CrossEntropyMethod(
@@ -2848,6 +3066,12 @@ def main():
                 right_joint_path_weight=args.right_joint_path_weight,
                 right_joint_accel_weight=args.right_joint_accel_weight,
                 right_joint_jerk_weight=args.right_joint_jerk_weight,
+                mug_body_points=mug_body_points,
+                branch_collision_radius_m=(
+                    args.insert_branch_collision_radius_m
+                ),
+                required_body_clearance_m=args.insert_body_clearance_m,
+                body_collision_weight=args.insert_body_collision_weight,
             )
             iteration_summaries.append(
                 {
@@ -2921,6 +3145,10 @@ def main():
             right_joint_path_weight=args.right_joint_path_weight,
             right_joint_accel_weight=args.right_joint_accel_weight,
             right_joint_jerk_weight=args.right_joint_jerk_weight,
+            mug_body_points=mug_body_points,
+            branch_collision_radius_m=args.insert_branch_collision_radius_m,
+            required_body_clearance_m=args.insert_body_clearance_m,
+            body_collision_weight=args.insert_body_collision_weight,
         )
         groups = {
             "nominal": _group_summary(
@@ -2939,13 +3167,21 @@ def main():
         optimized_executed_actions = executed_evaluation_controls[
             optimized_rows.start
         ]
+        nominal_executed_actions = executed_evaluation_controls[
+            nominal_rows.start
+        ]
         best_executed_actions = executed_evaluation_controls[best_rows.start]
-        selected_group_name = _selected_candidate_group(groups)
+        selected_group_name = _selected_candidate_group(
+            groups, args.target_name
+        )
         best_group = groups[selected_group_name]
         reached = _subtask_reached(best_group)
         if selected_group_name == "optimized_mean":
             selected_knots = plan.optimized_knots
             selected_executed_actions = optimized_executed_actions
+        elif selected_group_name == "nominal":
+            selected_knots = correction_nominal
+            selected_executed_actions = nominal_executed_actions
         else:
             selected_knots = best_sample
             selected_executed_actions = best_executed_actions
@@ -3028,6 +3264,7 @@ def main():
                 "right_gripper_held_through_target": (
                     args.target_name == "inserted_held"
                 ),
+                "right_grasp_assist": args.right_grasp_assist,
                 "tree_offset_xyz_m": list(args.tree_offset_xyz),
                 "tree_yaw_deg": args.tree_yaw_deg,
                 "mug_offset_xyz_m": list(args.mug_offset_xyz),
@@ -3152,6 +3389,16 @@ def main():
                     "clearance_fraction": args.insert_clearance_fraction,
                     "approach_fraction": args.insert_approach_fraction,
                     "seat_fraction": args.insert_seat_fraction,
+                    "body_clearance_m": args.insert_body_clearance_m,
+                    "branch_collision_radius_m": (
+                        args.insert_branch_collision_radius_m
+                    ),
+                    "body_collision_weight": (
+                        args.insert_body_collision_weight
+                    ),
+                    "body_collision_indices": list(
+                        range(args.insert_mug_handle_collision_start_index)
+                    ),
                     "rigid_weld_screening": insert_collision_screening,
                     "reference_mode": args.insert_reference_mode,
                     "left_visibility_anchor_state": (
@@ -3462,6 +3709,7 @@ def main():
                 target_mug_tree=np.asarray(_target_tree_path(args)),
                 source_mug=np.asarray(_source_mug_path(args)),
                 target_mug=np.asarray(_target_mug_path(args)),
+                right_grasp_assist=np.asarray(args.right_grasp_assist),
                 tree_root_z_adjustment=np.float32(
                     _tree_root_z_adjustment(args)
                 ),

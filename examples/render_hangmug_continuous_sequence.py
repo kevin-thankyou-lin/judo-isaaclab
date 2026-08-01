@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import traceback
+from pathlib import Path
 
 import numpy as np
 
@@ -33,8 +34,28 @@ def _parser():
         default=("top_camera", "left_wrist_camera", "right_wrist_camera"),
     )
     parser.add_argument("--draw-coordinate-axes", action="store_true")
+    parser.add_argument(
+        "--mug-handle-collision-start-index", type=int, default=25
+    )
+    parser.add_argument("--require-body-clearance-m", type=float, default=0.002)
+    parser.add_argument("--clearance-sample-stride", type=int, default=1)
+    parser.add_argument(
+        "--right-grasp-assist",
+        choices=("none", "friction", "fixed_joint"),
+        default="none",
+    )
     parser.add_argument("--seed", type=int, default=20260731)
     return parser.parse_args()
+
+
+def _asset_root_usd(asset_path):
+    path = Path(asset_path)
+    if path.is_file():
+        return str(path)
+    candidate = path / f"{path.name}.usd"
+    if not candidate.is_file():
+        raise ValueError(f"asset root USD does not exist: {candidate}")
+    return str(candidate)
 
 
 def _renderer_args(args, controls_path):
@@ -97,6 +118,34 @@ def _validate_sequence(stages):
     return boundaries
 
 
+def _update_right_grasp_assist(env):
+    assist = getattr(env, "grasp_assists", {}).get("right")
+    if assist is None:
+        return
+    _, right_grasping = env.robot.is_grasping()
+    assist.update(engage=right_grasping, disable=~right_grasping)
+
+
+def _classify_release_collisions(
+    collision_steps, *, release_start_step, terminal_step
+):
+    """Separate forbidden insertion contact from transient release settling."""
+    collision_steps = [int(step) for step in collision_steps]
+    pre_release = [
+        step for step in collision_steps if step < release_start_step
+    ]
+    release = [
+        step for step in collision_steps if step >= release_start_step
+    ]
+    return {
+        "release_start_step": int(release_start_step),
+        "pre_release_collision_steps": pre_release,
+        "release_settling_collision_steps": release,
+        "pre_release_valid": not pre_release,
+        "terminal_clear": int(terminal_step) not in collision_steps,
+    }
+
+
 def main():
     args = _parser()
     sys.path.insert(0, os.path.abspath(args.gear_repo))
@@ -113,6 +162,34 @@ def main():
             create_cpu_batched_planning_runner,
         )
 
+        assist_config = {
+            "left": {
+                "arm": "left_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "friction",
+                "friction": {"high": 30.0, "low": 0.5},
+            }
+        }
+        if args.right_grasp_assist == "friction":
+            assist_config["right"] = {
+                "arm": "right_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "friction",
+                "friction": {"high": 30.0, "low": 0.5},
+            }
+        elif args.right_grasp_assist == "fixed_joint":
+            assist_config["right"] = {
+                "arm": "right_arm",
+                "target": {"object": "mug"},
+                "grasp_delay_s": 0.0,
+                "mechanism": "fixed_joint",
+                "fixed_joint": {
+                    "joint_type": "fixed",
+                    "disable_pair_collision": True,
+                },
+            }
         runner = create_cpu_batched_planning_runner(
             task_name="HangMugOnTree-v0",
             assets_instance_paths={
@@ -122,15 +199,7 @@ def main():
             num_envs=2,
             observation_modalities=["rgb", "proprioception"],
             enable_cameras=True,
-            grasp_assist_config={
-                "left": {
-                    "arm": "left_arm",
-                    "target": {"object": "mug"},
-                    "grasp_delay_s": 0.0,
-                    "mechanism": "friction",
-                    "friction": {"high": 30.0, "low": 0.5},
-                }
-            },
+            grasp_assist_config=assist_config,
             objects_randomization=None,
             init_joint_pos_randomization=0.0,
             enable_gripper_grasp_clamp=False,
@@ -169,12 +238,16 @@ def main():
             },
             is_relative=True,
         )
+        if args.right_grasp_assist != "none":
+            _update_right_grasp_assist(env)
         if first["initial_task_stage"]:
             render._initialize_task_stage(
                 env, first["initial_task_stage"]
             )
         for action in first["history"]:
             env.step(action.reshape(1, -1).expand(2, -1))
+            if args.right_grasp_assist != "none":
+                _update_right_grasp_assist(env)
 
         traces = []
         frame_stats = []
@@ -198,6 +271,8 @@ def main():
                     _, _, terminated, truncated, _ = env.step(
                         stage["candidate"][:, local_step]
                     )
+                    if args.right_grasp_assist != "none":
+                        _update_right_grasp_assist(env)
                     if bool(terminated.any()) or bool(truncated.any()):
                         raise RuntimeError(
                             f"unexpected done at global step {global_step}"
@@ -245,6 +320,63 @@ def main():
                 {"name": stage["target_name"], **acceptance}
             )
         final_acceptance = stage_acceptance[-1]
+        from judo_isaaclab.collision_screening import (
+            load_usd_collision_mesh,
+            object_path_collision_reports,
+            object_path_clearance_reports,
+        )
+
+        mpc_mug_path = np.asarray(
+            [sample["mug_pose"][1] for sample in traces], dtype=np.float32
+        )
+        mpc_tree_pose = np.asarray(
+            traces[0]["tree_pose"][1], dtype=np.float32
+        )
+        body_mesh = load_usd_collision_mesh(
+            _asset_root_usd(args.target_mug),
+            tuple(range(args.mug_handle_collision_start_index)),
+        )
+        tree_mesh = load_usd_collision_mesh(
+            _asset_root_usd(args.target_mug_tree)
+        )
+        body_clearance = object_path_clearance_reports(
+            mpc_mug_path,
+            tree_pose=mpc_tree_pose,
+            object_mesh=body_mesh,
+            tree_mesh=tree_mesh,
+            required_clearance_m=args.require_body_clearance_m,
+            sample_stride=args.clearance_sample_stride,
+        )[0]
+        body_collision = object_path_collision_reports(
+            mpc_mug_path,
+            tree_pose=mpc_tree_pose,
+            object_mesh=body_mesh,
+            tree_mesh=tree_mesh,
+            sample_stride=args.clearance_sample_stride,
+        )[0]
+        release_stage_index = next(
+            index
+            for index, stage in enumerate(stages)
+            if stage["target_name"] == "hang_complete"
+        )
+        with np.load(args.controls_npz[release_stage_index]) as controls:
+            release_start_fraction = float(
+                controls["release_start_fraction"]
+            )
+        release_range = stage_trace_ranges[release_stage_index]
+        release_start_step = release_range["trace_start"] + int(
+            np.ceil(
+                release_start_fraction
+                * boundaries[release_stage_index]["horizon"]
+            )
+        )
+        body_collision.update(
+            _classify_release_collisions(
+                body_collision["collision_steps"],
+                release_start_step=release_start_step,
+                terminal_step=len(mpc_mug_path) - 1,
+            )
+        )
         video = render._probe(args.output)
         checks = {
             "one_reset": True,
@@ -255,6 +387,13 @@ def main():
                 and stages[-1]["target_mug_tree"] == args.target_mug_tree
             ),
             "coded_task_success": bool(final_acceptance["complete"][1]),
+            "cup_body_clear_before_release": bool(
+                body_collision["pre_release_valid"]
+            ),
+            "cup_body_clear_terminal": bool(
+                body_collision["terminal_clear"]
+            ),
+            "cup_body_margin_met": bool(body_clearance["valid"]),
             "all_mpc_stages_complete": all(
                 bool(stage["complete"][1]) for stage in stage_acceptance
             ),
@@ -276,7 +415,7 @@ def main():
         required_checks = {
             name: value
             for name, value in checks.items()
-            if name != "all_mpc_stages_complete"
+            if name not in {"all_mpc_stages_complete", "cup_body_margin_met"}
         }
         result = {
             "status": "passed" if all(required_checks.values()) else "failed",
@@ -290,7 +429,14 @@ def main():
                 "target_mug_tree": args.target_mug_tree,
                 "stages": boundaries,
                 "stage_trace_ranges": stage_trace_ranges,
-                "acceptance_authority": "coded_task_success",
+                "acceptance_authority": (
+                    "coded_task_success_and_exact_semantic_collision_gate"
+                ),
+                "semantic_collision_contract": (
+                    "cup body clear during approach/insertion and at terminal; "
+                    "handle contact and transient release settling allowed"
+                ),
+                "right_grasp_assist": args.right_grasp_assist,
             },
             "terminal": {
                 "left_grasp": traces[-1]["left_grasp"],
@@ -300,6 +446,8 @@ def main():
                 "mug_pose": traces[-1]["mug_pose"],
             },
             "hang_acceptance": final_acceptance,
+            "body_clearance": body_clearance,
+            "body_collision": body_collision,
             "stage_acceptance": stage_acceptance,
             "checks": checks,
             "video": video,
