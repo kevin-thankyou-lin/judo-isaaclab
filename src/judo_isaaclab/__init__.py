@@ -30,6 +30,8 @@ _EXPORTS = {
     "PutPotSkillProgram": "judo_isaaclab.put_pot",
     "RigidSupportGeometry": "judo_isaaclab.put_pot",
     "support_aligned_pot_pose": "judo_isaaclab.put_pot",
+    "HangMugSkillProgram": "judo_isaaclab.hang_mug",
+    "RigidAssetGeometry": "judo_isaaclab.hang_mug",
     "AttemptEvaluation": "judo_isaaclab.evidence_harness",
     "EvidenceContract": "judo_isaaclab.evidence_harness",
     "EvidenceLedger": "judo_isaaclab.evidence_harness",
