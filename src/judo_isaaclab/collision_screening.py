@@ -75,6 +75,21 @@ def rigid_weld_object_poses(
     )
 
 
+def rigid_weld_eef_poses(
+    object_path: np.ndarray,
+    current_eef_pose: np.ndarray,
+    current_object_pose: np.ndarray,
+) -> np.ndarray:
+    """Map an object-first path to EEF poses using the live grasp transform."""
+    object_path = np.asarray(object_path, dtype=np.float64)
+    object_to_eef = np.linalg.inv(_pose_matrix(current_object_pose)) @ _pose_matrix(
+        current_eef_pose
+    )
+    return np.stack(
+        [_matrix_pose(_pose_matrix(pose) @ object_to_eef) for pose in object_path]
+    )
+
+
 def _triangulate(counts, indices, offset):
     triangles = []
     cursor = 0
@@ -160,11 +175,9 @@ def _mesh_clearance(object_points, object_pose, tree_points, tree_query):
     return float(min(object_to_tree.min(), tree_to_object.min()))
 
 
-def screen_rigid_weld_paths(
-    paths: list[np.ndarray],
+def screen_object_paths(
+    object_paths: list[np.ndarray],
     *,
-    current_eef_pose: np.ndarray,
-    current_object_pose: np.ndarray,
     tree_pose: np.ndarray,
     object_mesh,
     tree_mesh,
@@ -182,10 +195,7 @@ def screen_rigid_weld_paths(
     tree_query = cKDTree(tree_points)
     object_points = _sample_surface_points(object_mesh, maximum_vertices)
     reports = []
-    for candidate_index, path in enumerate(paths):
-        object_poses = rigid_weld_object_poses(
-            path, current_eef_pose, current_object_pose
-        )
+    for candidate_index, object_poses in enumerate(object_paths):
         steps = list(range(0, preinsert_end_step + 1, sample_stride))
         if steps[-1] != preinsert_end_step:
             steps.append(preinsert_end_step)
@@ -198,7 +208,7 @@ def screen_rigid_weld_paths(
             )
             for step in steps
         ]
-        displacement = np.diff(path[:, :3], axis=0)
+        displacement = np.diff(object_poses[:, :3], axis=0)
         length = float(np.linalg.norm(displacement, axis=-1).sum())
         minimum = float(min(clearances))
         reports.append(
@@ -223,3 +233,33 @@ def screen_rigid_weld_paths(
         )
     )
     return selected["candidate_index"], reports
+
+
+def screen_rigid_weld_paths(
+    paths: list[np.ndarray],
+    *,
+    current_eef_pose: np.ndarray,
+    current_object_pose: np.ndarray,
+    tree_pose: np.ndarray,
+    object_mesh,
+    tree_mesh,
+    preinsert_end_step: int,
+    required_clearance_m: float = 0.002,
+    sample_stride: int = 5,
+    maximum_vertices: int = 1500,
+):
+    """Screen EEF paths after propagating their rigidly grasped object."""
+    object_paths = [
+        rigid_weld_object_poses(path, current_eef_pose, current_object_pose)
+        for path in paths
+    ]
+    return screen_object_paths(
+        object_paths,
+        tree_pose=tree_pose,
+        object_mesh=object_mesh,
+        tree_mesh=tree_mesh,
+        preinsert_end_step=preinsert_end_step,
+        required_clearance_m=required_clearance_m,
+        sample_stride=sample_stride,
+        maximum_vertices=maximum_vertices,
+    )

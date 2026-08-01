@@ -250,6 +250,27 @@ and 0.0496 rad. This checks target-frame equivariance, not changed geometry.
 See `validation/hangmug_corresponded_branch_hang_complete_mpc.json` and
 `validation/hangmug_corresponded_branch_hang_complete_mpc_video.json`.
 
+## Object-first insertion decomposition
+
+For contact-sensitive insertion, the semantic correspondence is a proposal,
+not a guaranteed supported mug pose. The object-first lane separates three
+questions that an end-effector-only optimizer otherwise conflates:
+
+1. `examples/search_floating_object_hang.py` treats the mug as a controlled
+   six-DoF floating body. It searches continuous beyond-tip, tangent-seat paths
+   and accepts a candidate only when the normal coded stage-3 predicate remains
+   true after release.
+2. `--insert-reference-mode floating_object --insert-object-path-npz PATH`
+   maps the validated mug path through the live mug-to-gripper transform into
+   right-EEF targets.
+3. The normal batched MPC and uninterrupted renderer determine whether the
+   robot can realize the path and whether the final task still succeeds.
+
+`examples/validate_floating_object_hang.py` is the focused one-environment
+release check. A cold teleport to a geometrically plausible pose is expected
+to fail when it creates overlap impulses; support-path validation must include
+the continuous approach and release, not only the terminal pose.
+
 ## Actual taller-tree adaptation
 
 `examples/create_taller_mugtree_asset.py` creates a real USD variant whose

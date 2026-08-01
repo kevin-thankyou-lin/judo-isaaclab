@@ -314,6 +314,22 @@ def _parser():
         ),
     )
     parser.add_argument(
+        "--insert-reference-mode",
+        choices=("eef", "floating_object"),
+        default="eef",
+        help=(
+            "Plan insertion in EEF space or as a free-floating mug path "
+            "mapped back through the live grasp transform."
+        ),
+    )
+    parser.add_argument(
+        "--insert-object-path-npz",
+        help=(
+            "Use a simulator-validated best_object_path from the floating "
+            "support search, then map it through the live grasp transform."
+        ),
+    )
+    parser.add_argument(
         "--insert-collision-clearance-m",
         type=float,
         default=0.002,
@@ -2219,6 +2235,8 @@ def main():
         )
         from judo_isaaclab.collision_screening import (
             load_usd_collision_mesh,
+            rigid_weld_eef_poses,
+            screen_object_paths,
             screen_rigid_weld_paths,
         )
 
@@ -2292,6 +2310,7 @@ def main():
         grasp_contact_fraction_used = None
         insert_collision_screening = None
         insert_clearance_candidates = []
+        reference_object_poses = None
         base_controls = nominal
         if args.search_space == "task" and args.task_controller in (
             "pose_tracking",
@@ -2461,20 +2480,66 @@ def main():
                         "approach_fraction": args.insert_approach_fraction,
                         "seat_fraction": args.insert_seat_fraction,
                     }
+                    path_start_pose = current_eef_pose
+                    path_target_pose = target_eef_pose
+                    if args.insert_reference_mode == "floating_object":
+                        path_start_pose = current_mug_pose
+                        path_target_pose = target_mug_pose
+                        insert_kwargs["target_position_offset_branch"] = (
+                            0.0,
+                            0.0,
+                            0.0,
+                        )
+                        insert_kwargs["target_rotation_offset_branch"] = (
+                            0.0,
+                            0.0,
+                            0.0,
+                        )
                     insert_clearance_candidates = [
                         args.insert_clearance_offset_branch
                     ]
-                    if args.insert_rigid_weld_screening:
+                    if args.insert_object_path_npz:
+                        if args.insert_reference_mode != "floating_object":
+                            raise ValueError(
+                                "insert-object-path-npz requires "
+                                "insert-reference-mode=floating_object"
+                            )
+                        artifact = np.load(args.insert_object_path_npz)
+                        reference_object_poses = np.asarray(
+                            artifact["best_object_path"], dtype=np.float32
+                        )
+                        if reference_object_poses.shape != (args.horizon, 7):
+                            raise ValueError(
+                                "best_object_path shape must match "
+                                f"({args.horizon}, 7), got "
+                                f"{reference_object_poses.shape}"
+                            )
+                        reference_eef_poses = rigid_weld_eef_poses(
+                            reference_object_poses,
+                            current_eef_pose,
+                            current_mug_pose,
+                        ).astype(np.float32)
+                        target_mug_pose = reference_object_poses[-1].copy()
+                        target_eef_pose = reference_eef_poses[-1].copy()
+                        insert_collision_screening = {
+                            "reference_mode": "floating_object",
+                            "source": args.insert_object_path_npz,
+                            "simulator_validated_support_path": True,
+                            "allowed_contact_phase": "tangent_insertion_only",
+                        }
+                    elif args.insert_rigid_weld_screening:
                         calibrated_target_position = (
-                            target_eef_pose[:3]
+                            path_target_pose[:3]
                             + branch_rotation_world
                             @ np.asarray(
-                                args.insert_eef_position_offset_branch,
+                                insert_kwargs[
+                                    "target_position_offset_branch"
+                                ],
                                 dtype=np.float32,
                             )
                         )
                         start_offset = branch_rotation_world.T @ (
-                            current_eef_pose[:3] - calibrated_target_position
+                            path_start_pose[:3] - calibrated_target_position
                         )
                         approach_offset = np.asarray(
                             args.insert_approach_offset_branch,
@@ -2491,30 +2556,30 @@ def main():
                             (clearance_x, 0.0, radial),
                             (clearance_x, 0.0, -radial),
                         ]
-                    insert_paths = [
-                        insert(
-                            current_eef_pose,
-                            target_eef_pose,
-                            branch_rotation_world,
-                            args.horizon,
-                            clearance_offset_branch=clearance_offset,
-                            **insert_kwargs,
-                        )
-                        for clearance_offset in insert_clearance_candidates
-                    ]
-                    if args.insert_rigid_weld_screening:
-                        selected_index, reports = screen_rigid_weld_paths(
-                            insert_paths,
-                            current_eef_pose=current_eef_pose,
-                            current_object_pose=current_mug_pose,
-                            tree_pose=target_tree_pose,
-                            object_mesh=load_usd_collision_mesh(
+                    if not args.insert_object_path_npz:
+                        insert_paths = [
+                            insert(
+                                path_start_pose,
+                                path_target_pose,
+                                branch_rotation_world,
+                                args.horizon,
+                                clearance_offset_branch=clearance_offset,
+                                **insert_kwargs,
+                            )
+                            for clearance_offset in insert_clearance_candidates
+                        ]
+                    if args.insert_object_path_npz:
+                        pass
+                    elif args.insert_rigid_weld_screening:
+                        screening_kwargs = {
+                            "tree_pose": target_tree_pose,
+                            "object_mesh": load_usd_collision_mesh(
                                 _asset_root_usd(_target_mug_path(args))
                             ),
-                            tree_mesh=load_usd_collision_mesh(
+                            "tree_mesh": load_usd_collision_mesh(
                                 _asset_root_usd(_target_tree_path(args))
                             ),
-                            preinsert_end_step=(
+                            "preinsert_end_step": (
                                 int(
                                     np.ceil(
                                         args.insert_approach_fraction
@@ -2523,11 +2588,25 @@ def main():
                                 )
                                 - 1
                             ),
-                            required_clearance_m=(
+                            "required_clearance_m": (
                                 args.insert_collision_clearance_m
                             ),
-                            sample_stride=args.insert_screening_sample_stride,
-                        )
+                            "sample_stride": (
+                                args.insert_screening_sample_stride
+                            ),
+                        }
+                        if args.insert_reference_mode == "floating_object":
+                            selected_index, reports = screen_object_paths(
+                                insert_paths,
+                                **screening_kwargs,
+                            )
+                        else:
+                            selected_index, reports = screen_rigid_weld_paths(
+                                insert_paths,
+                                current_eef_pose=current_eef_pose,
+                                current_object_pose=current_mug_pose,
+                                **screening_kwargs,
+                            )
                         insert_collision_screening = {
                             "selected_candidate": selected_index,
                             "selected_clearance_offset_branch_m": (
@@ -2537,6 +2616,7 @@ def main():
                                 args.insert_collision_clearance_m
                             ),
                             "rigid_weld_assumption": True,
+                            "reference_mode": args.insert_reference_mode,
                             "clearance_method": (
                                 "symmetric_sampled_surface_kdtree"
                             ),
@@ -2546,9 +2626,25 @@ def main():
                             "allowed_contact_phase": "tangent_insertion_only",
                             "candidates": reports,
                         }
-                        reference_eef_poses = insert_paths[selected_index]
+                        if args.insert_reference_mode == "floating_object":
+                            reference_object_poses = insert_paths[selected_index]
+                            reference_eef_poses = rigid_weld_eef_poses(
+                                reference_object_poses,
+                                current_eef_pose,
+                                current_mug_pose,
+                            ).astype(np.float32)
+                        else:
+                            reference_eef_poses = insert_paths[selected_index]
                     else:
-                        reference_eef_poses = insert_paths[0]
+                        if args.insert_reference_mode == "floating_object":
+                            reference_object_poses = insert_paths[0]
+                            reference_eef_poses = rigid_weld_eef_poses(
+                                reference_object_poses,
+                                current_eef_pose,
+                                current_mug_pose,
+                            ).astype(np.float32)
+                        else:
+                            reference_eef_poses = insert_paths[0]
                 else:
                     if (
                         args.target_name == "handover_latched"
@@ -3057,6 +3153,7 @@ def main():
                     "approach_fraction": args.insert_approach_fraction,
                     "seat_fraction": args.insert_seat_fraction,
                     "rigid_weld_screening": insert_collision_screening,
+                    "reference_mode": args.insert_reference_mode,
                     "left_visibility_anchor_state": (
                         args.left_visibility_anchor_state
                     ),
@@ -3155,6 +3252,11 @@ def main():
                     if reference_eef_poses is None
                     else reference_eef_poses
                 ),
+                reference_object_poses=(
+                    np.empty((0, 7), dtype=np.float32)
+                    if reference_object_poses is None
+                    else reference_object_poses
+                ),
                 target_mug_pose=(
                     np.empty((0, 7), dtype=np.float32)
                     if target_mug_pose is None
@@ -3209,7 +3311,9 @@ def main():
                 insert_screening_selected_candidate=np.int64(
                     -1
                     if insert_collision_screening is None
-                    else insert_collision_screening["selected_candidate"]
+                    else insert_collision_screening.get(
+                        "selected_candidate", -1
+                    )
                 ),
                 insert_screening_required_clearance_m=np.float32(
                     args.insert_collision_clearance_m
@@ -3227,7 +3331,8 @@ def main():
                 ),
                 insert_screening_candidate_min_clearances=np.asarray(
                     []
-                    if insert_collision_screening is None
+                    if not insert_collision_screening
+                    or "candidates" not in insert_collision_screening
                     else [
                         candidate["minimum_clearance_m"]
                         for candidate in insert_collision_screening[
@@ -3238,7 +3343,8 @@ def main():
                 ),
                 insert_screening_candidate_path_lengths=np.asarray(
                     []
-                    if insert_collision_screening is None
+                    if not insert_collision_screening
+                    or "candidates" not in insert_collision_screening
                     else [
                         candidate["path_length_m"]
                         for candidate in insert_collision_screening[
@@ -3249,7 +3355,8 @@ def main():
                 ),
                 insert_screening_candidate_valid=np.asarray(
                     []
-                    if insert_collision_screening is None
+                    if not insert_collision_screening
+                    or "candidates" not in insert_collision_screening
                     else [
                         candidate["valid"]
                         for candidate in insert_collision_screening[

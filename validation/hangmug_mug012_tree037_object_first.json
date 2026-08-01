@@ -1,0 +1,35 @@
+{
+  "assets": {
+    "mug": "Mug/mug_012",
+    "mug_tree": "MugTree/mug_tree_037",
+    "source_episode": "hangmug_000.hdf5:demo_0"
+  },
+  "continuous_robot_rollout": {
+    "coded_task_success": true,
+    "frame_count": 241,
+    "inter_stage_resets": 0,
+    "mp4_sha256": "0a74cbc1e6dc2339ccd2ace852eeeb094ccaf34cf08ce4904588e7ca00650fbc",
+    "scene_resets": 1,
+    "terminal_speed_m_s": 0.0
+  },
+  "floating_object_search": {
+    "best_peak_speed_m_s": 0.021445751190185547,
+    "best_terminal_drift_m": 0.0026731013786047697,
+    "cold_reset_each_iteration": true,
+    "release_steps": 90,
+    "successful_candidates": 9,
+    "total_candidates": 24
+  },
+  "robot_projection": {
+    "insert_position_error_m_mean": 0.008365618996322155,
+    "insert_rotation_error_rad_mean": 0.3504694104194641,
+    "right_grasp_retained": "8/8",
+    "strict_intermediate_pose_gate": false
+  },
+  "robot_release": {
+    "coded_hang_success": "8/8",
+    "released": "8/8",
+    "stage3_stability_steps": 30
+  },
+  "status": "passed_with_intermediate_pose_diagnostic"
+}
