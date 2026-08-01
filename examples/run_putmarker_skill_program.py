@@ -488,16 +488,22 @@ def _configure_offline_ground() -> dict[str, object]:
         PutMarkerInDrawerManagerEnvCfg,
     )
 
-    ground = PutMarkerInDrawerManagerEnvCfg.scene.ground
-    ground.init_state.pos = (0.0, 0.0, -0.05)
-    ground.spawn = sim_utils.CuboidCfg(
-        size=(100.0, 100.0, 0.1),
-        collision_props=sim_utils.CollisionPropertiesCfg(),
-        visual_material=sim_utils.PreviewSurfaceCfg(
-            diffuse_color=(0.18, 0.18, 0.18), roughness=0.8
-        ),
-        semantic_tags=[("class", "ground")],
-    )
+    original_init = PutMarkerInDrawerManagerEnvCfg.__init__
+
+    def offline_init(instance, *init_args, **init_kwargs):
+        original_init(instance, *init_args, **init_kwargs)
+        ground = instance.scene.ground
+        ground.init_state.pos = (0.0, 0.0, -0.05)
+        ground.spawn = sim_utils.CuboidCfg(
+            size=(100.0, 100.0, 0.1),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.18, 0.18, 0.18), roughness=0.8
+            ),
+            semantic_tags=[("class", "ground")],
+        )
+
+    PutMarkerInDrawerManagerEnvCfg.__init__ = offline_init
     return {
         "reason": "network-backed Isaac default_environment.usd unavailable",
         "implementation": "procedural static CuboidCfg",
