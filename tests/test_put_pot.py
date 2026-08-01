@@ -9,6 +9,7 @@ from judo_isaaclab.put_pot import (
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_centered_release,
+    reanchor_supported_center_slide,
     support_aligned_pot_pose,
 )
 
@@ -168,4 +169,51 @@ def test_center_feedback_reanchors_only_support_lowering_and_release():
     )
     assert release_corrected.left_poses[release_end, :2] == pytest.approx(
         corrected.left_poses[release_end, :2] + [0.002, -0.003]
+    )
+
+
+def test_supported_center_slide_releases_left_before_exact_center_motion():
+    program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0, 0.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1),
+        _pose(0.1, 1.0),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=2,
+    )
+    program.supported_center_slide_and_settle(
+        _pose(0.6, 0.0, 0.1),
+        _pose(0.6, 1.0, 0.1),
+        _pose(0.5, 0.2, 0.3),
+        _pose(0.7, 0.9, 0.1),
+        _pose(0.5, 0.8, 0.3),
+        lower_steps=2,
+        left_release_steps=2,
+        center_steps=3,
+        right_release_steps=2,
+        withdraw_steps=2,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+    assert trajectory.grippers[
+        trajectory.waypoint_steps["left_unload_release"]
+    ] == pytest.approx([-0.0475, 0.0])
+    assert trajectory.right_poses[
+        trajectory.waypoint_steps["center_slide"]
+    ] == pytest.approx(_pose(0.7, 0.9, 0.1))
+    assert trajectory.grippers[
+        trajectory.waypoint_steps["pot_release"]
+    ] == pytest.approx([-0.0475, -0.0475])
+
+    reanchored = reanchor_supported_center_slide(
+        trajectory,
+        _pose(0.6, 0.1, 0.1),
+        _pose(0.7, -0.2, 0.1),
+        _pose(0.65, 0.9, 0.2),
+    )
+    slide_end = trajectory.waypoint_steps["center_slide"]
+    assert reanchored.right_poses[slide_end, :2] == pytest.approx(
+        [0.75, 0.6]
     )

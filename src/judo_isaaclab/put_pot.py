@@ -17,6 +17,7 @@ from .put_marker import (
     SkillWaypoint,
     _pose,
     compose_pose,
+    inverse_pose,
     interpolate_poses,
     quaternion_rotate,
     transfer_pose,
@@ -154,11 +155,12 @@ def reanchor_centered_release(
     if correction.shape != (2,) or not np.all(np.isfinite(correction)):
         raise ValueError("center_correction_xy must contain two finite values")
     steps = trajectory.waypoint_steps
-    required = ("pot_unload", "pot_release", "bimanual_withdraw")
+    anchor_name = "center_slide" if "center_slide" in steps else "pot_unload"
+    required = (anchor_name, "pot_release", "bimanual_withdraw")
     missing = [name for name in required if name not in steps]
     if missing:
         raise ValueError(f"release trajectory is missing waypoints: {missing}")
-    start = steps["pot_unload"] + 1
+    start = steps[anchor_name] + 1
     release_end = steps["pot_release"]
     withdraw_end = steps["bimanual_withdraw"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
@@ -185,6 +187,48 @@ def reanchor_centered_release(
     )
     return SkillTrajectory(
         left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def reanchor_supported_center_slide(
+    trajectory: SkillTrajectory,
+    observed_pot_pose: Any,
+    observed_cooktop_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Preserve observed right contact while sliding the supported pot to center."""
+    steps = trajectory.waypoint_steps
+    required = ("left_unload_release", "center_slide", "pot_release", "bimanual_withdraw")
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"center-slide trajectory is missing waypoints: {missing}")
+    pot_pose = _pose(observed_pot_pose, "observed_pot_pose")
+    cooktop_pose = _pose(observed_cooktop_pose, "observed_cooktop_pose")
+    right_pose = _pose(observed_right_pose, "observed_right_pose")
+    right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
+    centered_pot_pose = pot_pose.copy()
+    centered_pot_pose[:2] = cooktop_pose[:2]
+    right_center = compose_pose(centered_pot_pose, right_contact)
+    start = steps["left_unload_release"] + 1
+    slide_end = steps["center_slide"]
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[start : slide_end + 1] = interpolate_poses(
+        right_pose, right_center, slide_end - start + 1
+    )
+    right[slide_end + 1 : release_end + 1] = right_center
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_center,
+        trajectory.right_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
         right_poses=right,
         grippers=trajectory.grippers.copy(),
         stage_names=trajectory.stage_names,
@@ -411,6 +455,57 @@ class PutPotSkillProgram:
             "stable_settle",
             withdraw_steps,
             left_pose=left_withdraw,
+            right_pose=right_withdraw,
+        )
+        self._append("stable_settle", "stable_settle", settle_steps)
+
+    def supported_center_slide_and_settle(
+        self,
+        left_lower: Any,
+        right_lower: Any,
+        left_withdraw: Any,
+        right_center: Any,
+        right_withdraw: Any,
+        *,
+        lower_steps: int,
+        left_release_steps: int,
+        center_steps: int,
+        right_release_steps: int,
+        withdraw_steps: int,
+        settle_steps: int,
+        opened: float = -0.0475,
+    ) -> None:
+        """Stage on support, release the limiting arm, then slide to center."""
+        self._append(
+            "support_lower",
+            "support_alignment",
+            lower_steps,
+            left_pose=left_lower,
+            right_pose=right_lower,
+        )
+        self._append(
+            "left_unload_release",
+            "unload_release",
+            left_release_steps,
+            left_pose=left_withdraw,
+            left_gripper=opened,
+        )
+        self._append(
+            "center_slide",
+            "support_alignment",
+            center_steps,
+            right_pose=right_center,
+        )
+        self._append(
+            "pot_release",
+            "unload_release",
+            right_release_steps,
+            right_gripper=opened,
+        )
+        self._append(
+            "bimanual_withdraw",
+            "stable_settle",
+            withdraw_steps,
             right_pose=right_withdraw,
         )
         self._append("stable_settle", "stable_settle", settle_steps)
