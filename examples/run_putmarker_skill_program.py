@@ -418,9 +418,64 @@ class _Encoder:
             raise RuntimeError("ffmpeg encoder failed")
 
 
-def _frame(env, sample, desired_left=None, desired_right=None) -> np.ndarray:
+def _quat_to_matrix(quaternion: np.ndarray) -> np.ndarray:
+    w, x, y, z = np.asarray(quaternion, dtype=np.float64)
+    return np.asarray(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
+def _draw_axes(env, draw, geometry, sample, desired_left, desired_right) -> None:
+    if draw is None:
+        return
+    draw.clear_lines()
+    marker = np.asarray(sample["marker_pose"], dtype=np.float64)
+    drawer_q = float(sample["drawer_joint_position"][1])
+    handle = geometry.handle_frame(drawer_q)
+    cavity = geometry.drawer_frame(drawer_q)
+    poses = (
+        (marker, 0.035, 4.0),
+        (handle, 0.045, 5.0),
+        (cavity, 0.060, 5.0),
+        (desired_left, 0.025, 2.0),
+        (desired_right, 0.025, 2.0),
+    )
+    origin = env.scene.env_origins[0].detach().cpu().numpy()
+    starts, ends, colors, sizes = [], [], [], []
+    rgb = ((1.0, 0.1, 0.1, 1.0), (0.1, 1.0, 0.1, 1.0), (0.1, 0.4, 1.0, 1.0))
+    for pose, length, size in poses:
+        if pose is None:
+            continue
+        pose = np.asarray(pose, dtype=np.float64)
+        position = pose[:3] + origin
+        rotation = _quat_to_matrix(pose[3:])
+        for axis, color in enumerate(rgb):
+            starts.append(tuple(position))
+            ends.append(tuple(position + length * rotation[:, axis]))
+            colors.append(color)
+            sizes.append(size)
+    draw.draw_lines(starts, ends, colors, sizes)
+
+
+def _frame(
+    env,
+    sample,
+    desired_left=None,
+    desired_right=None,
+    *,
+    coordinate_draw=None,
+    target_geometry=None,
+) -> np.ndarray:
     import cv2
 
+    if coordinate_draw is not None:
+        _draw_axes(
+            env, coordinate_draw, target_geometry, sample, desired_left, desired_right
+        )
     panels = []
     env.sim.render()
     for camera_name in ("top_camera", "left_wrist_camera", "right_wrist_camera"):
@@ -625,6 +680,17 @@ def main() -> None:
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
+        coordinate_draw = None
+        if args.draw_coordinate_axes:
+            if not args.render:
+                raise ValueError("--draw-coordinate-axes requires --render")
+            from isaacsim.core.utils.extensions import enable_extension
+
+            if not enable_extension("isaacsim.util.debug_draw"):
+                raise RuntimeError("could not enable isaacsim.util.debug_draw")
+            import isaacsim.util.debug_draw._debug_draw as debug_draw
+
+            coordinate_draw = debug_draw.acquire_debug_draw_interface()
 
         samples.append(_sample(env, -1, "reset"))
         for step in range(total_steps):
@@ -650,7 +716,14 @@ def main() -> None:
             left_eef.append(sample["left_eef_pose"])
             right_eef.append(sample["right_eef_pose"])
             if encoder is not None:
-                frame = _frame(env, sample, desired_left, desired_right)
+                frame = _frame(
+                    env,
+                    sample,
+                    desired_left,
+                    desired_right,
+                    coordinate_draw=coordinate_draw,
+                    target_geometry=target_geometry,
+                )
                 encoder.write(frame)
                 frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
@@ -721,6 +794,7 @@ def main() -> None:
                 "steps": total_steps,
                 "seed": args.seed,
                 "grasp_assistance": "none",
+                "semantic_coordinate_axes_rendered": bool(args.draw_coordinate_axes),
                 "offline_ground_override": offline_ground,
                 "source_semantic_indices": SEMANTIC_INDICES,
                 "parameters": {
