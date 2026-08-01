@@ -385,6 +385,7 @@ def _ik_action(
     args,
     *,
     right_dls_gain: float = 1.0,
+    integrate_right_ik: bool = False,
 ):
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
@@ -430,7 +431,12 @@ def _ik_action(
         delta = damped_least_squares(jacobian, twist, args.damping).clamp(
             -args.max_joint_delta, args.max_joint_delta
         )
-        targets = action[:, action_start : action_start + 6] + float(gain) * delta
+        anchor = (
+            arm.data.joint_pos[:, :6]
+            if arm_name == "right_arm" and integrate_right_ik
+            else action[:, action_start : action_start + 6]
+        )
+        targets = anchor + float(gain) * delta
         limits = arm.data.joint_pos_limits[:, :6]
         action[:, action_start : action_start + 6] = torch.maximum(
             torch.minimum(targets, limits[:, :, 1]), limits[:, :, 0]
@@ -762,6 +768,13 @@ def main() -> None:
         target_geometry = _drawer_geometry(
             target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
         )
+        handle_displacement_m = float(
+            np.linalg.norm(
+                target_geometry.handle_frame(0.0)[:3]
+                - source_geometry.handle_frame(0.0)[:3]
+            )
+        )
+        integrated_target_handle_ik = handle_displacement_m > 0.04
         trajectory = (
             _build_skill(
                 source,
@@ -821,6 +834,10 @@ def main() -> None:
                     if stage == "open_drawer" and step >= SEMANTIC_INDICES["handle_grasp"]
                     else 1.0
                 )
+                integrate_right_ik = (
+                    integrated_target_handle_ik
+                    and step >= SEMANTIC_INDICES["marker_lift"]
+                )
                 action = _ik_action(
                     env,
                     desired_left,
@@ -829,6 +846,7 @@ def main() -> None:
                     joint_nominal[step],
                     args,
                     right_dls_gain=right_dls_gain,
+                    integrate_right_ik=integrate_right_ik,
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
@@ -965,6 +983,8 @@ def main() -> None:
                     "max_rotation_step": args.max_rotation_step,
                     "handle_pull_dls_gain": args.handle_pull_dls_gain,
                     "handle_pull_joint_extension": args.handle_pull_joint_extension,
+                    "handle_displacement_m": handle_displacement_m,
+                    "integrated_target_handle_ik": integrated_target_handle_ik,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                 },
