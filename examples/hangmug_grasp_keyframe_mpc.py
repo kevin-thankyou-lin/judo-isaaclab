@@ -998,23 +998,22 @@ def insert(
     approach_fraction=HANGMUG_INSERT_APPROACH_FRACTION,
     seat_fraction=HANGMUG_INSERT_SEAT_FRACTION,
 ):
-    """Align beyond the branch tip, seat inward along its tangent, and hold.
+    """Align outside the branch, approach its tip, seat inward, and hold.
 
     The branch frame's positive X axis runs from the branch root toward its
-    tip. A positive approach X offset therefore backs the mug handle beyond
-    the tip; interpolation to the seated target threads it inward along the
-    branch tangent.
+    tip. With no explicit clearance waypoint, the first waypoint keeps the
+    start pose's beyond-tip X coordinate while matching the approach pose's
+    radial coordinates. This dogleg aligns the handle while it is outside the
+    branch swept volume. The next segment stays outside the tip, and only the
+    final segment threads inward along the branch tangent.
     """
-    if clearance_offset_branch is None:
-        phase_order_valid = 0.0 < approach_fraction < seat_fraction < 1.0
-    else:
-        phase_order_valid = (
-            0.0
-            < clearance_fraction
-            < approach_fraction
-            < seat_fraction
-            < 1.0
-        )
+    phase_order_valid = (
+        0.0
+        < clearance_fraction
+        < approach_fraction
+        < seat_fraction
+        < 1.0
+    )
     if not phase_order_valid:
         raise ValueError(
             "insert fractions must satisfy "
@@ -1045,20 +1044,28 @@ def insert(
         )
         target_pose[3:7] /= np.linalg.norm(target_pose[3:7])
 
-    approach = target_pose[:3] + branch_rotation @ np.asarray(
+    approach_offset = np.asarray(
         approach_offset_branch, dtype=np.float32
     )
+    approach = target_pose[:3] + branch_rotation @ approach_offset
     seated = target_pose[:3] + branch_rotation @ np.asarray(
         seat_offset_branch, dtype=np.float32
     )
-    waypoint_phase = [0.0]
-    waypoint_position = [start_pose[:3]]
-    if clearance_offset_branch is not None:
-        clearance = target_pose[:3] + branch_rotation @ np.asarray(
+    if clearance_offset_branch is None:
+        start_offset = branch_rotation.T @ (
+            start_pose[:3] - target_pose[:3]
+        )
+        clearance_offset = approach_offset.copy()
+        clearance_offset[0] = max(
+            float(start_offset[0]), float(approach_offset[0])
+        )
+    else:
+        clearance_offset = np.asarray(
             clearance_offset_branch, dtype=np.float32
         )
-        waypoint_phase.append(clearance_fraction)
-        waypoint_position.append(clearance)
+    clearance = target_pose[:3] + branch_rotation @ clearance_offset
+    waypoint_phase = [0.0, clearance_fraction]
+    waypoint_position = [start_pose[:3], clearance]
     waypoint_phase.extend((approach_fraction, seat_fraction, 1.0))
     waypoint_position.extend((approach, seated, seated))
     waypoint_phase = np.asarray(waypoint_phase, dtype=np.float32)
@@ -1092,7 +1099,8 @@ def insert(
         clearance_rotation_offset_branch, dtype=np.float32
     )
     clearance_angle = np.linalg.norm(clearance_rotation)
-    if clearance_offset_branch is not None and clearance_angle > 0.0:
+    clearance_orientation = target_pose[3:7]
+    if clearance_angle > 0.0:
         clearance_axis = clearance_rotation / clearance_angle
         clearance_quaternion = np.concatenate(
             (
@@ -1100,10 +1108,11 @@ def insert(
                 clearance_axis * np.sin(clearance_angle / 2.0),
             )
         )
-        orientation_phase.append(clearance_fraction)
-        orientation_waypoint.append(
-            _quat_multiply(clearance_quaternion, target_pose[3:7])
+        clearance_orientation = _quat_multiply(
+            clearance_quaternion, target_pose[3:7]
         )
+    orientation_phase.append(clearance_fraction)
+    orientation_waypoint.append(clearance_orientation)
     # Finish handle/branch orientation alignment at the tip-approach waypoint.
     # Seating then changes only translation along the branch tangent.
     orientation_phase.extend((approach_fraction, 1.0))
@@ -1953,6 +1962,15 @@ def _subtask_reached(group):
     return group["acceptance_success_count"] == group["count"]
 
 
+def _selected_candidate_group(groups):
+    """Prefer a repeat-verified optimizer mean over a failing raw sample."""
+    if _subtask_reached(groups["best_sample"]):
+        return "best_sample"
+    if _subtask_reached(groups["optimized_mean"]):
+        return "optimized_mean"
+    return "best_sample"
+
+
 def main():
     args = _parser()
     if (args.source_branch_points is None) != (
@@ -2567,8 +2585,15 @@ def main():
             optimized_rows.start
         ]
         best_executed_actions = executed_evaluation_controls[best_rows.start]
-        best_group = groups["best_sample"]
+        selected_group_name = _selected_candidate_group(groups)
+        best_group = groups[selected_group_name]
         reached = _subtask_reached(best_group)
+        if selected_group_name == "optimized_mean":
+            selected_knots = plan.optimized_knots
+            selected_executed_actions = optimized_executed_actions
+        else:
+            selected_knots = best_sample
+            selected_executed_actions = best_executed_actions
         result = {
             "status": "passed" if reached else "failed",
             "source": {
@@ -2800,6 +2825,7 @@ def main():
             "plan": {
                 "accepted_update": bool(plan.accepted_update),
                 "best_rollout": int(plan.best_rollout),
+                "selected_candidate": selected_group_name,
                 "best_iteration": int(plan.best_iteration),
                 "improvement": float(plan.improvement),
                 "nominal_reward_mean": float(plan.nominal_reward_mean),
@@ -2821,9 +2847,9 @@ def main():
                 nominal=nominal,
                 base_controls=base_controls,
                 optimized_mean=expand(plan.optimized_knots[None, ...])[0],
-                best_sample=expand(plan.best_sampled_knots[None, ...])[0],
+                best_sample=expand(selected_knots[None, ...])[0],
                 optimized_executed_actions=optimized_executed_actions,
-                best_executed_actions=best_executed_actions,
+                best_executed_actions=selected_executed_actions,
                 search_space=np.asarray(args.search_space),
                 task_translation_start=np.asarray(
                     args.task_translation_start, dtype=np.float32

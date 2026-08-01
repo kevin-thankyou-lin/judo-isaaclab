@@ -281,21 +281,21 @@
       "target_state": 669
     },
     {
-      "horizon": 80,
+      "horizon": 120,
       "name": "release_and_stabilize",
       "parameters": {
         "candidate_repeat_reducer": "min",
-        "candidate_repeats": 4,
-        "control_knots": 8,
-        "duplicate_nominal": 4,
-        "max_task_rotation_delta": 0.1,
+        "candidate_repeats": 3,
+        "control_knots": 12,
+        "duplicate_nominal": 6,
+        "max_task_rotation_delta": 0.12,
         "max_task_translation_delta": 0.025,
-        "num_elites": 5,
-        "num_iterations": 6,
+        "num_elites": 6,
+        "num_iterations": 8,
         "num_rollouts": 24,
-        "release_end_fraction": 0.2,
+        "release_end_fraction": 0.15,
         "release_open_value": -0.0475,
-        "release_start_fraction": 0.05,
+        "release_start_fraction": 0.04,
         "right_joint_accel_weight": 0.2,
         "right_joint_jerk_weight": 0.1,
         "right_joint_path_weight": 0.05,
@@ -307,7 +307,7 @@
       },
       "start_state": 670,
       "target_name": "hang_complete",
-      "target_state": 749
+      "target_state": 789
     }
   ],
   "success_check": "dc_study.envs.tasks.hang_mug_on_tree_manager_cfg.check_task_success",

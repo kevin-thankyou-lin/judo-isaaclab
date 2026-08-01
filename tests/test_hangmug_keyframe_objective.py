@@ -22,6 +22,7 @@ from hangmug_grasp_keyframe_mpc import (
     _semantic_base_controls,
     _semantic_reference_to_keyframe,
     _semantic_reference_trajectory,
+    _selected_candidate_group,
     _subtask_reached,
     _task_program_knots,
     grasp,
@@ -396,6 +397,17 @@ def test_acceptance_depends_only_on_subtask_completion():
     assert not _subtask_reached(group)
 
 
+def test_repeat_verified_optimizer_mean_replaces_failing_raw_sample():
+    groups = {
+        "best_sample": {"acceptance_success_count": 7, "count": 8},
+        "optimized_mean": {"acceptance_success_count": 8, "count": 8},
+    }
+
+    assert _selected_candidate_group(groups) == "optimized_mean"
+    groups["best_sample"]["acceptance_success_count"] = 8
+    assert _selected_candidate_group(groups) == "best_sample"
+
+
 def test_hang_completion_uses_existing_stable_task_latch(rollout_inputs):
     states, sensors, controls, reference, nominal = rollout_inputs
     states[1, :, :3] = [0.1, 0.0, 0.0]
@@ -585,6 +597,34 @@ def test_insert_default_backs_out_then_seats_along_branch_tangent():
     # Direct tip alignment never uses the old under-branch clearance lane.
     assert reference[:, 2].min() >= 0.3
     assert reference[11, 1:3] == pytest.approx(target[1:3])
+
+
+def test_insert_default_aligns_radially_while_remaining_beyond_tip():
+    target_angle = 0.4
+    target = np.array(
+        [
+            0.0,
+            0.0,
+            0.0,
+            np.cos(target_angle / 2.0),
+            0.0,
+            0.0,
+            np.sin(target_angle / 2.0),
+        ]
+    )
+    reference = insert(
+        np.array([0.2, -0.3, 0.1, 1.0, 0.0, 0.0, 0.0]),
+        target,
+        np.eye(3),
+        horizon=10,
+        clearance_fraction=0.2,
+        approach_fraction=0.6,
+        seat_fraction=0.8,
+    )
+
+    assert reference[1, :3] == pytest.approx([0.2, 0.0, 0.0])
+    assert reference[1, 3:7] == pytest.approx(target[3:7])
+    assert reference[5, :3] == pytest.approx([0.05, 0.0, 0.0])
 
 
 def test_insert_aligns_orientation_before_tangent_seating():
