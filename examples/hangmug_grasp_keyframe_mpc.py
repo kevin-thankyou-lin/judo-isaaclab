@@ -346,6 +346,40 @@ def _parser():
         default=0.90,
     )
     parser.add_argument(
+        "--left-demo-playback-start-state",
+        type=int,
+        help=(
+            "First source-demo action copied to the left arm during this "
+            "stage. Requires --left-demo-playback-end-state."
+        ),
+    )
+    parser.add_argument(
+        "--left-demo-playback-end-state",
+        type=int,
+        help=(
+            "Exclusive final source-demo action copied to the left arm. "
+            "The slice is smoothly resampled over the stage horizon."
+        ),
+    )
+    parser.add_argument(
+        "--left-demo-playback-blend-fraction",
+        type=float,
+        default=0.15,
+        help=(
+            "Fraction of the stage used to blend from the executed left-arm "
+            "command into source-demo playback."
+        ),
+    )
+    parser.add_argument(
+        "--left-demo-playback-waypoints",
+        type=int,
+        default=12,
+        help=(
+            "Number of time-aligned source-demo waypoints used for smooth "
+            "cubic left-arm playback."
+        ),
+    )
+    parser.add_argument(
         "--semantic-anchor-state",
         type=int,
         help=(
@@ -1260,6 +1294,69 @@ def _apply_left_visibility_pose(
     return controls
 
 
+def _apply_left_demo_playback(
+    controls,
+    demo_actions,
+    *,
+    entry_left_action=None,
+    blend_fraction=0.15,
+    num_waypoints=12,
+):
+    """Copy a continuous source-demo left-arm trajectory without a join jerk."""
+    controls = np.asarray(controls, dtype=np.float32).copy()
+    demo_actions = np.asarray(demo_actions, dtype=np.float32)
+    if controls.ndim != 2 or controls.shape[1] < 7:
+        raise ValueError("controls must have shape (horizon, >=7)")
+    if demo_actions.ndim != 2 or demo_actions.shape[1] < 7:
+        raise ValueError("demo actions must have shape (steps, >=7)")
+    if len(demo_actions) == 0:
+        raise ValueError("demo action playback cannot be empty")
+    if not 0.0 <= blend_fraction <= 1.0:
+        raise ValueError("left demo blend fraction must be in [0, 1]")
+    if num_waypoints < 2:
+        raise ValueError("left demo playback requires at least two waypoints")
+
+    target_phase = np.linspace(0.0, 1.0, len(controls))
+    if len(demo_actions) == 1:
+        playback = np.broadcast_to(
+            demo_actions[0, :7], (len(controls), 7)
+        ).copy()
+    else:
+        from scipy.interpolate import CubicSpline
+
+        source_phase = np.linspace(0.0, 1.0, len(demo_actions))
+        waypoint_indices = np.unique(
+            np.linspace(
+                0,
+                len(demo_actions) - 1,
+                min(num_waypoints, len(demo_actions)),
+            ).round().astype(int)
+        )
+        playback = CubicSpline(
+            source_phase[waypoint_indices],
+            demo_actions[waypoint_indices, :7],
+            axis=0,
+            bc_type="natural",
+        )(target_phase).astype(np.float32)
+    entry = (
+        controls[0, :7]
+        if entry_left_action is None
+        else np.asarray(entry_left_action, dtype=np.float32)
+    )
+    if entry.shape != (7,):
+        raise ValueError("entry left action must have shape (7,)")
+    blend_steps = int(np.ceil(len(controls) * blend_fraction))
+    if blend_steps:
+        alpha = np.linspace(0.0, 1.0, blend_steps, dtype=np.float32)
+        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+        playback[:blend_steps] = (
+            entry[None, :] * (1.0 - alpha[:, None])
+            + playback[:blend_steps] * alpha[:, None]
+        )
+    controls[:, :7] = playback
+    return controls
+
+
 def _quaternion_error(actual, target):
     actual = actual / np.linalg.norm(actual, axis=-1, keepdims=True)
     target = target / np.linalg.norm(target, axis=-1, keepdims=True)
@@ -2033,6 +2130,18 @@ def main():
         raise ValueError(
             "release fractions must satisfy 0 <= start < end <= 1"
         )
+    playback_bounds = (
+        args.left_demo_playback_start_state,
+        args.left_demo_playback_end_state,
+    )
+    if (playback_bounds[0] is None) != (playback_bounds[1] is None):
+        raise ValueError(
+            "left demo playback start and end states must be supplied together"
+        )
+    if not 0.0 <= args.left_demo_playback_blend_fraction <= 1.0:
+        raise ValueError("left demo blend fraction must be in [0, 1]")
+    if args.left_demo_playback_waypoints < 2:
+        raise ValueError("left demo playback requires at least two waypoints")
     motion_weights = (
         args.right_joint_path_weight,
         args.right_joint_accel_weight,
@@ -2342,7 +2451,27 @@ def main():
                 base_controls = _semantic_base_controls(
                     nominal, args.target_name
                 )
-                if (
+                if args.left_demo_playback_start_state is not None:
+                    left_demo_actions = _load_demo_actions(
+                        args,
+                        args.left_demo_playback_start_state,
+                        args.left_demo_playback_end_state,
+                    )
+                    entry_left_action = (
+                        history[-1, :7]
+                        if len(history)
+                        else base_controls[0, :7]
+                    )
+                    base_controls = _apply_left_demo_playback(
+                        base_controls,
+                        left_demo_actions,
+                        entry_left_action=entry_left_action,
+                        blend_fraction=(
+                            args.left_demo_playback_blend_fraction
+                        ),
+                        num_waypoints=args.left_demo_playback_waypoints,
+                    )
+                elif (
                     args.target_name == "inserted_held"
                     and args.left_visibility_anchor_state is not None
                 ):
@@ -2626,6 +2755,20 @@ def main():
                     if args.target_name == "inserted_held"
                     else None
                 ),
+                "left_demo_playback_states": (
+                    None
+                    if args.left_demo_playback_start_state is None
+                    else [
+                        args.left_demo_playback_start_state,
+                        args.left_demo_playback_end_state,
+                    ]
+                ),
+                "left_demo_playback_blend_fraction": (
+                    args.left_demo_playback_blend_fraction
+                ),
+                "left_demo_playback_waypoints": (
+                    args.left_demo_playback_waypoints
+                ),
                 "semantic_anchor_state": args.semantic_anchor_state,
                 "target_frame": evaluation["target_frame"],
                 "acceptance": "strict_geometric_subtask_success",
@@ -2796,6 +2939,20 @@ def main():
                         args.left_visibility_retreat_start_fraction,
                         args.left_visibility_retreat_end_fraction,
                     ],
+                    "left_demo_playback_states": (
+                        None
+                        if args.left_demo_playback_start_state is None
+                        else [
+                            args.left_demo_playback_start_state,
+                            args.left_demo_playback_end_state,
+                        ]
+                    ),
+                    "left_demo_playback_blend_fraction": (
+                        args.left_demo_playback_blend_fraction
+                    ),
+                    "left_demo_playback_waypoints": (
+                        args.left_demo_playback_waypoints
+                    ),
                 },
                 "grasp": {
                     "enabled": (
@@ -2939,6 +3096,22 @@ def main():
                 ),
                 left_visibility_retreat_end_fraction=np.float32(
                     args.left_visibility_retreat_end_fraction
+                ),
+                left_demo_playback_start_state=(
+                    np.int64(-1)
+                    if args.left_demo_playback_start_state is None
+                    else np.int64(args.left_demo_playback_start_state)
+                ),
+                left_demo_playback_end_state=(
+                    np.int64(-1)
+                    if args.left_demo_playback_end_state is None
+                    else np.int64(args.left_demo_playback_end_state)
+                ),
+                left_demo_playback_blend_fraction=np.float32(
+                    args.left_demo_playback_blend_fraction
+                ),
+                left_demo_playback_waypoints=np.int64(
+                    args.left_demo_playback_waypoints
                 ),
                 semantic_anchor_state=(
                     np.int64(-1)

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from hangmug_grasp_keyframe_mpc import (
     _align_corresponding_handle_point,
     _apply_left_visibility_pose,
+    _apply_left_demo_playback,
     _apply_history_control_overrides,
     _correspond_pose_between_branches,
     _expand_control_corrections,
@@ -814,6 +815,44 @@ def test_left_visibility_pose_pulls_back_during_seating():
         np.broadcast_to(retreat, (2, 7))
     )
     assert result[:, 7:] == pytest.approx(controls[:, 7:])
+
+
+def test_left_demo_playback_resamples_continuous_trajectory_and_blends_entry():
+    controls = np.zeros((9, 14), dtype=np.float32)
+    controls[:, 7:] = 42.0
+    demo = np.zeros((5, 14), dtype=np.float32)
+    demo[:, :7] = np.linspace(1.0, 5.0, 5)[:, None]
+    entry = np.full(7, -1.0, dtype=np.float32)
+
+    result = _apply_left_demo_playback(
+        controls,
+        demo,
+        entry_left_action=entry,
+        blend_fraction=3 / 9,
+    )
+
+    assert result[0, :7] == pytest.approx(entry)
+    assert result[2, :7] == pytest.approx(np.full(7, 2.0))
+    assert result[-1, :7] == pytest.approx(np.full(7, 5.0))
+    assert result[:, 7:] == pytest.approx(controls[:, 7:])
+
+
+def test_left_demo_playback_rejects_empty_or_invalid_blend():
+    controls = np.zeros((4, 14), dtype=np.float32)
+    with pytest.raises(ValueError, match="cannot be empty"):
+        _apply_left_demo_playback(controls, np.zeros((0, 14)))
+    with pytest.raises(ValueError, match="blend fraction"):
+        _apply_left_demo_playback(
+            controls,
+            np.zeros((2, 14)),
+            blend_fraction=1.1,
+        )
+    with pytest.raises(ValueError, match="at least two waypoints"):
+        _apply_left_demo_playback(
+            controls,
+            np.zeros((2, 14)),
+            num_waypoints=1,
+        )
 
 
 @pytest.mark.parametrize("fraction", (0.0, -0.1, 1.1))
