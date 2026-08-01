@@ -395,6 +395,7 @@ def _ik_action(
     *,
     right_dls_gain: float = 1.0,
     integrate_right_ik: bool = False,
+    integrate_left_ik: bool = False,
 ):
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
@@ -440,9 +441,13 @@ def _ik_action(
         delta = damped_least_squares(jacobian, twist, args.damping).clamp(
             -args.max_joint_delta, args.max_joint_delta
         )
+        integrate = (
+            (arm_name == "left_arm" and integrate_left_ik)
+            or (arm_name == "right_arm" and integrate_right_ik)
+        )
         anchor = (
             arm.data.joint_pos[:, :6]
-            if arm_name == "right_arm" and integrate_right_ik
+            if integrate
             else action[:, action_start : action_start + 6]
         )
         targets = anchor + float(gain) * delta

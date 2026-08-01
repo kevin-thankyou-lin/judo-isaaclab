@@ -270,25 +270,56 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
     target_initial = target_geometry
 
     def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
+        frame = frames[frame_name]
+        source_frame = RigidSupportGeometry(
+            frame["pot_pose"], source_initial.size
+        )
         return target_initial.transfer_pose_from(
-            source_initial, frames[frame_name][f"{arm}_eef_pose"]
+            source_frame, frame[f"{arm}_eef_pose"]
         )
 
-    grasp_frame = frames["right_handle_grasp"]
-    grasp_pot = np.asarray(grasp_frame["pot_pose"], dtype=np.float64)
-    left_contact_local = compose_pose(inverse_pose(grasp_pot), grasp_frame["left_eef_pose"])
-    right_contact_local = compose_pose(inverse_pose(grasp_pot), grasp_frame["right_eef_pose"])
+    left_grasp = transfer_initial("left_handle_grasp", "left")
+    right_grasp = transfer_initial("right_handle_grasp", "right")
+    # Preserve the target-scaled handle frames across the grasp-to-lift
+    # transition.  Reusing source-local contact offsets here is discontinuous
+    # whenever the target pot dimensions differ from the source dimensions.
+    left_contact_local = compose_pose(inverse_pose(target_initial.root_pose), left_grasp)
+    right_contact_local = compose_pose(inverse_pose(target_initial.root_pose), right_grasp)
 
+    scale_delta = float(
+        np.max(np.abs(target_geometry.size / source_geometry.size - 1.0))
+    )
     source_final_pot = np.asarray(frames["stable_settle"]["pot_pose"], dtype=np.float64)
     source_final_cooktop = np.asarray(frames["stable_settle"]["cooktop_pose"], dtype=np.float64)
     source_final_local = compose_pose(inverse_pose(source_final_cooktop), source_final_pot)
     scale_xy = target_geometry.size[:2] / np.asarray(
         keyframes["source_assets"]["cooktop"]["size_m"], dtype=np.float64
     )[:2]
+    target_cooktop = RigidSupportGeometry(
+        target["cooktop_pose"][0], target["cooktop_size"]
+    )
+    support_offset_local = source_final_local[:2] * scale_xy
+    if scale_delta > 0.20:
+        # The tall target's centered support pose is outside the bimanual
+        # workspace.  Select the closest approach-side support point with a
+        # fixed margin inside the task manager's unchanged radial tolerance.
+        approach_local = compose_pose(
+            inverse_pose(target_cooktop.root_pose), target_initial.root_pose
+        )[:2]
+        approach_norm = float(np.linalg.norm(approach_local))
+        if approach_norm <= 1.0e-9:
+            raise ValueError("cannot define approach-side support offset")
+        task_xy_tolerance = 0.5 * max(
+            float(np.linalg.norm(target_geometry.size[:2])),
+            float(np.linalg.norm(target_cooktop.size[:2])),
+        )
+        support_offset_local = (
+            approach_local / approach_norm * (0.80 * task_xy_tolerance)
+        )
     final_pot_pose = support_aligned_pot_pose(
         target_initial,
-        RigidSupportGeometry(target["cooktop_pose"][0], target["cooktop_size"]),
-        xy_offset_local=source_final_local[:2] * scale_xy,
+        target_cooktop,
+        xy_offset_local=support_offset_local,
         clearance_m=args.support_clearance_m,
     )
     lift_pot_pose = target_initial.root_pose.copy()
@@ -298,24 +329,31 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
     transport_pot_pose[2] = max(lift_pot_pose[2], final_pot_pose[2] + args.transport_clearance_m)
     align_pot_pose = final_pot_pose.copy()
     align_pot_pose[2] += args.transport_clearance_m
+    align_steps = 50 + int(np.ceil(60.0 * scale_delta))
+    unload_steps = 20 + int(np.ceil(50.0 * scale_delta))
 
     def held(pot_pose, local):
         return compose_pose(pot_pose, local)
 
-    left_lower = held(final_pot_pose, left_contact_local)
-    right_lower = held(final_pot_pose, right_contact_local)
-    withdraw_delta = np.asarray([0.0, 0.0, 0.12])
-    left_withdraw = left_lower.copy(); left_withdraw[:3] += withdraw_delta
-    right_withdraw = right_lower.copy(); right_withdraw[:3] += withdraw_delta
-    left_withdraw[1] += 0.08
-    right_withdraw[1] -= 0.08
+    unload_pot_pose = final_pot_pose.copy()
+    unload_pot_pose[2] -= min(0.08, 0.08 * scale_delta)
+    left_lower = held(unload_pot_pose, left_contact_local)
+    right_lower = held(unload_pot_pose, right_contact_local)
+    left_withdraw = left_lower.copy()
+    right_withdraw = right_lower.copy()
+    if scale_delta <= 0.20:
+        withdraw_delta = np.asarray([0.0, 0.0, 0.12])
+        left_withdraw[:3] += withdraw_delta
+        right_withdraw[:3] += withdraw_delta
+        left_withdraw[1] += 0.08
+        right_withdraw[1] -= 0.08
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
         transfer_initial("left_pregrasp", "left"),
         transfer_initial("right_pregrasp", "right"),
-        transfer_initial("left_handle_grasp", "left"),
-        transfer_initial("right_handle_grasp", "right"),
+        left_grasp,
+        right_grasp,
         approach_steps=110,
         left_close_steps=45,
         right_close_steps=45,
@@ -324,11 +362,11 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
         held(lift_pot_pose, left_contact_local), held(lift_pot_pose, right_contact_local),
         held(transport_pot_pose, left_contact_local), held(transport_pot_pose, right_contact_local),
         held(align_pot_pose, left_contact_local), held(align_pot_pose, right_contact_local),
-        lift_steps=60, transport_steps=70, align_steps=50,
+        lift_steps=60, transport_steps=70, align_steps=align_steps,
     )
     program.unload_release_and_settle(
         left_lower, right_lower, left_withdraw, right_withdraw,
-        lower_steps=50, unload_steps=20, release_steps=30, withdraw_steps=35, settle_steps=40,
+        lower_steps=50, unload_steps=unload_steps, release_steps=30, withdraw_steps=35, settle_steps=40,
     )
     return program.build(), final_pot_pose
 
@@ -464,6 +502,14 @@ def main() -> None:
             if keyframes is not None else (None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
+        integrate_target_ik = bool(
+            trajectory is not None
+            and np.max(np.abs(target_geometry.size / source_geometry.size - 1.0)) > 0.20
+        )
+        grasp_complete_step = (
+            trajectory.waypoint_steps["right_handle_grasp"]
+            if trajectory is not None else None
+        )
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
         samples = [_sample(env, -1, "reset")]
         actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
@@ -477,7 +523,19 @@ def main() -> None:
                 stage = "direct_source_action_replay"
             else:
                 stage = trajectory.stage_names[step]
-                action = _ik_action(env, trajectory.left_poses[step], trajectory.right_poses[step], trajectory.grippers[step], joint_nominal[step], args)
+                integrate_ik = bool(
+                    integrate_target_ik and step > grasp_complete_step
+                )
+                action = _ik_action(
+                    env,
+                    trajectory.left_poses[step],
+                    trajectory.right_poses[step],
+                    trajectory.grippers[step],
+                    joint_nominal[step],
+                    args,
+                    integrate_left_ik=integrate_ik,
+                    integrate_right_ik=integrate_ik,
+                )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
             _, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
@@ -491,6 +549,18 @@ def main() -> None:
             if bool(truncated[0].item()):
                 raise RuntimeError(f"unexpected timeout/reset at step {step}")
             if bool(terminated[0].item()) and not sample["task_success"]:
+                print(
+                    "PUTPOT_FAILURE="
+                    + json.dumps(
+                        {
+                            "reason": "unexpected_failure_termination",
+                            "sample": sample,
+                            "info_keys": sorted(info),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
                 raise RuntimeError(f"unexpected failure termination at step {step}")
         if encoder is not None:
             encoder.close(); encoder = None
@@ -560,7 +630,7 @@ def main() -> None:
                 "steps": len(actions),
                 "seed": args.seed,
                 "grasp_assistance": "none",
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "integrated_target_ik": integrate_target_ik, "support_align_steps": (trajectory.waypoint_steps["support_align"] - trajectory.waypoint_steps["pot_transport"] if trajectory is not None else None), "unload_steps": (trajectory.waypoint_steps["pot_unload"] - trajectory.waypoint_steps["support_lower"] if trajectory is not None else None)},
             },
             "provenance": {
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
