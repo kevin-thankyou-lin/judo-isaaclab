@@ -60,7 +60,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
     parser.add_argument("--handle-pull-dls-gain", type=float, default=0.0)
-    parser.add_argument("--handle-pull-joint-extension", type=float, default=0.10)
+    parser.add_argument("--handle-pull-joint-extension", type=float, default=-0.05)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--render", action="store_true")
@@ -705,8 +705,8 @@ def main() -> None:
         raise ValueError("--render requires --video")
     if not 0.0 <= args.handle_pull_dls_gain <= 1.0:
         raise ValueError("--handle-pull-dls-gain must be in [0, 1]")
-    if not 0.0 <= args.handle_pull_joint_extension <= 0.5:
-        raise ValueError("--handle-pull-joint-extension must be in [0, 0.5]")
+    if not -0.5 <= args.handle_pull_joint_extension <= 0.5:
+        raise ValueError("--handle-pull-joint-extension must be in [-0.5, 0.5]")
     # Exact task-owned outputs are removed up front so a crashed process cannot
     # leave a stale artifact that a wrapper mistakes for this run's evidence.
     for path in (args.result_json, args.trace_npz, args.video):
