@@ -12,6 +12,7 @@ from hangmug_grasp_keyframe_mpc import (
     _apply_terminal_translation_compensation,
     _apply_left_visibility_pose,
     _apply_left_demo_playback,
+    _hold_left_action,
     _apply_history_control_overrides,
     _correspond_pose_between_branches,
     _expand_control_corrections,
@@ -936,6 +937,16 @@ def test_left_demo_playback_resamples_continuous_trajectory_and_blends_entry():
     assert result[0, :7] == pytest.approx(entry)
     assert result[2, :7] == pytest.approx(np.full(7, 2.0))
     assert result[-1, :7] == pytest.approx(np.full(7, 5.0))
+    assert result[:, 7:] == pytest.approx(controls[:, 7:])
+
+
+def test_left_hold_action_keeps_observer_fixed_without_changing_right_arm():
+    controls = np.arange(70, dtype=np.float32).reshape(5, 14)
+    held = np.linspace(-0.3, 0.3, 7, dtype=np.float32)
+
+    result = _hold_left_action(controls, held)
+
+    assert result[:, :7] == pytest.approx(np.broadcast_to(held, (5, 7)))
     assert result[:, 7:] == pytest.approx(controls[:, 7:])
 
 

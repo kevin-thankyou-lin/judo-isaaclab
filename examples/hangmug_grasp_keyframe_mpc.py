@@ -475,6 +475,14 @@ def _parser():
         ),
     )
     parser.add_argument(
+        "--left-hold-entry-pose",
+        action="store_true",
+        help=(
+            "Hold the left arm and gripper at the last executed history "
+            "command for the entire stage."
+        ),
+    )
+    parser.add_argument(
         "--semantic-anchor-state",
         type=int,
         help=(
@@ -1539,6 +1547,18 @@ def _apply_left_demo_playback(
     return controls
 
 
+def _hold_left_action(controls, left_action):
+    """Keep the physical observer arm fixed at a stage-entry command."""
+    controls = np.asarray(controls, dtype=np.float32).copy()
+    left_action = np.asarray(left_action, dtype=np.float32)
+    if controls.ndim != 2 or controls.shape[1] < 7:
+        raise ValueError("controls must have shape (horizon, >=7)")
+    if left_action.shape != (7,):
+        raise ValueError("left hold action must have shape (7,)")
+    controls[:, :7] = left_action
+    return controls
+
+
 def _quaternion_error(actual, target):
     actual = actual / np.linalg.norm(actual, axis=-1, keepdims=True)
     target = target / np.linalg.norm(target, axis=-1, keepdims=True)
@@ -2426,6 +2446,10 @@ def main():
         raise ValueError(
             "left demo playback start and end states must be supplied together"
         )
+    if args.left_hold_entry_pose and playback_bounds[0] is not None:
+        raise ValueError(
+            "left hold entry pose cannot be combined with left demo playback"
+        )
     if not 0.0 <= args.left_demo_playback_blend_fraction <= 1.0:
         raise ValueError("left demo blend fraction must be in [0, 1]")
     if args.left_demo_playback_waypoints < 2:
@@ -3013,7 +3037,16 @@ def main():
                 base_controls = _semantic_base_controls(
                     nominal, args.target_name
                 )
-                if args.left_demo_playback_start_state is not None:
+                if args.left_hold_entry_pose:
+                    entry_left_action = (
+                        history[-1, :7]
+                        if len(history)
+                        else base_controls[0, :7]
+                    )
+                    base_controls = _hold_left_action(
+                        base_controls, entry_left_action
+                    )
+                elif args.left_demo_playback_start_state is not None:
                     left_demo_actions = _load_demo_actions(
                         args,
                         args.left_demo_playback_start_state,
@@ -3347,6 +3380,7 @@ def main():
                 "left_demo_playback_waypoints": (
                     args.left_demo_playback_waypoints
                 ),
+                "left_hold_entry_pose": args.left_hold_entry_pose,
                 "semantic_anchor_state": args.semantic_anchor_state,
                 "target_frame": evaluation["target_frame"],
                 "acceptance": "strict_geometric_subtask_success",
@@ -3544,6 +3578,7 @@ def main():
                     "left_demo_playback_waypoints": (
                         args.left_demo_playback_waypoints
                     ),
+                    "left_hold_entry_pose": args.left_hold_entry_pose,
                 },
                 "grasp": {
                     "enabled": (
@@ -3786,6 +3821,7 @@ def main():
                 left_demo_playback_waypoints=np.int64(
                     args.left_demo_playback_waypoints
                 ),
+                left_hold_entry_pose=np.bool_(args.left_hold_entry_pose),
                 semantic_anchor_state=(
                     np.int64(-1)
                     if args.semantic_anchor_state is None
