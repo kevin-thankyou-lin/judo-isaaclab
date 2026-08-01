@@ -627,7 +627,9 @@ def main() -> None:
     from isaaclab.app import AppLauncher
 
     simulation_app = AppLauncher(
-        {"headless": True, "device": args.device, "enable_cameras": args.render}
+        # The YAM scene always instantiates calibrated tiled camera prims, even
+        # when RGB is not sampled. Isaac 5.1 therefore requires this app flag.
+        {"headless": True, "device": args.device, "enable_cameras": True}
     ).app
     env = None
     encoder = None
