@@ -23,6 +23,16 @@ from .put_marker import (
 )
 
 
+CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
+
+
+def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
+    """Return planar root-center error for the pot and cooktop."""
+    pot = _pose(pot_pose, "pot_pose")
+    cooktop = _pose(cooktop_pose, "cooktop_pose")
+    return float(np.linalg.norm(pot[:2] - cooktop[:2]))
+
+
 @dataclass(frozen=True)
 class RigidSupportGeometry:
     """Root pose, axis-aligned local size, and semantic horizontal supports."""

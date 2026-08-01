@@ -9,6 +9,9 @@ import subprocess
 import sys
 
 
+CENTER_TOLERANCE_M = 0.03
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True)
@@ -43,6 +46,20 @@ def main() -> None:
         failed = [name for name, passed in checks.items() if not passed]
         if failed:
             errors.append(f"failed result checks: {failed}")
+        expected_failure = "expected_coded_task_failure" in checks
+        if not expected_failure:
+            center_error = result.get("metrics", {}).get("center_error_m")
+            if not isinstance(center_error, (int, float)):
+                errors.append("missing numeric metrics.center_error_m")
+            elif center_error > CENTER_TOLERANCE_M:
+                errors.append(
+                    f"center error {center_error:.6f} m exceeds {CENTER_TOLERANCE_M:.2f} m"
+                )
+            result_checks = result.get("checks", {})
+            if result_checks.get("centered_on_cooktop") is not True:
+                errors.append("checks.centered_on_cooktop is not true")
+            if result_checks.get("accepted_task_success") is not True:
+                errors.append("checks.accepted_task_success is not true")
     if not os.path.isfile(args.trace_npz) or os.path.getsize(args.trace_npz) == 0:
         errors.append(f"missing or empty trace: {args.trace_npz}")
     if args.video:

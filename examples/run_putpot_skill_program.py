@@ -140,6 +140,7 @@ def _configure_offline_ground() -> dict[str, object]:
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
+    from judo_isaaclab.put_pot import cooktop_center_error_m
     from run_putmarker_skill_program import _eef_pose
 
     left_grasp, right_grasp = env.robot.is_grasping()
@@ -154,7 +155,8 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     if info is not None and bool(info.get("success", torch.tensor([False]))[0].item()):
         task_success = True
     expected_z = cooktop_pose[2] + 0.5 * (env.cooktop_height + env.pot_height)
-    xy_error = float(np.linalg.norm(pot_pose[:2] - cooktop_pose[:2]))
+    center_error = cooktop_center_error_m(pot_pose, cooktop_pose)
+    xy_error = center_error
     support_error = float(abs(pot_pose[2] - expected_z))
     qx, qy = pot_pose[4], pot_pose[5]
     orientation_error = float(np.arccos(np.clip(abs(1.0 - 2.0 * (qx * qx + qy * qy)), 0.0, 1.0)))
@@ -175,6 +177,7 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "task_success": task_success,
         "on_top_predicate_now": on_top_now,
         "support_error_m": support_error,
+        "center_error_m": center_error,
         "xy_error_m": xy_error,
         "orientation_error_rad": orientation_error,
         "pot_pose": pot_pose.tolist(),
@@ -300,37 +303,13 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
     left_contact_local = compose_pose(inverse_pose(contact_root), left_contact_world)
     right_contact_local = compose_pose(inverse_pose(contact_root), right_contact_world)
 
-    source_final_pot = np.asarray(frames["stable_settle"]["pot_pose"], dtype=np.float64)
-    source_final_cooktop = np.asarray(frames["stable_settle"]["cooktop_pose"], dtype=np.float64)
-    source_final_local = compose_pose(inverse_pose(source_final_cooktop), source_final_pot)
-    scale_xy = target_geometry.size[:2] / np.asarray(
-        keyframes["source_assets"]["cooktop"]["size_m"], dtype=np.float64
-    )[:2]
     target_cooktop = RigidSupportGeometry(
         target["cooktop_pose"][0], target["cooktop_size"]
     )
-    support_offset_local = source_final_local[:2] * scale_xy
-    if scale_delta > 0.20:
-        # The tall target's centered support pose is outside the bimanual
-        # workspace.  Select the closest approach-side support point with a
-        # fixed margin inside the task manager's unchanged radial tolerance.
-        approach_local = compose_pose(
-            inverse_pose(target_cooktop.root_pose), target_initial.root_pose
-        )[:2]
-        approach_norm = float(np.linalg.norm(approach_local))
-        if approach_norm <= 1.0e-9:
-            raise ValueError("cannot define approach-side support offset")
-        task_xy_tolerance = 0.5 * max(
-            float(np.linalg.norm(target_geometry.size[:2])),
-            float(np.linalg.norm(target_cooktop.size[:2])),
-        )
-        support_offset_local = (
-            approach_local / approach_norm * (0.80 * task_xy_tolerance)
-        )
     final_pot_pose = support_aligned_pot_pose(
         target_initial,
         target_cooktop,
-        xy_offset_local=support_offset_local,
+        xy_offset_local=(0.0, 0.0),
         clearance_m=args.support_clearance_m,
     )
     lift_pot_pose = target_initial.root_pose.copy()
@@ -438,7 +417,7 @@ def _frame(env, sample) -> np.ndarray:
             f"step {sample['step']} / {sample['program_stage']}",
             f"pick={sample['stage1']} place={sample['stage2']}",
             f"grasps L={sample['left_grasp']} R={sample['right_grasp']}",
-            f"support dz={sample['support_error_m']:.4f} xy={sample['xy_error_m']:.4f} m",
+            f"support dz={sample['support_error_m']:.4f} center={sample['center_error_m']:.4f} m",
         ]
         for row, line in enumerate(lines):
             cv2.putText(image, line, (12, 28 + 25 * row), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (245, 245, 245), 1, cv2.LINE_AA)
@@ -451,7 +430,7 @@ def _transition_trace(samples):
     for sample in samples:
         state = (sample["stage1"], sample["stage2"], sample["task_success"])
         if state != previous or sample is samples[-1]:
-            result.append({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "xy_error_m")})
+            result.append({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "center_error_m", "xy_error_m")})
             previous = state
     return result
 
@@ -556,7 +535,7 @@ def main() -> None:
             if encoder is not None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
-                print("PUTPOT_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "xy_error_m")}, sort_keys=True), flush=True)
+                print("PUTPOT_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "center_error_m", "xy_error_m")}, sort_keys=True), flush=True)
             if bool(truncated[0].item()):
                 raise RuntimeError(f"unexpected timeout/reset at step {step}")
             if bool(terminated[0].item()) and not sample["task_success"]:
@@ -603,12 +582,19 @@ def main() -> None:
         if args.direct_replay_result:
             with open(args.direct_replay_result, encoding="utf-8") as stream:
                 direct_replay = json.load(stream)
+        from judo_isaaclab.put_pot import CENTERED_ON_COOKTOP_TOLERANCE_M
+
+        centered_on_cooktop = bool(
+            final["center_error_m"] <= CENTERED_ON_COOKTOP_TOLERANCE_M
+        )
         checks = {
             "one_reset": True,
             "zero_inter_stage_resets": True,
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
             "contact_backed_grasps_only": True,
             "coded_task_success": bool(final["task_success"]),
+            "centered_on_cooktop": centered_on_cooktop,
+            "accepted_task_success": bool(final["task_success"] and centered_on_cooktop),
             "all_stages_latched": bool(final["stage1"] and final["stage2"]),
             "bimanual_pick_observed": any(row["left_grasp"] and row["right_grasp"] for row in samples),
             "pot_released": not final["left_grasp"] and not final["right_grasp"],
@@ -665,6 +651,7 @@ def main() -> None:
                 "eef_tracking_error_m": max(waypoint_errors) if waypoint_errors else None,
                 "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None,
                 "support_error_m": final["support_error_m"],
+                "center_error_m": final["center_error_m"],
                 "xy_error_m": final["xy_error_m"],
                 "terminal_pot_speed_mps": float(np.linalg.norm(final["pot_velocity"][:3])),
                 "terminal_pot_angular_speed_rps": float(np.linalg.norm(final["pot_velocity"][3:])),

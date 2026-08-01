@@ -29,6 +29,8 @@ _EXPORTS = {
     "transfer_pose": "judo_isaaclab.put_marker",
     "PutPotSkillProgram": "judo_isaaclab.put_pot",
     "RigidSupportGeometry": "judo_isaaclab.put_pot",
+    "CENTERED_ON_COOKTOP_TOLERANCE_M": "judo_isaaclab.put_pot",
+    "cooktop_center_error_m": "judo_isaaclab.put_pot",
     "support_aligned_pot_pose": "judo_isaaclab.put_pot",
     "AttemptEvaluation": "judo_isaaclab.evidence_harness",
     "EvidenceContract": "judo_isaaclab.evidence_harness",

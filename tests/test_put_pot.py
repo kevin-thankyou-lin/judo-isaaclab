@@ -2,8 +2,10 @@ import numpy as np
 import pytest
 
 from judo_isaaclab.put_pot import (
+    CENTERED_ON_COOKTOP_TOLERANCE_M,
     PutPotSkillProgram,
     RigidSupportGeometry,
+    cooktop_center_error_m,
     support_aligned_pot_pose,
 )
 
@@ -21,6 +23,17 @@ def test_support_frames_and_alignment_match_exact_planes():
     placed = RigidSupportGeometry(aligned, pot.size)
     assert aligned[:2] == pytest.approx([0.71, -0.32])
     assert placed.bottom_frame[2] - cooktop.top_frame[2] == pytest.approx(0.005)
+
+
+def test_default_support_alignment_targets_true_cooktop_center():
+    pot = RigidSupportGeometry(_pose(0.2, 0.1, 0.8), [0.4, 0.3, 0.14])
+    cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.78), [0.3, 0.34, 0.06])
+    aligned = support_aligned_pot_pose(pot, cooktop, clearance_m=0.005)
+    assert aligned[:2] == pytest.approx(cooktop.root_pose[:2])
+    assert cooktop_center_error_m(aligned, cooktop.root_pose) == pytest.approx(0.0)
+    assert cooktop_center_error_m(
+        _pose(0.731, -0.3, 0.8), cooktop.root_pose
+    ) > CENTERED_ON_COOKTOP_TOLERANCE_M
 
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():

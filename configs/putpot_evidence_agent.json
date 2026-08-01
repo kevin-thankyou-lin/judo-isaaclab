@@ -33,6 +33,7 @@
   },
   "result_paths": {
     "task_success": [
+      "checks.accepted_task_success",
       "checks.coded_task_success",
       "terminal.task_success"
     ],
@@ -54,6 +55,9 @@
       "support_error_m": [
         "metrics.support_error_m"
       ],
+      "center_error_m": [
+        "metrics.center_error_m"
+      ],
       "terminal_pot_speed_mps": [
         "metrics.terminal_pot_speed_mps"
       ]
@@ -67,6 +71,7 @@
   ],
   "thresholds": {
     "eef_tracking_error_m": 0.02,
+    "center_error_m": 0.03,
     "terminal_pot_speed_mps": 0.05
   },
   "metadata": {
@@ -74,6 +79,7 @@
       "bimanual handle grasp",
       "lift and transport",
       "support-frame alignment",
+      "zero-offset cooktop-center alignment",
       "release and stable settle"
     ],
     "forbidden": [
