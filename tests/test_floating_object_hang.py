@@ -32,3 +32,15 @@ def test_coded_support_dominates_release_fallback_score():
     )
 
     assert scores[1] > scores[0]
+
+
+def test_score_prefers_deeper_supported_seating_when_stability_matches():
+    scores = _score(
+        success=[True, True],
+        terminal_drift=[0.002, 0.002],
+        peak_speed=[0.02, 0.02],
+        terminal_height=[1.0, 1.0],
+        seating_depth=[0.0, 0.01],
+    )
+
+    assert scores[1] > scores[0]

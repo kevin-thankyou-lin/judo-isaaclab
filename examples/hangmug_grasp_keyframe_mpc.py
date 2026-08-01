@@ -244,6 +244,37 @@ def _parser():
         help="Calibrated final EEF position correction in the branch frame.",
     )
     parser.add_argument(
+        "--insert-projection-compensation-world",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("X", "Y", "Z"),
+        help=(
+            "Measured Cartesian correction applied smoothly to a loaded "
+            "floating-object path before robot projection."
+        ),
+    )
+    parser.add_argument(
+        "--insert-projection-rotation-compensation-world",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        metavar=("RX", "RY", "RZ"),
+        help=(
+            "Measured world-frame rotation-vector correction applied "
+            "smoothly to a loaded floating-object path."
+        ),
+    )
+    parser.add_argument(
+        "--insert-projection-compensation-start-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Delay projection compensation until this path fraction; use "
+            "the final seating segment to avoid rotating through the tree."
+        ),
+    )
+    parser.add_argument(
         "--insert-eef-rotation-offset-branch",
         type=float,
         nargs=3,
@@ -327,6 +358,15 @@ def _parser():
         help=(
             "Use a simulator-validated best_object_path from the floating "
             "support search, then map it through the live grasp transform."
+        ),
+    )
+    parser.add_argument(
+        "--insert-object-path-selection",
+        choices=("robot_feasible", "best"),
+        default="robot_feasible",
+        help=(
+            "Select among all supported paths by robot feasibility, or use "
+            "the search artifact's promoted best path exactly."
         ),
     )
     parser.add_argument(
@@ -1040,6 +1080,61 @@ def _semantic_reference_to_keyframe(
         (horizon - reach_steps, 7),
     )
     return np.concatenate((reach, hold), axis=0)
+
+
+def _apply_terminal_pose_compensation(
+    reference_poses,
+    offset_world,
+    rotation_vector_world=(0.0, 0.0, 0.0),
+    start_fraction=0.0,
+):
+    """Ramp measured robot-projection translation and rotation corrections."""
+    reference_poses = np.asarray(reference_poses, dtype=np.float32).copy()
+    offset_world = np.asarray(offset_world, dtype=np.float32)
+    if reference_poses.ndim != 2 or reference_poses.shape[1] != 7:
+        raise ValueError("reference poses must have shape (horizon, 7)")
+    if offset_world.shape != (3,):
+        raise ValueError("projection compensation must have shape (3,)")
+    rotation_vector_world = np.asarray(
+        rotation_vector_world, dtype=np.float32
+    )
+    if rotation_vector_world.shape != (3,):
+        raise ValueError("rotation compensation must have shape (3,)")
+    if not 0.0 <= start_fraction < 1.0:
+        raise ValueError("compensation start fraction must be in [0, 1)")
+    phase = np.linspace(
+        1.0 / len(reference_poses), 1.0, len(reference_poses), dtype=np.float32
+    )
+    phase = np.clip(
+        (phase - float(start_fraction)) / (1.0 - float(start_fraction)),
+        0.0,
+        1.0,
+    )
+    smooth = phase * phase * (3.0 - 2.0 * phase)
+    reference_poses[:, :3] += smooth[:, None] * offset_world
+    rotation_angle = float(np.linalg.norm(rotation_vector_world))
+    if rotation_angle > 0.0:
+        rotation_axis = rotation_vector_world / rotation_angle
+        for index, fraction in enumerate(smooth):
+            angle = rotation_angle * float(fraction)
+            correction = np.concatenate(
+                (
+                    np.asarray([np.cos(angle / 2.0)], dtype=np.float32),
+                    rotation_axis * np.sin(angle / 2.0),
+                )
+            )
+            reference_poses[index, 3:7] = _quat_multiply(
+                correction, reference_poses[index, 3:7]
+            )
+            reference_poses[index, 3:7] /= np.linalg.norm(
+                reference_poses[index, 3:7]
+            )
+    return reference_poses
+
+
+def _apply_terminal_translation_compensation(reference_poses, offset_world):
+    """Backward-compatible translation-only projection compensation."""
+    return _apply_terminal_pose_compensation(reference_poses, offset_world)
 
 
 def grasp(
@@ -2688,18 +2783,19 @@ def main():
                                 "insert-reference-mode=floating_object"
                             )
                         artifact = np.load(args.insert_object_path_npz)
-                        supported_paths = (
-                            np.asarray(
+                        supported_paths = np.asarray(
+                            artifact["best_object_path"], dtype=np.float32
+                        )[None, ...]
+                        if (
+                            args.insert_object_path_selection
+                            == "robot_feasible"
+                            and "successful_object_paths" in artifact.files
+                            and artifact["successful_object_paths"].size
+                        ):
+                            supported_paths = np.asarray(
                                 artifact["successful_object_paths"],
                                 dtype=np.float32,
                             )
-                            if "successful_object_paths" in artifact.files
-                            and artifact["successful_object_paths"].size
-                            else np.asarray(
-                                artifact["best_object_path"],
-                                dtype=np.float32,
-                            )[None, ...]
-                        )
                         selected_object_path, feasibility_reports = (
                             select_robot_feasible_object_path(
                                 supported_paths,
@@ -2721,6 +2817,14 @@ def main():
                             current_eef_pose,
                             current_mug_pose,
                         ).astype(np.float32)
+                        reference_eef_poses = (
+                            _apply_terminal_pose_compensation(
+                                reference_eef_poses,
+                                args.insert_projection_compensation_world,
+                                args.insert_projection_rotation_compensation_world,
+                                args.insert_projection_compensation_start_fraction,
+                            )
+                        )
                         target_mug_pose = reference_object_poses[-1].copy()
                         target_eef_pose = reference_eef_poses[-1].copy()
                         insert_collision_screening = {
@@ -2728,6 +2832,9 @@ def main():
                             "source": args.insert_object_path_npz,
                             "simulator_validated_support_path": True,
                             "supported_path_count": int(len(supported_paths)),
+                            "path_selection": (
+                                args.insert_object_path_selection
+                            ),
                             "robot_feasible_selected_path": int(
                                 selected_object_path
                             ),
@@ -2743,6 +2850,15 @@ def main():
                                         "successful_body_clearance_m"
                                     ][selected_object_path]
                                 )
+                            ),
+                            "projection_compensation_world_m": list(
+                                args.insert_projection_compensation_world
+                            ),
+                            "projection_rotation_compensation_world_rad": list(
+                                args.insert_projection_rotation_compensation_world
+                            ),
+                            "projection_compensation_start_fraction": (
+                                args.insert_projection_compensation_start_fraction
                             ),
                             "allowed_contact_phase": "tangent_insertion_only",
                             "allowed_contact_surface": "handle_only",
@@ -3509,6 +3625,12 @@ def main():
                     if target_mug_pose is None
                     else target_mug_pose[None, :]
                 ),
+                evaluation_keyframe_mug_poses=np.asarray(
+                    states[:, keyframe_offset, :7], dtype=np.float32
+                ),
+                reference_keyframe_mug_pose=np.asarray(
+                    objective_reference[keyframe_offset, :7], dtype=np.float32
+                ),
                 grasp_pregrasp_offset_object=np.asarray(
                     args.grasp_pregrasp_offset_object, dtype=np.float32
                 ),
@@ -3541,6 +3663,20 @@ def main():
                 ),
                 insert_eef_position_offset_branch=np.asarray(
                     args.insert_eef_position_offset_branch, dtype=np.float32
+                ),
+                insert_projection_compensation_world=np.asarray(
+                    args.insert_projection_compensation_world,
+                    dtype=np.float32,
+                ),
+                insert_projection_rotation_compensation_world=np.asarray(
+                    args.insert_projection_rotation_compensation_world,
+                    dtype=np.float32,
+                ),
+                insert_projection_compensation_start_fraction=np.float32(
+                    args.insert_projection_compensation_start_fraction
+                ),
+                insert_object_path_selection=np.asarray(
+                    args.insert_object_path_selection
                 ),
                 insert_eef_rotation_offset_branch=np.asarray(
                     args.insert_eef_rotation_offset_branch, dtype=np.float32

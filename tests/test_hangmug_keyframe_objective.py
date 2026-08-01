@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from hangmug_grasp_keyframe_mpc import (
     _align_corresponding_handle_point,
+    _apply_terminal_pose_compensation,
+    _apply_terminal_translation_compensation,
     _apply_left_visibility_pose,
     _apply_left_demo_playback,
     _apply_history_control_overrides,
@@ -56,6 +58,45 @@ def test_mug_body_branch_clearance_distinguishes_collision_and_detour():
     )
 
     np.testing.assert_allclose(clearance, [[-0.01, 0.03]])
+
+
+def test_projection_compensation_ramps_without_changing_orientation():
+    poses = np.zeros((3, 7), dtype=np.float32)
+    poses[:, 3] = 1.0
+    offset = np.asarray([-0.01, 0.02, -0.03], dtype=np.float32)
+
+    corrected = _apply_terminal_translation_compensation(poses, offset)
+
+    np.testing.assert_allclose(corrected[-1, :3], offset)
+    np.testing.assert_allclose(corrected[:, 3:], poses[:, 3:])
+    assert np.linalg.norm(corrected[0, :3]) < np.linalg.norm(offset)
+
+
+def test_projection_rotation_compensation_reaches_requested_world_rotation():
+    poses = np.zeros((3, 7), dtype=np.float32)
+    poses[:, 3] = 1.0
+
+    corrected = _apply_terminal_pose_compensation(
+        poses, (0.0, 0.0, 0.0), (0.0, 0.0, 0.2)
+    )
+
+    np.testing.assert_allclose(
+        corrected[-1, 3:7],
+        [np.cos(0.1), 0.0, 0.0, np.sin(0.1)],
+        atol=1.0e-6,
+    )
+
+
+def test_projection_compensation_can_be_delayed_until_seating():
+    poses = np.zeros((4, 7), dtype=np.float32)
+    poses[:, 3] = 1.0
+
+    corrected = _apply_terminal_pose_compensation(
+        poses, (0.01, 0.0, 0.0), start_fraction=0.5
+    )
+
+    np.testing.assert_allclose(corrected[:2, :3], 0.0)
+    np.testing.assert_allclose(corrected[-1, :3], [0.01, 0.0, 0.0])
 
 
 def test_initial_task_stage_restores_phase_latches_only():

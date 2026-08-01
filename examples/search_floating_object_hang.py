@@ -46,6 +46,28 @@ def _parser():
     )
     parser.add_argument("--body-clearance-m", type=float, default=0.002)
     parser.add_argument("--clearance-sample-stride", type=int, default=3)
+    parser.add_argument(
+        "--minimum-seating-depth-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Require the terminal mug pose to move at least this far inward "
+            "from the seed pose along the negative branch tangent."
+        ),
+    )
+    parser.add_argument(
+        "--depth-proposals-m",
+        type=float,
+        nargs="+",
+        default=(0.0, 0.005, 0.010, 0.015, 0.020),
+        help=(
+            "Deterministic inward seating depths injected before random "
+            "candidates on every iteration."
+        ),
+    )
+    parser.add_argument(
+        "--seating-depth-weight", type=float, default=25.0
+    )
     return parser.parse_args()
 
 
@@ -93,13 +115,23 @@ def _candidate_paths(start_pose, seed_pose, branch_rotation, parameters, horizon
     return np.asarray(paths, dtype=np.float32)
 
 
-def _score(success, terminal_drift, peak_speed, terminal_height):
-    """Prefer coded support; otherwise retain the least energetic release."""
+def _score(
+    success,
+    terminal_drift,
+    peak_speed,
+    terminal_height,
+    seating_depth=None,
+    seating_depth_weight=25.0,
+):
+    """Prefer coded support, then deeper and quieter released seating."""
+    if seating_depth is None:
+        seating_depth = np.zeros_like(np.asarray(terminal_drift))
     return (
         np.asarray(success, dtype=np.float32) * 1000.0
         - 100.0 * np.asarray(terminal_drift)
         - 2.0 * np.asarray(peak_speed)
         + 0.1 * np.asarray(terminal_height)
+        + seating_depth_weight * np.asarray(seating_depth)
     )
 
 
@@ -119,6 +151,7 @@ def main():
         from dc_study.planning import RigidObjectMpcState, create_cpu_batched_planning_runner
         from judo_isaaclab.collision_screening import (
             load_usd_collision_mesh,
+            object_path_collision_reports,
             object_path_clearance_reports,
         )
 
@@ -184,7 +217,14 @@ def main():
         for iteration in range(args.num_iterations):
             parameters = rng.normal(mean, std, size=(args.num_envs, 8)).astype(np.float32)
             parameters = np.clip(parameters, lower, upper)
-            parameters[0] = 0.0
+            depth_proposals = np.asarray(
+                args.depth_proposals_m, dtype=np.float32
+            )
+            if np.any(depth_proposals < 0.0):
+                raise ValueError("depth proposals must be non-negative")
+            injected = min(args.num_envs, len(depth_proposals))
+            parameters[:injected] = 0.0
+            parameters[:injected, 0] = -depth_proposals[:injected]
             runner.reset(
                 inputs["checkpoint"],
                 {
@@ -209,8 +249,20 @@ def main():
                 required_clearance_m=args.body_clearance_m,
                 sample_stride=args.clearance_sample_stride,
             )
+            body_collision_reports = object_path_collision_reports(
+                paths,
+                tree_pose=tree_pose.detach().cpu().numpy(),
+                object_mesh=mug_body_mesh,
+                tree_mesh=tree_mesh,
+                sample_stride=args.clearance_sample_stride,
+            )
             geometry_valid = np.asarray(
-                [report["valid"] for report in body_clearance_reports],
+                [
+                    clearance["valid"] and collision["valid"]
+                    for clearance, collision in zip(
+                        body_clearance_reports, body_collision_reports
+                    )
+                ],
                 dtype=bool,
             )
             mug = env.scene["mug"]
@@ -240,18 +292,48 @@ def main():
                     torch.linalg.vector_norm(mug.data.root_vel_w[:, :3], dim=-1),
                 )
             terminal_pose = mug.data.root_pose_w.detach().clone()
+            terminal_pose_relative = (
+                terminal_pose.detach().cpu().numpy().copy()
+            )
+            terminal_pose_relative[:, :3] -= (
+                env.scene.env_origins.detach().cpu().numpy()
+            )
+            terminal_collision_reports = object_path_collision_reports(
+                terminal_pose_relative[:, None, :],
+                tree_pose=tree_pose.detach().cpu().numpy(),
+                object_mesh=mug_body_mesh,
+                tree_mesh=tree_mesh,
+                sample_stride=1,
+            )
+            terminal_body_clear = np.asarray(
+                [report["valid"] for report in terminal_collision_reports],
+                dtype=bool,
+            )
             drift = torch.linalg.vector_norm(
                 terminal_pose[:, :3] - initial_pose[:, :3], dim=-1
             )
             physical_success = env.stage3_success.detach().cpu().numpy()
-            success = np.logical_and(physical_success, geometry_valid)
+            seating_depth = -parameters[:, 0]
+            depth_valid = seating_depth >= args.minimum_seating_depth_m
+            success = np.logical_and.reduce(
+                (
+                    physical_success,
+                    geometry_valid,
+                    depth_valid,
+                    terminal_body_clear,
+                )
+            )
             scores = _score(
                 success,
                 drift.cpu().numpy(),
                 peak_speed.cpu().numpy(),
                 terminal_pose[:, 2].cpu().numpy(),
+                seating_depth,
+                args.seating_depth_weight,
             )
-            scores = np.where(geometry_valid, scores, -1.0e6)
+            scores = np.where(
+                np.logical_and(geometry_valid, depth_valid), scores, -1.0e6
+            )
             order = np.argsort(scores)[::-1]
             elites = parameters[order[: args.num_elites]]
             mean = elites.mean(axis=0)
@@ -283,10 +365,15 @@ def main():
                 "success_count": int(success.sum()),
                 "physical_success_count": int(physical_success.sum()),
                 "body_clearance_valid_count": int(geometry_valid.sum()),
+                "exact_body_collision_free_count": int(
+                    sum(report["valid"] for report in body_collision_reports)
+                ),
+                "terminal_body_clear_count": int(terminal_body_clear.sum()),
                 "best_score": float(scores[winner]),
                 "best_terminal_drift_m": float(drift[winner]),
                 "best_peak_speed_m_s": float(peak_speed[winner]),
                 "best_parameters": parameters[winner].tolist(),
+                "best_seating_depth_m": float(seating_depth[winner]),
                 "best_body_clearance_m": float(
                     body_clearance_reports[winner]["minimum_clearance_m"]
                 ),
@@ -306,12 +393,17 @@ def main():
                 "robot_tracking_used": False,
                 "cold_reset_each_iteration": True,
                 "semantic_collision_contract": (
-                    "cup body never contacts tree; handle contact allowed"
+                    "exact cup-body/tree intersection is forbidden; handle "
+                    "contact is allowed"
                 ),
+                "collision_method": "python-fcl exact mesh intersection",
                 "mug_body_collision_indices": list(
                     range(args.mug_handle_collision_start_index)
                 ),
                 "required_body_clearance_m": args.body_clearance_m,
+                "minimum_seating_depth_m": args.minimum_seating_depth_m,
+                "depth_proposals_m": list(args.depth_proposals_m),
+                "seating_depth_weight": args.seating_depth_weight,
             },
             "seed_pose": seed_pose.tolist(),
             "best_score": best_score,
