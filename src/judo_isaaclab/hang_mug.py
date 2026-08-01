@@ -46,6 +46,64 @@ class RigidAssetGeometry:
         )
 
 
+def reanchor_physical_handover(
+    trajectory: SkillTrajectory,
+    nominal_mug_pose: Any,
+    observed_mug_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Reanchor only the handover path to the mug pose observed after lift.
+
+    The mug can rotate inside a frictional left grasp, especially when its
+    geometry changes.  This deterministic feedback update preserves the
+    semantic right-contact transform while leaving pick and support targets
+    unchanged.
+    """
+
+    required = (
+        "left_lift",
+        "handover_pregrasp",
+        "right_grasp",
+        "left_release",
+        "tree_transport",
+    )
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    start = steps["left_lift"] + 1
+    pregrasp_end = steps["handover_pregrasp"]
+    grasp_end = steps["right_grasp"]
+    release_end = steps["left_release"]
+    transport_end = steps["tree_transport"]
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    corrected_pregrasp = transfer_pose(
+        right[pregrasp_end], nominal_mug_pose, observed_mug_pose
+    )
+    corrected_grasp = transfer_pose(
+        right[grasp_end], nominal_mug_pose, observed_mug_pose
+    )
+    right[start : pregrasp_end + 1] = interpolate_poses(
+        observed_right_pose, corrected_pregrasp, pregrasp_end - start + 1
+    )
+    right[pregrasp_end + 1 : grasp_end + 1] = interpolate_poses(
+        corrected_pregrasp, corrected_grasp, grasp_end - pregrasp_end
+    )
+    right[grasp_end + 1 : release_end + 1] = corrected_grasp
+    right[release_end + 1 : transport_end + 1] = interpolate_poses(
+        corrected_grasp,
+        trajectory.right_poses[transport_end],
+        transport_end - release_end,
+    )
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 
