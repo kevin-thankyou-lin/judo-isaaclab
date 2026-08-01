@@ -33,6 +33,165 @@ def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
     return float(np.linalg.norm(pot[:2] - cooktop[:2]))
 
 
+def reanchor_centered_support(
+    trajectory: SkillTrajectory,
+    center_correction_xy: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Apply observed pot-to-cooktop center error to the support path only."""
+    correction = np.asarray(center_correction_xy, dtype=np.float64)
+    if correction.shape != (2,) or not np.all(np.isfinite(correction)):
+        raise ValueError("center_correction_xy must contain two finite values")
+    required = (
+        "support_align",
+        "support_lower",
+        "pot_unload",
+        "pot_release",
+        "bimanual_withdraw",
+    )
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"support trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    start = steps["support_align"] + 1
+    lower_end = steps["support_lower"]
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    left_lower = left[lower_end].copy()
+    right_lower = right[lower_end].copy()
+    left_lower[:2] += correction
+    right_lower[:2] += correction
+    left[start : lower_end + 1] = interpolate_poses(
+        observed_left_pose, left_lower, lower_end - start + 1
+    )
+    right[start : lower_end + 1] = interpolate_poses(
+        observed_right_pose, right_lower, lower_end - start + 1
+    )
+    left[lower_end + 1 : release_end + 1] = left_lower
+    right[lower_end + 1 : release_end + 1] = right_lower
+    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        left_lower,
+        trajectory.left_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_lower,
+        trajectory.right_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def reanchor_centered_unload(
+    trajectory: SkillTrajectory,
+    center_correction_xy: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Correct residual center error while both handles remain grasped."""
+    correction = np.asarray(center_correction_xy, dtype=np.float64)
+    if correction.shape != (2,) or not np.all(np.isfinite(correction)):
+        raise ValueError("center_correction_xy must contain two finite values")
+    steps = trajectory.waypoint_steps
+    required = ("support_lower", "pot_unload", "pot_release", "bimanual_withdraw")
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"unload trajectory is missing waypoints: {missing}")
+    start = steps["support_lower"] + 1
+    unload_end = steps["pot_unload"]
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    left_unload = left[unload_end].copy()
+    right_unload = right[unload_end].copy()
+    left_unload[:2] += correction
+    right_unload[:2] += correction
+    left[start : unload_end + 1] = interpolate_poses(
+        observed_left_pose, left_unload, unload_end - start + 1
+    )
+    right[start : unload_end + 1] = interpolate_poses(
+        observed_right_pose, right_unload, unload_end - start + 1
+    )
+    left[unload_end + 1 : release_end + 1] = left_unload
+    right[unload_end + 1 : release_end + 1] = right_unload
+    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        left_unload,
+        trajectory.left_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_unload,
+        trajectory.right_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def reanchor_centered_release(
+    trajectory: SkillTrajectory,
+    center_correction_xy: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Use the final measured center residual during continuous release."""
+    correction = np.asarray(center_correction_xy, dtype=np.float64)
+    if correction.shape != (2,) or not np.all(np.isfinite(correction)):
+        raise ValueError("center_correction_xy must contain two finite values")
+    steps = trajectory.waypoint_steps
+    required = ("pot_unload", "pot_release", "bimanual_withdraw")
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"release trajectory is missing waypoints: {missing}")
+    start = steps["pot_unload"] + 1
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    left_release = left[release_end].copy()
+    right_release = right[release_end].copy()
+    left_release[:2] += correction
+    right_release[:2] += correction
+    left[start : release_end + 1] = interpolate_poses(
+        observed_left_pose, left_release, release_end - start + 1
+    )
+    right[start : release_end + 1] = interpolate_poses(
+        observed_right_pose, right_release, release_end - start + 1
+    )
+    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        left_release,
+        trajectory.left_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_release,
+        trajectory.right_poses[withdraw_end],
+        withdraw_end - release_end,
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 @dataclass(frozen=True)
 class RigidSupportGeometry:
     """Root pose, axis-aligned local size, and semantic horizontal supports."""

@@ -492,10 +492,11 @@ def main() -> None:
             if keyframes is not None else (None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
-        integrate_target_ik = bool(
-            trajectory is not None
-            and np.max(np.abs(target_geometry.size / source_geometry.size - 1.0)) > 0.20
-        )
+        # Centering deliberately departs from the edge-biased source support
+        # pose, even when source and target geometry are identical.  Track the
+        # post-grasp semantic path with integrated Cartesian IK in every skill
+        # rollout instead of falling back to the demonstration joint nominal.
+        integrate_target_ik = trajectory is not None
         grasp_complete_step = (
             trajectory.waypoint_steps["right_handle_grasp"]
             if trajectory is not None else None
@@ -532,6 +533,45 @@ def main() -> None:
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if trajectory is not None and step == trajectory.waypoint_steps["support_align"]:
+                from judo_isaaclab.put_pot import reanchor_centered_support
+
+                center_correction = (
+                    np.asarray(sample["cooktop_pose"], dtype=np.float64)[:2]
+                    - np.asarray(sample["pot_pose"], dtype=np.float64)[:2]
+                )
+                trajectory = reanchor_centered_support(
+                    trajectory,
+                    center_correction,
+                    sample["left_eef_pose"],
+                    sample["right_eef_pose"],
+                )
+            if trajectory is not None and step == trajectory.waypoint_steps["support_lower"]:
+                from judo_isaaclab.put_pot import reanchor_centered_unload
+
+                center_correction = (
+                    np.asarray(sample["cooktop_pose"], dtype=np.float64)[:2]
+                    - np.asarray(sample["pot_pose"], dtype=np.float64)[:2]
+                )
+                trajectory = reanchor_centered_unload(
+                    trajectory,
+                    center_correction,
+                    sample["left_eef_pose"],
+                    sample["right_eef_pose"],
+                )
+            if trajectory is not None and step == trajectory.waypoint_steps["pot_unload"]:
+                from judo_isaaclab.put_pot import reanchor_centered_release
+
+                center_correction = (
+                    np.asarray(sample["cooktop_pose"], dtype=np.float64)[:2]
+                    - np.asarray(sample["pot_pose"], dtype=np.float64)[:2]
+                )
+                trajectory = reanchor_centered_release(
+                    trajectory,
+                    center_correction,
+                    sample["left_eef_pose"],
+                    sample["right_eef_pose"],
+                )
             if encoder is not None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
@@ -627,7 +667,7 @@ def main() -> None:
                 "steps": len(actions),
                 "seed": args.seed,
                 "grasp_assistance": "none",
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "integrated_target_ik": integrate_target_ik, "support_align_steps": (trajectory.waypoint_steps["support_align"] - trajectory.waypoint_steps["pot_transport"] if trajectory is not None else None), "unload_steps": (trajectory.waypoint_steps["pot_unload"] - trajectory.waypoint_steps["support_lower"] if trajectory is not None else None)},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "integrated_target_ik": integrate_target_ik, "center_feedback_reanchor": trajectory is not None, "center_feedback_unload_correction": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M, "support_align_steps": (trajectory.waypoint_steps["support_align"] - trajectory.waypoint_steps["pot_transport"] if trajectory is not None else None), "unload_steps": (trajectory.waypoint_steps["pot_unload"] - trajectory.waypoint_steps["support_lower"] if trajectory is not None else None)},
             },
             "provenance": {
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
