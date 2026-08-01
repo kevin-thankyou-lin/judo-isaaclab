@@ -59,7 +59,8 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-joint-delta", type=float, default=0.16)
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
-    parser.add_argument("--drawer-pull-extra-m", type=float, default=0.075)
+    parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
+    parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--draw-coordinate-axes", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -226,6 +227,7 @@ def _build_skill(
     target_geometry,
     target_left_start,
     target_right_start,
+    drawer_placement_q_m,
     drawer_pull_extra_m,
 ):
     from judo_isaaclab.put_marker import (
@@ -269,8 +271,18 @@ def _build_skill(
     def left_drawer(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
-        return target_geometry.transfer_drawer_pose(
-            source_geometry, source_attach("left", index), source_q
+        target_q = float(
+            np.clip(
+                drawer_placement_q_m,
+                target_geometry.lower_limit_m,
+                target_geometry.upper_limit_m,
+            )
+        )
+        return transfer_pose(
+            source_attach("left", index),
+            source_geometry.drawer_frame(source_q),
+            target_geometry.drawer_frame(target_q),
+            local_position_scale=target_geometry.cavity_size / source_geometry.cavity_size,
         )
 
     def right_handle(name: str) -> np.ndarray:
@@ -737,6 +749,7 @@ def main() -> None:
                 target_geometry,
                 _eef_pose(env, "left_arm"),
                 _eef_pose(env, "right_arm"),
+                args.drawer_placement_q_m,
                 args.drawer_pull_extra_m,
             )
             if args.mode == "skill" else None
@@ -921,6 +934,7 @@ def main() -> None:
                     "max_position_step": args.max_position_step,
                     "max_rotation_step": args.max_rotation_step,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
+                    "drawer_placement_q_m": args.drawer_placement_q_m,
                 },
             },
             "provenance": {
