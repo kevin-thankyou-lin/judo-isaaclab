@@ -1,51 +1,47 @@
-"""History-conditioned IsaacLab rollouts for Judo."""
+"""History-conditioned IsaacLab rollouts and asset-adaptation utilities."""
 
-from judo_isaaclab.backend import HistoryConditionedIsaacLabBackend
-from judo_isaaclab.mpc import JudoIsaacLabMPC, MPCPlan
-from judo_isaaclab.task_space import (
-    DampedLeastSquaresPoseTrackingAdapter,
-    DampedLeastSquaresTaskSpaceAdapter,
-    resolve_end_effector_body_index,
-)
-from judo_isaaclab.types import BranchContext, RolloutDiagnostics
-from judo_isaaclab.adaptation import (
-    StageSpec,
-    TaskAdaptationBundle,
-    TrialEvidence,
-    asset_relative_grasp_pose,
-    corrected_insert_offset,
-)
-from judo_isaaclab.put_marker import (
-    DrawerGeometry,
-    PutMarkerSkillProgram,
-    SkillTrajectory,
-    SkillWaypoint,
-    compose_pose,
-    inverse_pose,
-    pose_from_matrix,
-    transfer_pose,
-)
+from __future__ import annotations
 
-__all__ = [
-    "BranchContext",
-    "DampedLeastSquaresPoseTrackingAdapter",
-    "DampedLeastSquaresTaskSpaceAdapter",
-    "DrawerGeometry",
-    "HistoryConditionedIsaacLabBackend",
-    "JudoIsaacLabMPC",
-    "MPCPlan",
-    "PutMarkerSkillProgram",
-    "RolloutDiagnostics",
-    "StageSpec",
-    "SkillTrajectory",
-    "SkillWaypoint",
-    "TaskAdaptationBundle",
-    "TrialEvidence",
-    "asset_relative_grasp_pose",
-    "compose_pose",
-    "corrected_insert_offset",
-    "inverse_pose",
-    "pose_from_matrix",
-    "resolve_end_effector_body_index",
-    "transfer_pose",
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+    "BranchContext": "judo_isaaclab.types",
+    "RolloutDiagnostics": "judo_isaaclab.types",
+    "HistoryConditionedIsaacLabBackend": "judo_isaaclab.backend",
+    "JudoIsaacLabMPC": "judo_isaaclab.mpc",
+    "MPCPlan": "judo_isaaclab.mpc",
+    "DampedLeastSquaresPoseTrackingAdapter": "judo_isaaclab.task_space",
+    "DampedLeastSquaresTaskSpaceAdapter": "judo_isaaclab.task_space",
+    "resolve_end_effector_body_index": "judo_isaaclab.task_space",
+    "StageSpec": "judo_isaaclab.adaptation",
+    "TaskAdaptationBundle": "judo_isaaclab.adaptation",
+    "TrialEvidence": "judo_isaaclab.adaptation",
+    "asset_relative_grasp_pose": "judo_isaaclab.adaptation",
+    "corrected_insert_offset": "judo_isaaclab.adaptation",
+    "DrawerGeometry": "judo_isaaclab.put_marker",
+    "PutMarkerSkillProgram": "judo_isaaclab.put_marker",
+    "SkillTrajectory": "judo_isaaclab.put_marker",
+    "SkillWaypoint": "judo_isaaclab.put_marker",
+    "compose_pose": "judo_isaaclab.put_marker",
+    "inverse_pose": "judo_isaaclab.put_marker",
+    "pose_from_matrix": "judo_isaaclab.put_marker",
+    "transfer_pose": "judo_isaaclab.put_marker",
+    "AttemptEvaluation": "judo_isaaclab.evidence_harness",
+    "EvidenceContract": "judo_isaaclab.evidence_harness",
+    "EvidenceLedger": "judo_isaaclab.evidence_harness",
+    "evaluate_result": "judo_isaaclab.evidence_harness",
+    "execute_attempt": "judo_isaaclab.evidence_harness",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    """Load simulator-heavy modules only when their public symbol is used."""
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value

@@ -138,6 +138,18 @@ All eight clones retain the mug over the eight-action candidate horizon:
 
 The exact receipt is `validation/hangmug_near_contact_smoke.json`.
 
+## Evidence-led coding agents
+
+`examples/evidence_adaptation_harness.py` provides a task-agnostic, append-only
+ledger for coding-agent asset adaptation. It requires source-skill success,
+target-replay failure, adapted target-skill success, and a continuous rendered
+success on the same target and revision. Failed attempts produce structured
+diagnoses rather than weakening the task predicate.
+
+The protocol and PutPot deployment bundle are documented in
+`docs/evidence_driven_asset_adaptation.md` and
+`configs/putpot_evidence_agent.json`.
+
 The same test also passes with a 32-action candidate horizon. All clones retain
 the grasp; internal spread remains 0.244 mm and 0.005684 rad, while terminal
 recorded-main divergence grows to 10.679 mm and 0.010304 rad. See
