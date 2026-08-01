@@ -249,6 +249,7 @@
           0.0,
           0.0
         ],
+        "insert_collision_clearance_m": 0.00025,
         "insert_eef_position_offset_branch": [
           -0.00688,
           -0.000867,
@@ -259,6 +260,9 @@
           0.00511356,
           0.20434844
         ],
+        "insert_rigid_weld_screening": true,
+        "insert_screening_radial_offset_m": 0.03,
+        "insert_screening_sample_stride": 1,
         "left_demo_playback_start_state": 670,
         "left_demo_playback_end_state": 790,
         "left_demo_playback_blend_fraction": 0.45,

@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import traceback
+from pathlib import Path
 
 import numpy as np
 
@@ -303,6 +304,32 @@ def _parser():
         "--insert-seat-fraction",
         type=float,
         default=HANGMUG_INSERT_SEAT_FRACTION,
+    )
+    parser.add_argument(
+        "--insert-rigid-weld-screening",
+        action="store_true",
+        help=(
+            "Screen pre-insertion corridors using the collision meshes of "
+            "the mug rigidly attached to the gripper and the target tree."
+        ),
+    )
+    parser.add_argument(
+        "--insert-collision-clearance-m",
+        type=float,
+        default=0.002,
+        help="Required mug-tree surface clearance before tangent insertion.",
+    )
+    parser.add_argument(
+        "--insert-screening-radial-offset-m",
+        type=float,
+        default=0.03,
+        help="Branch-frame radial detour used to generate screened corridors.",
+    )
+    parser.add_argument(
+        "--insert-screening-sample-stride",
+        type=int,
+        default=5,
+        help="Control-step stride used for pre-insertion mesh screening.",
     )
     parser.add_argument(
         "--insert-anchor-state",
@@ -693,6 +720,16 @@ def _load_demo_actions(args, start, end):
                 f"[0, {len(actions)})"
             )
         return np.asarray(actions[start:end], dtype=np.float32)
+
+
+def _asset_root_usd(asset_path):
+    path = Path(asset_path)
+    if path.is_file():
+        return str(path)
+    candidate = path / f"{path.name}.usd"
+    if not candidate.is_file():
+        raise ValueError(f"asset root USD does not exist: {candidate}")
+    return str(candidate)
 
 
 def _encode_state(env):
@@ -2142,6 +2179,12 @@ def main():
         raise ValueError("left demo blend fraction must be in [0, 1]")
     if args.left_demo_playback_waypoints < 2:
         raise ValueError("left demo playback requires at least two waypoints")
+    if args.insert_collision_clearance_m < 0.0:
+        raise ValueError("insert collision clearance must be nonnegative")
+    if args.insert_screening_radial_offset_m <= 0.0:
+        raise ValueError("insert screening radial offset must be positive")
+    if args.insert_screening_sample_stride < 1:
+        raise ValueError("insert screening sample stride must be positive")
     motion_weights = (
         args.right_joint_path_weight,
         args.right_joint_accel_weight,
@@ -2173,6 +2216,10 @@ def main():
             HistoryConditionedIsaacLabBackend,
             JudoIsaacLabMPC,
             asset_relative_grasp_pose,
+        )
+        from judo_isaaclab.collision_screening import (
+            load_usd_collision_mesh,
+            screen_rigid_weld_paths,
         )
 
         np.random.seed(args.seed)
@@ -2243,6 +2290,8 @@ def main():
         source_contact_pose = None
         grasp_approach_fraction_used = None
         grasp_contact_fraction_used = None
+        insert_collision_screening = None
+        insert_clearance_candidates = []
         base_controls = nominal
         if args.search_space == "task" and args.task_controller in (
             "pose_tracking",
@@ -2394,31 +2443,112 @@ def main():
                         _quat_to_matrix(target_tree_pose[3:7])
                         @ target_branch_rotation
                     )
-                    reference_eef_poses = insert(
-                        current_eef_pose,
-                        target_eef_pose,
-                        branch_rotation_world,
-                        args.horizon,
-                        target_position_offset_branch=(
+                    insert_kwargs = {
+                        "target_position_offset_branch": (
                             args.insert_eef_position_offset_branch
                         ),
-                        target_rotation_offset_branch=(
+                        "target_rotation_offset_branch": (
                             args.insert_eef_rotation_offset_branch
                         ),
-                        clearance_rotation_offset_branch=(
+                        "clearance_rotation_offset_branch": (
                             args.insert_clearance_rotation_offset_branch
                         ),
-                        clearance_offset_branch=(
-                            args.insert_clearance_offset_branch
-                        ),
-                        approach_offset_branch=(
+                        "approach_offset_branch": (
                             args.insert_approach_offset_branch
                         ),
-                        seat_offset_branch=args.insert_seat_offset_branch,
-                        clearance_fraction=args.insert_clearance_fraction,
-                        approach_fraction=args.insert_approach_fraction,
-                        seat_fraction=args.insert_seat_fraction,
-                    )
+                        "seat_offset_branch": args.insert_seat_offset_branch,
+                        "clearance_fraction": args.insert_clearance_fraction,
+                        "approach_fraction": args.insert_approach_fraction,
+                        "seat_fraction": args.insert_seat_fraction,
+                    }
+                    insert_clearance_candidates = [
+                        args.insert_clearance_offset_branch
+                    ]
+                    if args.insert_rigid_weld_screening:
+                        calibrated_target_position = (
+                            target_eef_pose[:3]
+                            + branch_rotation_world
+                            @ np.asarray(
+                                args.insert_eef_position_offset_branch,
+                                dtype=np.float32,
+                            )
+                        )
+                        start_offset = branch_rotation_world.T @ (
+                            current_eef_pose[:3] - calibrated_target_position
+                        )
+                        approach_offset = np.asarray(
+                            args.insert_approach_offset_branch,
+                            dtype=np.float32,
+                        )
+                        clearance_x = max(
+                            float(start_offset[0]), float(approach_offset[0])
+                        )
+                        radial = args.insert_screening_radial_offset_m
+                        insert_clearance_candidates = [
+                            None,
+                            (clearance_x, radial, 0.0),
+                            (clearance_x, -radial, 0.0),
+                            (clearance_x, 0.0, radial),
+                            (clearance_x, 0.0, -radial),
+                        ]
+                    insert_paths = [
+                        insert(
+                            current_eef_pose,
+                            target_eef_pose,
+                            branch_rotation_world,
+                            args.horizon,
+                            clearance_offset_branch=clearance_offset,
+                            **insert_kwargs,
+                        )
+                        for clearance_offset in insert_clearance_candidates
+                    ]
+                    if args.insert_rigid_weld_screening:
+                        selected_index, reports = screen_rigid_weld_paths(
+                            insert_paths,
+                            current_eef_pose=current_eef_pose,
+                            current_object_pose=current_mug_pose,
+                            tree_pose=target_tree_pose,
+                            object_mesh=load_usd_collision_mesh(
+                                _asset_root_usd(_target_mug_path(args))
+                            ),
+                            tree_mesh=load_usd_collision_mesh(
+                                _asset_root_usd(_target_tree_path(args))
+                            ),
+                            preinsert_end_step=(
+                                int(
+                                    np.ceil(
+                                        args.insert_approach_fraction
+                                        * args.horizon
+                                    )
+                                )
+                                - 1
+                            ),
+                            required_clearance_m=(
+                                args.insert_collision_clearance_m
+                            ),
+                            sample_stride=args.insert_screening_sample_stride,
+                        )
+                        insert_collision_screening = {
+                            "selected_candidate": selected_index,
+                            "selected_clearance_offset_branch_m": (
+                                insert_clearance_candidates[selected_index]
+                            ),
+                            "required_clearance_m": (
+                                args.insert_collision_clearance_m
+                            ),
+                            "rigid_weld_assumption": True,
+                            "clearance_method": (
+                                "symmetric_sampled_surface_kdtree"
+                            ),
+                            "sample_stride": (
+                                args.insert_screening_sample_stride
+                            ),
+                            "allowed_contact_phase": "tangent_insertion_only",
+                            "candidates": reports,
+                        }
+                        reference_eef_poses = insert_paths[selected_index]
+                    else:
+                        reference_eef_poses = insert_paths[0]
                 else:
                     if (
                         args.target_name == "handover_latched"
@@ -2926,6 +3056,7 @@ def main():
                     "clearance_fraction": args.insert_clearance_fraction,
                     "approach_fraction": args.insert_approach_fraction,
                     "seat_fraction": args.insert_seat_fraction,
+                    "rigid_weld_screening": insert_collision_screening,
                     "left_visibility_anchor_state": (
                         args.left_visibility_anchor_state
                     ),
@@ -3075,6 +3206,58 @@ def main():
                     args.insert_approach_fraction
                 ),
                 insert_seat_fraction=np.float32(args.insert_seat_fraction),
+                insert_screening_selected_candidate=np.int64(
+                    -1
+                    if insert_collision_screening is None
+                    else insert_collision_screening["selected_candidate"]
+                ),
+                insert_screening_required_clearance_m=np.float32(
+                    args.insert_collision_clearance_m
+                ),
+                insert_screening_candidate_clearance_offsets=np.asarray(
+                    [
+                        (
+                            (np.nan, np.nan, np.nan)
+                            if offset is None
+                            else offset
+                        )
+                        for offset in insert_clearance_candidates
+                    ],
+                    dtype=np.float32,
+                ),
+                insert_screening_candidate_min_clearances=np.asarray(
+                    []
+                    if insert_collision_screening is None
+                    else [
+                        candidate["minimum_clearance_m"]
+                        for candidate in insert_collision_screening[
+                            "candidates"
+                        ]
+                    ],
+                    dtype=np.float32,
+                ),
+                insert_screening_candidate_path_lengths=np.asarray(
+                    []
+                    if insert_collision_screening is None
+                    else [
+                        candidate["path_length_m"]
+                        for candidate in insert_collision_screening[
+                            "candidates"
+                        ]
+                    ],
+                    dtype=np.float32,
+                ),
+                insert_screening_candidate_valid=np.asarray(
+                    []
+                    if insert_collision_screening is None
+                    else [
+                        candidate["valid"]
+                        for candidate in insert_collision_screening[
+                            "candidates"
+                        ]
+                    ],
+                    dtype=bool,
+                ),
                 insert_anchor_state=np.int64(args.insert_anchor_state),
                 left_visibility_anchor_state=(
                     np.int64(-1)

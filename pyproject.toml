@@ -18,6 +18,10 @@ dependencies = [
 test = [
     "pytest>=8",
 ]
+collision-screening = [
+    "scipy>=1.10",
+    "trimesh>=4.5",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/judo_isaaclab"]
