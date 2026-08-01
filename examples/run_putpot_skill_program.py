@@ -268,11 +268,16 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
     frames = keyframes["frames"]
     source_initial = source_geometry
     target_initial = target_geometry
+    scale_delta = float(
+        np.max(np.abs(target_geometry.size / source_geometry.size - 1.0))
+    )
 
     def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
         frame = frames[frame_name]
-        source_frame = RigidSupportGeometry(
-            frame["pot_pose"], source_initial.size
+        source_frame = (
+            RigidSupportGeometry(frame["pot_pose"], source_initial.size)
+            if scale_delta > 0.20
+            else source_initial
         )
         return target_initial.transfer_pose_from(
             source_frame, frame[f"{arm}_eef_pose"]
@@ -280,15 +285,21 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
     right_grasp = transfer_initial("right_handle_grasp", "right")
-    # Preserve the target-scaled handle frames across the grasp-to-lift
-    # transition.  Reusing source-local contact offsets here is discontinuous
-    # whenever the target pot dimensions differ from the source dimensions.
-    left_contact_local = compose_pose(inverse_pose(target_initial.root_pose), left_grasp)
-    right_contact_local = compose_pose(inverse_pose(target_initial.root_pose), right_grasp)
+    if scale_delta > 0.20:
+        # Preserve the target-scaled handle frames across the grasp-to-lift
+        # transition.  Reusing source-local contact offsets here is
+        # discontinuous when target dimensions differ materially.
+        contact_root = target_initial.root_pose
+        left_contact_world = left_grasp
+        right_contact_world = right_grasp
+    else:
+        grasp_frame = frames["right_handle_grasp"]
+        contact_root = np.asarray(grasp_frame["pot_pose"], dtype=np.float64)
+        left_contact_world = np.asarray(grasp_frame["left_eef_pose"], dtype=np.float64)
+        right_contact_world = np.asarray(grasp_frame["right_eef_pose"], dtype=np.float64)
+    left_contact_local = compose_pose(inverse_pose(contact_root), left_contact_world)
+    right_contact_local = compose_pose(inverse_pose(contact_root), right_contact_world)
 
-    scale_delta = float(
-        np.max(np.abs(target_geometry.size / source_geometry.size - 1.0))
-    )
     source_final_pot = np.asarray(frames["stable_settle"]["pot_pose"], dtype=np.float64)
     source_final_cooktop = np.asarray(frames["stable_settle"]["cooktop_pose"], dtype=np.float64)
     source_final_local = compose_pose(inverse_pose(source_final_cooktop), source_final_pot)
