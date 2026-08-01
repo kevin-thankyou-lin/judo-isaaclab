@@ -10,6 +10,7 @@ import sys
 
 
 CENTER_TOLERANCE_M = 0.03
+COLLISION_CLEARANCE_M = 0.025
 
 
 def main() -> None:
@@ -60,6 +61,36 @@ def main() -> None:
                 errors.append("checks.centered_on_cooktop is not true")
             if result_checks.get("accepted_task_success") is not True:
                 errors.append("checks.accepted_task_success is not true")
+            if result_checks.get("smooth_collision_aware_transport") is not True:
+                errors.append("checks.smooth_collision_aware_transport is not true")
+            if result_checks.get("transport_no_internal_stops") is not True:
+                errors.append("checks.transport_no_internal_stops is not true")
+            if result_checks.get("bimanual_transport_completed") is not True:
+                errors.append("checks.bimanual_transport_completed is not true")
+            transport = result.get("metrics", {}).get("transport_plan", {})
+            internal_stops = transport.get("internal_stop_count")
+            if internal_stops != 0:
+                errors.append(
+                    f"transport internal stop count is {internal_stops!r}, not 0"
+                )
+            clearance = transport.get("minimum_cooktop_clearance_m")
+            if not isinstance(clearance, (int, float)):
+                errors.append("missing numeric transport cooktop clearance")
+            elif clearance + 1.0e-9 < COLLISION_CLEARANCE_M:
+                errors.append(
+                    f"transport clearance {clearance:.6f} m is below "
+                    f"{COLLISION_CLEARANCE_M:.3f} m"
+                )
+            executed_clearance = result.get("metrics", {}).get(
+                "transport_executed", {}
+            ).get("minimum_cooktop_clearance_m")
+            if not isinstance(executed_clearance, (int, float)):
+                errors.append("missing numeric executed transport cooktop clearance")
+            elif executed_clearance + 1.0e-9 < COLLISION_CLEARANCE_M:
+                errors.append(
+                    f"executed transport clearance {executed_clearance:.6f} m is below "
+                    f"{COLLISION_CLEARANCE_M:.3f} m"
+                )
     if not os.path.isfile(args.trace_npz) or os.path.getsize(args.trace_npz) == 0:
         errors.append(f"missing or empty trace: {args.trace_npz}")
     if args.video:

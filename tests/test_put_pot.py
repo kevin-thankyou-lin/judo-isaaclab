@@ -5,13 +5,17 @@ from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     PutPotSkillProgram,
     RigidSupportGeometry,
+    cartesian_smoothness_metrics,
     cooktop_center_error_m,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_centered_release,
+    reanchor_centered_lowering,
     reanchor_supported_center_slide,
+    smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
 )
+from judo_isaaclab.put_marker import compose_pose, interpolate_poses, inverse_pose
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -38,6 +42,114 @@ def test_default_support_alignment_targets_true_cooktop_center():
     assert cooktop_center_error_m(
         _pose(0.731, -0.3, 0.8), cooktop.root_pose
     ) > CENTERED_ON_COOKTOP_TOLERANCE_M
+
+
+def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
+    pot_size = np.asarray([0.30, 0.28, 0.20])
+    cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.8), [0.36, 0.34, 0.10])
+    start = _pose(0.05, 0.05, 0.78)
+    target = _pose(0.7, -0.3, cooktop.top_frame[2] + 0.5 * pot_size[2] + 0.16)
+    left_contact = _pose(0.0, 0.17, 0.02)
+    right_contact = _pose(0.0, -0.17, 0.02)
+    transport = smooth_collision_aware_bimanual_transport(
+        start,
+        target,
+        left_contact,
+        right_contact,
+        pot_size,
+        cooktop,
+        steps=180,
+        collision_clearance_m=0.025,
+    )
+    assert transport.minimum_cooktop_clearance_m >= 0.025 - 1.0e-9
+    assert transport.cooktop_overlap_samples > 0
+    for index in (0, 60, 120, 179):
+        assert compose_pose(
+            inverse_pose(transport.pot_poses[index]), transport.left_poses[index]
+        ) == pytest.approx(left_contact)
+        assert compose_pose(
+            inverse_pose(transport.pot_poses[index]), transport.right_poses[index]
+        ) == pytest.approx(right_contact)
+    metrics = cartesian_smoothness_metrics(
+        transport.left_poses, transport.right_poses
+    )
+    assert metrics["internal_stop_count"] == 0
+
+
+def test_single_transport_removes_segment_boundary_speed_dips():
+    cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.8), [0.36, 0.34, 0.10])
+    pot_size = np.asarray([0.30, 0.28, 0.20])
+    start = _pose(0.05, 0.05, 0.78)
+    target = _pose(0.7, -0.3, 1.11)
+    left_contact = _pose(0.0, 0.17, 0.02)
+    right_contact = _pose(0.0, -0.17, 0.02)
+    smooth = smooth_collision_aware_bimanual_transport(
+        start, target, left_contact, right_contact, pot_size, cooktop,
+        steps=180, collision_clearance_m=0.025,
+    )
+    lift = _pose(0.05, 0.05, 1.05)
+    middle = _pose(0.38, -0.12, 1.11)
+    segmented_pot = np.concatenate(
+        (
+            interpolate_poses(start, lift, 60),
+            interpolate_poses(lift, middle, 60),
+            interpolate_poses(middle, target, 60),
+        )
+    )
+    segmented_left = np.asarray(
+        [compose_pose(pose, left_contact) for pose in segmented_pot]
+    )
+    segmented_right = np.asarray(
+        [compose_pose(pose, right_contact) for pose in segmented_pot]
+    )
+    smooth_metrics = cartesian_smoothness_metrics(
+        smooth.left_poses, smooth.right_poses
+    )
+    segmented_metrics = cartesian_smoothness_metrics(
+        segmented_left, segmented_right
+    )
+    assert smooth_metrics["internal_stop_count"] == 0
+    assert segmented_metrics["internal_stop_count"] > 0
+    assert smooth_metrics["peak_jerk_mps3"] < segmented_metrics["peak_jerk_mps3"]
+
+
+def test_center_feedback_preserves_completed_smooth_transport():
+    cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.8), [0.36, 0.34, 0.10])
+    pot_size = np.asarray([0.30, 0.28, 0.20])
+    start = _pose(0.05, 0.05, 0.78)
+    high_center = _pose(0.7, -0.3, 0.981)
+    left_contact = _pose(0.0, 0.17, 0.02)
+    right_contact = _pose(0.0, -0.17, 0.02)
+    program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1), _pose(0.1, 1.0),
+        compose_pose(start, left_contact), compose_pose(start, right_contact),
+        approach_steps=2, left_close_steps=2, right_close_steps=2,
+    )
+    program.smooth_bimanual_transport_to_center(
+        start, high_center, left_contact, right_contact, pot_size, cooktop,
+        steps=20, collision_clearance_m=0.025,
+    )
+    lower_left = compose_pose(_pose(0.7, -0.3, 0.956), left_contact)
+    lower_right = compose_pose(_pose(0.7, -0.3, 0.956), right_contact)
+    program.short_lower_release_and_settle(
+        lower_left, lower_right, _pose(0.6, 0.0, 1.2), _pose(0.6, -0.4, 1.2),
+        lower_steps=4, release_steps=2, withdraw_steps=3, settle_steps=3,
+    )
+    trajectory = program.build()
+    transport_end = trajectory.waypoint_steps["smooth_transport"]
+    original_left = trajectory.left_poses.copy()
+    corrected = reanchor_centered_lowering(
+        trajectory, [0.01, -0.02],
+        trajectory.left_poses[transport_end], trajectory.right_poses[transport_end],
+    )
+    assert corrected.left_poses[: transport_end + 1] == pytest.approx(
+        original_left[: transport_end + 1]
+    )
+    lower_end = trajectory.waypoint_steps["support_lower"]
+    assert corrected.left_poses[lower_end, :2] == pytest.approx(
+        trajectory.left_poses[lower_end, :2] + [0.01, -0.02]
+    )
 
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():

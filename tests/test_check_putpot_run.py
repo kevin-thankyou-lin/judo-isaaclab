@@ -15,10 +15,22 @@ def _run_checker(tmp_path: Path, center_error_m: float):
         json.dumps(
             {
                 "status": "passed",
-                "metrics": {"center_error_m": center_error_m},
+                "metrics": {
+                    "center_error_m": center_error_m,
+                    "transport_plan": {
+                        "internal_stop_count": 0,
+                        "minimum_cooktop_clearance_m": 0.025,
+                    },
+                    "transport_executed": {
+                        "minimum_cooktop_clearance_m": 0.025,
+                    },
+                },
                 "checks": {
                     "centered_on_cooktop": centered,
                     "accepted_task_success": centered,
+                    "smooth_collision_aware_transport": True,
+                    "transport_no_internal_stops": True,
+                    "bimanual_transport_completed": True,
                 },
                 "acceptance_checks": {"centered_on_cooktop": centered},
             }

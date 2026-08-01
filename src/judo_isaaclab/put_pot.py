@@ -27,11 +27,203 @@ from .put_marker import (
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 
 
+@dataclass(frozen=True)
+class SmoothBimanualTransport:
+    """One sampled pot path and the two rigidly attached handle paths."""
+
+    pot_poses: np.ndarray
+    left_poses: np.ndarray
+    right_poses: np.ndarray
+    minimum_cooktop_clearance_m: float
+    cooktop_overlap_samples: int
+
+
+def _minimum_jerk_fraction(steps: int) -> np.ndarray:
+    if steps < 1:
+        raise ValueError("steps must be positive")
+    fraction = np.linspace(1.0 / steps, 1.0, steps)
+    return fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+
+
+def _cooktop_overlap_mask(
+    pot_positions: np.ndarray,
+    pot_size: Any,
+    cooktop: "RigidSupportGeometry",
+) -> np.ndarray:
+    size = np.asarray(pot_size, dtype=np.float64)
+    if size.shape != (3,) or np.any(size <= 0.0):
+        raise ValueError("pot_size must contain three positive values")
+    inverse_rotation = cooktop.root_pose[3:] * np.asarray([1.0, -1.0, -1.0, -1.0])
+    local_xy = np.asarray(
+        [
+            quaternion_rotate(inverse_rotation, position - cooktop.root_pose[:3])[:2]
+            for position in np.asarray(pot_positions, dtype=np.float64)
+        ]
+    )
+    combined_half_extent = 0.5 * (size[:2] + cooktop.size[:2])
+    return np.all(np.abs(local_xy) <= combined_half_extent[None], axis=1)
+
+
+def minimum_cooktop_clearance_m(
+    pot_poses: Any,
+    pot_size: Any,
+    cooktop: "RigidSupportGeometry",
+) -> float:
+    """Measure minimum pot-bottom clearance while swept footprints overlap."""
+    poses = np.asarray(pot_poses, dtype=np.float64)
+    size = np.asarray(pot_size, dtype=np.float64)
+    if poses.ndim != 2 or poses.shape[1] != 7:
+        raise ValueError("pot_poses must have shape (N, 7)")
+    overlap = _cooktop_overlap_mask(poses[:, :3], size, cooktop)
+    if not np.any(overlap):
+        return float("inf")
+    clearance = poses[:, 2] - 0.5 * size[2] - cooktop.top_frame[2]
+    return float(np.min(clearance[overlap]))
+
+
+def smooth_collision_aware_bimanual_transport(
+    start_pot_pose: Any,
+    target_pot_pose: Any,
+    left_contact_local: Any,
+    right_contact_local: Any,
+    pot_size: Any,
+    cooktop: "RigidSupportGeometry",
+    *,
+    steps: int,
+    collision_clearance_m: float,
+) -> SmoothBimanualTransport:
+    """Build one minimum-jerk bimanual sweep that clears the cooktop.
+
+    The planar motion and orientation use a single quintic time law.  A C2
+    vertical bump is added only when the swept pot footprint would otherwise
+    intersect the cooktop top plane.  Both wrist poses are composed from the
+    same pot path, so their handle transforms stay rigid throughout.
+    """
+    if steps < 8:
+        raise ValueError("smooth transport requires at least eight steps")
+    if collision_clearance_m < 0.0:
+        raise ValueError("collision_clearance_m must be nonnegative")
+    start = _pose(start_pot_pose, "start_pot_pose")
+    target = _pose(target_pot_pose, "target_pot_pose")
+    left_contact = _pose(left_contact_local, "left_contact_local")
+    right_contact = _pose(right_contact_local, "right_contact_local")
+    size = np.asarray(pot_size, dtype=np.float64)
+    pot_poses = interpolate_poses(start, target, steps)
+    overlap = _cooktop_overlap_mask(pot_poses[:, :3], size, cooktop)
+    required_bottom_z = cooktop.top_frame[2] + float(collision_clearance_m)
+    base_bottom_z = pot_poses[:, 2] - 0.5 * size[2]
+    fraction = np.linspace(1.0 / steps, 1.0, steps)
+    # Unit-height C2 bump: value, velocity, and acceleration are zero at both
+    # endpoints, unlike a parabolic arch.
+    bump = 64.0 * fraction**3 * (1.0 - fraction) ** 3
+    required_lift = np.zeros(steps, dtype=np.float64)
+    required_lift[overlap] = np.maximum(
+        0.0, required_bottom_z - base_bottom_z[overlap]
+    )
+    if required_lift[-1] > 1.0e-9:
+        raise ValueError("transport target does not clear the cooktop")
+    usable = overlap & (bump > 1.0e-9)
+    amplitude = float(np.max(required_lift[usable] / bump[usable])) if np.any(usable) else 0.0
+    pot_poses[:, 2] += amplitude * bump
+    minimum_clearance = minimum_cooktop_clearance_m(pot_poses, size, cooktop)
+    if minimum_clearance + 1.0e-9 < collision_clearance_m:
+        raise AssertionError("constructed transport violates cooktop clearance")
+    left = np.asarray([compose_pose(pose, left_contact) for pose in pot_poses])
+    right = np.asarray([compose_pose(pose, right_contact) for pose in pot_poses])
+    return SmoothBimanualTransport(
+        pot_poses=pot_poses,
+        left_poses=left,
+        right_poses=right,
+        minimum_cooktop_clearance_m=minimum_clearance,
+        cooktop_overlap_samples=int(np.count_nonzero(overlap)),
+    )
+
+
+def cartesian_smoothness_metrics(
+    left_poses: Any,
+    right_poses: Any,
+    *,
+    control_rate_hz: float = 30.0,
+) -> dict[str, float | int]:
+    """Return deterministic finite-difference metrics for a bimanual path."""
+    left = np.asarray(left_poses, dtype=np.float64)
+    right = np.asarray(right_poses, dtype=np.float64)
+    if left.ndim != 2 or right.shape != left.shape or left.shape[1] != 7:
+        raise ValueError("left_poses and right_poses must have matching (N, 7) shapes")
+    if len(left) < 8 or control_rate_hz <= 0.0:
+        raise ValueError("smoothness metrics require at least eight poses and positive rate")
+    position = np.concatenate((left[:, :3], right[:, :3]), axis=1)
+    velocity = np.diff(position, axis=0) * control_rate_hz
+    acceleration = np.diff(velocity, axis=0) * control_rate_hz
+    jerk = np.diff(acceleration, axis=0) * control_rate_hz
+    speed = np.linalg.norm(velocity, axis=1)
+    peak_speed = float(np.max(speed))
+    trim = max(2, int(np.ceil(0.08 * len(speed))))
+    interior = speed[trim:-trim] if len(speed) > 2 * trim else speed
+    stop_threshold = max(1.0e-6, 0.05 * peak_speed)
+    return {
+        "path_length_m": float(np.sum(speed) / control_rate_hz),
+        "peak_speed_mps": peak_speed,
+        "peak_acceleration_mps2": float(np.max(np.linalg.norm(acceleration, axis=1))),
+        "peak_jerk_mps3": float(np.max(np.linalg.norm(jerk, axis=1))),
+        "internal_stop_count": int(np.count_nonzero(interior <= stop_threshold)),
+        "maximum_step_m": float(np.max(speed) / control_rate_hz),
+    }
+
+
 def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
     """Return planar root-center error for the pot and cooktop."""
     pot = _pose(pot_pose, "pot_pose")
     cooktop = _pose(cooktop_pose, "cooktop_pose")
     return float(np.linalg.norm(pot[:2] - cooktop[:2]))
+
+
+def reanchor_centered_lowering(
+    trajectory: SkillTrajectory,
+    center_correction_xy: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Correct tracking residual only during the short centered lowering."""
+    correction = np.asarray(center_correction_xy, dtype=np.float64)
+    if correction.shape != (2,) or not np.all(np.isfinite(correction)):
+        raise ValueError("center_correction_xy must contain two finite values")
+    steps = trajectory.waypoint_steps
+    required = ("smooth_transport", "support_lower", "pot_release", "bimanual_withdraw")
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"smooth trajectory is missing waypoints: {missing}")
+    start = steps["smooth_transport"] + 1
+    lower_end = steps["support_lower"]
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    left_lower = left[lower_end].copy()
+    right_lower = right[lower_end].copy()
+    left_lower[:2] += correction
+    right_lower[:2] += correction
+    left[start : lower_end + 1] = interpolate_poses(
+        observed_left_pose, left_lower, lower_end - start + 1
+    )
+    right[start : lower_end + 1] = interpolate_poses(
+        observed_right_pose, right_lower, lower_end - start + 1
+    )
+    left[lower_end + 1 : release_end + 1] = left_lower
+    right[lower_end + 1 : release_end + 1] = right_lower
+    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        left_lower, trajectory.left_poses[withdraw_end], withdraw_end - release_end
+    )
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_lower, trajectory.right_poses[withdraw_end], withdraw_end - release_end
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
 
 
 def reanchor_centered_support(
@@ -155,7 +347,13 @@ def reanchor_centered_release(
     if correction.shape != (2,) or not np.all(np.isfinite(correction)):
         raise ValueError("center_correction_xy must contain two finite values")
     steps = trajectory.waypoint_steps
-    anchor_name = "center_slide" if "center_slide" in steps else "pot_unload"
+    anchor_name = (
+        "center_slide"
+        if "center_slide" in steps
+        else "pot_unload"
+        if "pot_unload" in steps
+        else "support_lower"
+    )
     required = (anchor_name, "pot_release", "bimanual_withdraw")
     missing = [name for name in required if name not in steps]
     if missing:
@@ -302,6 +500,27 @@ def support_aligned_pot_pose(
     return result
 
 
+@dataclass(frozen=True)
+class _SampledSkillSegment:
+    name: str
+    stage: str
+    left_poses: np.ndarray
+    right_poses: np.ndarray
+    grippers: np.ndarray
+
+    def __post_init__(self) -> None:
+        left = np.asarray(self.left_poses, dtype=np.float64)
+        right = np.asarray(self.right_poses, dtype=np.float64)
+        grippers = np.asarray(self.grippers, dtype=np.float64)
+        if not self.name or not self.stage or left.ndim != 2 or left.shape[1] != 7:
+            raise ValueError("sampled segment needs a name, stage, and (N, 7) poses")
+        if right.shape != left.shape or grippers.shape != (len(left), 2) or len(left) < 1:
+            raise ValueError("sampled segment arrays have incompatible shapes")
+        object.__setattr__(self, "left_poses", left)
+        object.__setattr__(self, "right_poses", right)
+        object.__setattr__(self, "grippers", grippers)
+
+
 class PutPotSkillProgram:
     """Builder for one uninterrupted bimanual grasp/place/release rollout."""
 
@@ -319,7 +538,7 @@ class PutPotSkillProgram:
         self._initial_left = self._left.copy()
         self._initial_right = self._right.copy()
         self._initial_grippers = (self._left_gripper, self._right_gripper)
-        self._waypoints: list[SkillWaypoint] = []
+        self._segments: list[SkillWaypoint | _SampledSkillSegment] = []
 
     def _append(
         self,
@@ -340,7 +559,7 @@ class PutPotSkillProgram:
             self._left_gripper = float(left_gripper)
         if right_gripper is not None:
             self._right_gripper = float(right_gripper)
-        self._waypoints.append(
+        self._segments.append(
             SkillWaypoint(
                 name=name,
                 stage=stage,
@@ -351,6 +570,24 @@ class PutPotSkillProgram:
                 right_gripper=self._right_gripper,
             )
         )
+
+    def _append_sampled(
+        self,
+        name: str,
+        stage: str,
+        left_poses: Any,
+        right_poses: Any,
+    ) -> None:
+        left = np.asarray(left_poses, dtype=np.float64)
+        right = np.asarray(right_poses, dtype=np.float64)
+        grippers = np.tile(
+            np.asarray([self._left_gripper, self._right_gripper], dtype=np.float64),
+            (len(left), 1),
+        )
+        segment = _SampledSkillSegment(name, stage, left, right, grippers)
+        self._segments.append(segment)
+        self._left = segment.left_poses[-1].copy()
+        self._right = segment.right_poses[-1].copy()
 
     def bimanual_handle_grasp(
         self,
@@ -420,6 +657,74 @@ class PutPotSkillProgram:
             left_pose=left_align,
             right_pose=right_align,
         )
+
+    def smooth_bimanual_transport_to_center(
+        self,
+        start_pot_pose: Any,
+        target_pot_pose: Any,
+        left_contact_local: Any,
+        right_contact_local: Any,
+        pot_size: Any,
+        cooktop: RigidSupportGeometry,
+        *,
+        steps: int,
+        collision_clearance_m: float,
+    ) -> SmoothBimanualTransport:
+        """Append one collision-checked bimanual sweep to the centered target."""
+        transport = smooth_collision_aware_bimanual_transport(
+            start_pot_pose,
+            target_pot_pose,
+            left_contact_local,
+            right_contact_local,
+            pot_size,
+            cooktop,
+            steps=steps,
+            collision_clearance_m=collision_clearance_m,
+        )
+        self._append_sampled(
+            "smooth_transport",
+            "smooth_bimanual_transport",
+            transport.left_poses,
+            transport.right_poses,
+        )
+        return transport
+
+    def short_lower_release_and_settle(
+        self,
+        left_lower: Any,
+        right_lower: Any,
+        left_withdraw: Any,
+        right_withdraw: Any,
+        *,
+        lower_steps: int,
+        release_steps: int,
+        withdraw_steps: int,
+        settle_steps: int,
+        opened: float = -0.0475,
+    ) -> None:
+        """Lower at center, release both handles, withdraw, and settle."""
+        self._append(
+            "support_lower",
+            "support_alignment",
+            lower_steps,
+            left_pose=left_lower,
+            right_pose=right_lower,
+        )
+        self._append(
+            "pot_release",
+            "unload_release",
+            release_steps,
+            left_gripper=opened,
+            right_gripper=opened,
+        )
+        self._append(
+            "bimanual_withdraw",
+            "stable_settle",
+            withdraw_steps,
+            left_pose=left_withdraw,
+            right_pose=right_withdraw,
+        )
+        self._append("stable_settle", "stable_settle", settle_steps)
 
     def unload_release_and_settle(
         self,
@@ -511,7 +816,7 @@ class PutPotSkillProgram:
         self._append("stable_settle", "stable_settle", settle_steps)
 
     def build(self) -> SkillTrajectory:
-        if not self._waypoints:
+        if not self._segments:
             raise ValueError("skill program has no waypoints")
         left = self._initial_left
         right = self._initial_right
@@ -522,20 +827,30 @@ class PutPotSkillProgram:
         stage_names: list[str] = []
         waypoint_steps: dict[str, int] = {}
         cursor = 0
-        for waypoint in self._waypoints:
-            left_parts.append(interpolate_poses(left, waypoint.left_pose, waypoint.steps))
-            right_parts.append(interpolate_poses(right, waypoint.right_pose, waypoint.steps))
-            fraction = np.linspace(1.0 / waypoint.steps, 1.0, waypoint.steps)
-            smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
-            grippers = np.empty((waypoint.steps, 2), dtype=np.float64)
-            grippers[:, 0] = left_gripper + smooth * (waypoint.left_gripper - left_gripper)
-            grippers[:, 1] = right_gripper + smooth * (waypoint.right_gripper - right_gripper)
+        for segment in self._segments:
+            if isinstance(segment, SkillWaypoint):
+                left_part = interpolate_poses(left, segment.left_pose, segment.steps)
+                right_part = interpolate_poses(right, segment.right_pose, segment.steps)
+                smooth = _minimum_jerk_fraction(segment.steps)
+                grippers = np.empty((segment.steps, 2), dtype=np.float64)
+                grippers[:, 0] = left_gripper + smooth * (segment.left_gripper - left_gripper)
+                grippers[:, 1] = right_gripper + smooth * (segment.right_gripper - right_gripper)
+                left, right = segment.left_pose, segment.right_pose
+                left_gripper, right_gripper = segment.left_gripper, segment.right_gripper
+                steps = segment.steps
+            else:
+                left_part = segment.left_poses
+                right_part = segment.right_poses
+                grippers = segment.grippers
+                left, right = left_part[-1], right_part[-1]
+                left_gripper, right_gripper = grippers[-1]
+                steps = len(left_part)
+            left_parts.append(left_part)
+            right_parts.append(right_part)
             gripper_parts.append(grippers)
-            stage_names.extend([waypoint.stage] * waypoint.steps)
-            cursor += waypoint.steps
-            waypoint_steps[waypoint.name] = cursor - 1
-            left, right = waypoint.left_pose, waypoint.right_pose
-            left_gripper, right_gripper = waypoint.left_gripper, waypoint.right_gripper
+            stage_names.extend([segment.stage] * steps)
+            cursor += steps
+            waypoint_steps[segment.name] = cursor - 1
         return SkillTrajectory(
             left_poses=np.concatenate(left_parts),
             right_poses=np.concatenate(right_parts),

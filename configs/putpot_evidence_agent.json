@@ -58,6 +58,21 @@
       "center_error_m": [
         "metrics.center_error_m"
       ],
+      "transport_peak_jerk_mps3": [
+        "metrics.transport_plan.peak_jerk_mps3"
+      ],
+      "transport_executed_peak_jerk_mps3": [
+        "metrics.transport_executed.peak_jerk_mps3"
+      ],
+      "transport_internal_stop_count": [
+        "metrics.transport_plan.internal_stop_count"
+      ],
+      "transport_minimum_cooktop_clearance_m": [
+        "metrics.transport_plan.minimum_cooktop_clearance_m"
+      ],
+      "transport_executed_minimum_cooktop_clearance_m": [
+        "metrics.transport_executed.minimum_cooktop_clearance_m"
+      ],
       "terminal_pot_speed_mps": [
         "metrics.terminal_pot_speed_mps"
       ]
@@ -67,7 +82,10 @@
     "one_reset",
     "zero_inter_stage_resets",
     "real_target_assets",
-    "contact_backed_grasps_only"
+    "contact_backed_grasps_only",
+    "smooth_collision_aware_transport",
+    "transport_no_internal_stops",
+    "bimanual_transport_completed"
   ],
   "thresholds": {
     "eef_tracking_error_m": 0.02,
@@ -77,10 +95,10 @@
   "metadata": {
     "strategy": [
       "bimanual handle grasp",
-      "lift and transport",
+      "one smooth collision-aware bimanual transport",
       "support-frame alignment",
       "zero-offset cooktop-center alignment",
-      "release and stable settle"
+      "short lower, release, and stable settle"
     ],
     "forbidden": [
       "MPC",
