@@ -87,6 +87,17 @@ def _strict_semantic_success(source: dict[str, Any]) -> bool:
     )
 
 
+def _preserved_primary_success(primary: dict[str, Any], result: dict[str, Any]) -> bool:
+    """Accept an already-certified deterministic primary artifact as immutable."""
+
+    return bool(
+        primary.get("status") == "accepted"
+        and primary.get("method") != "source_action_replay"
+        and primary.get("demonstration")
+        and _task_success(result)
+    )
+
+
 def _semantic_motion_success(source: dict[str, Any]) -> bool:
     from run_replay_success_semantic_audit import semantic_acceptance_satisfied
 
@@ -153,11 +164,21 @@ def refresh_ledger(
             pair_id = pair["pair_id"]
             key = f"{task['name']}:{pair_id}"
             previous = old_pairs.get(key, {})
+            primary_entry = primary.get("pairs", {}).get(pair_id, {})
             sources = _semantic_sources(
                 task_root,
                 pair_id,
-                primary.get("pairs", {}).get(pair_id, {}),
+                primary_entry,
                 audit_pairs.get(pair_id, {}),
+            )
+            primary_result_path = Path(
+                primary_entry.get("result", task_root / pair_id / "skill_result.json")
+            )
+            primary_result = (
+                _load(primary_result_path) if primary_result_path.is_file() else {}
+            )
+            preserved_primary = _preserved_primary_success(
+                primary_entry, primary_result
             )
             successes = [source for source in sources if _strict_semantic_success(source)]
             motion_successes = [
@@ -171,6 +192,18 @@ def refresh_ledger(
                 if not _strict_semantic_success(source)
                 and not _semantic_motion_success(source)
             ]
+            audit_motion_successes = [
+                source
+                for source in motion_successes
+                if source["source"] == "replay_success_semantic_audit"
+            ]
+            primary_demo = primary_entry.get("demonstration")
+            combined_audit_success = bool(
+                audit_motion_successes
+                and primary_entry.get("status") == "accepted"
+                and primary_demo
+            )
+            accepted = bool(successes or preserved_primary or combined_audit_success)
             record = {
                 "task": task["name"],
                 "pair_id": pair_id,
@@ -178,7 +211,7 @@ def refresh_ledger(
                 "assets": pair["assets"],
                 "status": (
                     "accepted"
-                    if successes
+                    if accepted
                     else "semantic_success_artifact_pending"
                     if motion_successes
                     else "pending"
@@ -197,6 +230,32 @@ def refresh_ledger(
                         "result": selected["result_path"],
                         "video": result.get("video", {}).get("path"),
                         "demonstration": demonstration,
+                    }
+                )
+            elif preserved_primary:
+                demonstration = validate_demo(primary_demo["path"], pair["assets"])
+                record.update(
+                    {
+                        "accepted_source": "preserved_primary_deterministic",
+                        "result": str(primary_result_path.resolve()),
+                        "video": primary_entry.get("video"),
+                        "demonstration": demonstration,
+                    }
+                )
+            elif combined_audit_success:
+                selected = audit_motion_successes[-1]
+                demonstration = validate_demo(primary_demo["path"], pair["assets"])
+                record.update(
+                    {
+                        "accepted_source": "semantic_audit_with_preserved_primary_demo",
+                        "result": selected["result_path"],
+                        "semantic_result": selected["result_path"],
+                        "video": selected["result"].get("video", {}).get("path"),
+                        "demonstration": demonstration,
+                        "demonstration_source": str(primary_result_path.resolve()),
+                        "semantic_acceptance_excluded_controls": [
+                            "direct_source_action_replay_failed"
+                        ],
                     }
                 )
             elif motion_successes:

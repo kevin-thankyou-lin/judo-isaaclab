@@ -66,3 +66,17 @@ def test_repair_ingestion_accepts_semantic_motion_without_replay_failure_control
     assert not module._strict_semantic_success(source)
     source["result"]["acceptance_checks"]["stable_support_window"] = False
     assert not module._semantic_motion_success(source)
+
+
+def test_preserved_deterministic_primary_success_is_not_replayed():
+    module = _module()
+    entry = {
+        "status": "accepted",
+        "method": "source_action_prefix_with_supported_center_repair",
+        "demonstration": {"path": "/tmp/preserved.hdf5"},
+    }
+    result = {"checks": {"coded_task_success": True}}
+
+    assert module._preserved_primary_success(entry, result)
+    entry["method"] = "source_action_replay"
+    assert not module._preserved_primary_success(entry, result)
