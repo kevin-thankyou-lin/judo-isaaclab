@@ -178,6 +178,126 @@ def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
     return float(np.linalg.norm(pot[:2] - cooktop[:2]))
 
 
+def reanchor_second_handle_grasp(
+    trajectory: SkillTrajectory,
+    nominal_pot_pose: Any,
+    observed_pot_pose: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Track the second handle after the first physical grasp moves the pot."""
+
+    steps = trajectory.waypoint_steps
+    required = ("left_handle_grasp", "right_handle_grasp")
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"handle trajectory is missing waypoints: {missing}")
+    start = steps["left_handle_grasp"] + 1
+    end = steps["right_handle_grasp"]
+    right_target = transfer_pose(
+        trajectory.right_poses[end], nominal_pot_pose, observed_pot_pose
+    )
+    left = trajectory.left_poses.copy()
+    right = trajectory.right_poses.copy()
+    left[start : end + 1] = observed_left_pose
+    right[start : end + 1] = interpolate_poses(
+        observed_right_pose, right_target, end - start + 1
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def reanchor_bimanual_transport_from_observation(
+    trajectory: SkillTrajectory,
+    observed_pot_pose: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+    final_pot_pose: Any,
+    pot_size: Any,
+    cooktop: "RigidSupportGeometry",
+    *,
+    transport_clearance_m: float,
+    collision_clearance_m: float,
+) -> tuple[SkillTrajectory, SmoothBimanualTransport]:
+    """Rebuild the transport tail from measured contacts after both closes."""
+
+    steps = trajectory.waypoint_steps
+    required = (
+        "right_handle_grasp",
+        "smooth_transport",
+        "support_lower",
+        "pot_release",
+        "bimanual_withdraw",
+    )
+    missing = [name for name in required if name not in steps]
+    if missing:
+        raise ValueError(f"transport trajectory is missing waypoints: {missing}")
+    pot_pose = _pose(observed_pot_pose, "observed_pot_pose")
+    final_pose = _pose(final_pot_pose, "final_pot_pose")
+    left_pose = _pose(observed_left_pose, "observed_left_pose")
+    right_pose = _pose(observed_right_pose, "observed_right_pose")
+    left_contact = compose_pose(inverse_pose(pot_pose), left_pose)
+    right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
+    transport_target = final_pose.copy()
+    transport_target[2] += float(transport_clearance_m)
+    start = steps["right_handle_grasp"] + 1
+    transport_end = steps["smooth_transport"]
+    transport = smooth_collision_aware_bimanual_transport(
+        pot_pose,
+        transport_target,
+        left_contact,
+        right_contact,
+        pot_size,
+        cooktop,
+        steps=transport_end - start + 1,
+        collision_clearance_m=collision_clearance_m,
+    )
+    left = trajectory.left_poses.copy()
+    right = trajectory.right_poses.copy()
+    left[start : transport_end + 1] = transport.left_poses
+    right[start : transport_end + 1] = transport.right_poses
+    lower_end = steps["support_lower"]
+    release_end = steps["pot_release"]
+    withdraw_end = steps["bimanual_withdraw"]
+    left_lower = compose_pose(final_pose, left_contact)
+    right_lower = compose_pose(final_pose, right_contact)
+    left[transport_end + 1 : lower_end + 1] = interpolate_poses(
+        transport.left_poses[-1], left_lower, lower_end - transport_end
+    )
+    right[transport_end + 1 : lower_end + 1] = interpolate_poses(
+        transport.right_poses[-1], right_lower, lower_end - transport_end
+    )
+    left[lower_end + 1 : release_end + 1] = left_lower
+    right[lower_end + 1 : release_end + 1] = right_lower
+    left_withdraw = left_lower.copy()
+    right_withdraw = right_lower.copy()
+    left_withdraw[:3] += [0.0, 0.08, 0.12]
+    right_withdraw[:3] += [0.0, -0.08, 0.12]
+    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        left_lower, left_withdraw, withdraw_end - release_end
+    )
+    right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+        right_lower, right_withdraw, withdraw_end - release_end
+    )
+    left[withdraw_end + 1 :] = left_withdraw
+    right[withdraw_end + 1 :] = right_withdraw
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        transport,
+    )
+
+
 def reanchor_centered_lowering(
     trajectory: SkillTrajectory,
     center_correction_xy: Any,

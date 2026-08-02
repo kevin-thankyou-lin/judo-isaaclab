@@ -1,6 +1,7 @@
 import numpy as np
 
 from judo_isaaclab.semantic_parts import (
+    bimanual_handle_sides,
     closest_branch,
     corresponding_branch,
     infer_mug_parts,
@@ -53,6 +54,12 @@ def test_infer_pot_parts_uses_handle_overhang_not_asset_id():
     np.testing.assert_allclose(parts.positive_handle_frame[:3], [0.155, 0.0, 0.035])
     np.testing.assert_allclose(parts.negative_handle_frame[:3], [-0.155, 0.0, 0.035])
     assert parts.bottom_z == -0.08
+    assert bimanual_handle_sides(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        parts,
+        [-0.16, 0.0, 0.04],
+        [0.16, 0.0, 0.04],
+    ) == (-1, 1)
 
 
 def test_infer_mug_parts_separates_body_footprint_and_handle_hole():

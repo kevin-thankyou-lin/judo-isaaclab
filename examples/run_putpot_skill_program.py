@@ -277,26 +277,49 @@ def _load_keyframes(path: str, source_dataset: str) -> dict[str, object]:
     return value
 
 
-def _build_skill(keyframes, source, target, source_geometry, target_geometry, left_start, right_start, args):
-    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+def _build_skill(
+    keyframes,
+    source,
+    target,
+    source_geometry,
+    target_geometry,
+    source_parts,
+    target_parts,
+    left_start,
+    right_start,
+    args,
+):
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose, transfer_pose
     from judo_isaaclab.put_pot import PutPotSkillProgram, RigidSupportGeometry, support_aligned_pot_pose
+    from judo_isaaclab.semantic_parts import bimanual_handle_sides
 
     frames = keyframes["frames"]
-    source_initial = source_geometry
     target_initial = target_geometry
-    scale_delta = float(
-        np.max(np.abs(target_geometry.size / source_geometry.size - 1.0))
+    grasp_frame = frames["right_handle_grasp"]
+    left_side, right_side = bimanual_handle_sides(
+        grasp_frame["pot_pose"],
+        source_parts,
+        grasp_frame["left_eef_pose"],
+        grasp_frame["right_eef_pose"],
     )
+
+    def handle(parts, side):
+        if side < 0:
+            return parts.negative_handle_frame, parts.negative_handle_size
+        return parts.positive_handle_frame, parts.positive_handle_size
 
     def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
         frame = frames[frame_name]
-        source_frame = (
-            RigidSupportGeometry(frame["pot_pose"], source_initial.size)
-            if scale_delta > 0.20
-            else source_initial
-        )
-        return target_initial.transfer_pose_from(
-            source_frame, frame[f"{arm}_eef_pose"]
+        side = left_side if arm == "left" else right_side
+        source_handle, source_size = handle(source_parts, side)
+        target_handle, target_size = handle(target_parts, side)
+        source_frame = compose_pose(frame["pot_pose"], source_handle)
+        target_frame = compose_pose(target_initial.root_pose, target_handle)
+        return transfer_pose(
+            frame[f"{arm}_eef_pose"],
+            source_frame,
+            target_frame,
+            local_position_scale=target_size / source_size,
         )
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
@@ -575,9 +598,27 @@ def main() -> None:
         env.reset_success_check(env_ids)
         source_geometry = _geometry(source_assets["pot"], source["pot_pose"][0])
         target_geometry = _geometry(target_assets["pot"], target["pot_pose"][0])
+        from semantic_asset_geometry import jsonable, pot_parts
+
+        source_parts = pot_parts(source_assets["pot"])
+        target_parts = pot_parts(target_assets["pot"])
+        target_cooktop_geometry = _geometry(
+            target_assets["cooktop"], target["cooktop_pose"][0]
+        )
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
         trajectory, intended_final_pot, transport_plan = (
-            _build_skill(keyframes, source, target, source_geometry, target_geometry, _eef_pose(env, "left_arm"), _eef_pose(env, "right_arm"), args)
+            _build_skill(
+                keyframes,
+                source,
+                target,
+                source_geometry,
+                target_geometry,
+                source_parts,
+                target_parts,
+                _eef_pose(env, "left_arm"),
+                _eef_pose(env, "right_arm"),
+                args,
+            )
             if args.mode == "skill" else (None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
@@ -641,9 +682,7 @@ def main() -> None:
                 stage = "direct_source_action_replay"
             else:
                 stage = trajectory.stage_names[step]
-                integrate_ik = bool(
-                    integrate_target_ik and step > grasp_complete_step
-                )
+                integrate_ik = bool(integrate_target_ik)
                 action = _ik_action(
                     env,
                     trajectory.left_poses[step],
@@ -666,6 +705,56 @@ def main() -> None:
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if (
+                trajectory is not None
+                and step == trajectory.waypoint_steps["left_handle_grasp"]
+            ):
+                from judo_isaaclab.put_pot import reanchor_second_handle_grasp
+
+                trajectory = reanchor_second_handle_grasp(
+                    trajectory,
+                    target_geometry.root_pose,
+                    sample["pot_pose"],
+                    sample["left_eef_pose"],
+                    sample["right_eef_pose"],
+                )
+            if trajectory is not None and step == grasp_complete_step:
+                from judo_isaaclab.put_pot import (
+                    cartesian_smoothness_metrics,
+                    reanchor_bimanual_transport_from_observation,
+                )
+
+                trajectory, observed_transport = (
+                    reanchor_bimanual_transport_from_observation(
+                        trajectory,
+                        sample["pot_pose"],
+                        sample["left_eef_pose"],
+                        sample["right_eef_pose"],
+                        intended_final_pot,
+                        target_geometry.size,
+                        target_cooktop_geometry,
+                        transport_clearance_m=args.transport_clearance_m,
+                        collision_clearance_m=args.collision_clearance_m,
+                    )
+                )
+                start = trajectory.waypoint_steps["right_handle_grasp"] + 1
+                end = trajectory.waypoint_steps["smooth_transport"]
+                transport_plan = cartesian_smoothness_metrics(
+                    trajectory.left_poses[start : end + 1],
+                    trajectory.right_poses[start : end + 1],
+                )
+                transport_plan.update(
+                    {
+                        "start_step": start,
+                        "end_step": end,
+                        "minimum_cooktop_clearance_m": (
+                            observed_transport.minimum_cooktop_clearance_m
+                        ),
+                        "cooktop_overlap_samples": (
+                            observed_transport.cooktop_overlap_samples
+                        ),
+                    }
+                )
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:
                 from judo_isaaclab.put_pot import reanchor_centered_lowering
 
@@ -954,6 +1043,8 @@ def main() -> None:
                 "target_cooktop_top": _geometry(target_assets["cooktop"], target["cooktop_pose"][0]).top_frame.tolist(),
                 "intended_final_pot_pose": intended_final_pot.tolist() if intended_final_pot is not None else None,
                 "extracted_keyframes": extracted,
+                "source_pot_parts": jsonable(source_parts),
+                "target_pot_parts": jsonable(target_parts),
             },
             "stage_success_trace": _transition_trace(samples),
             "metrics": {

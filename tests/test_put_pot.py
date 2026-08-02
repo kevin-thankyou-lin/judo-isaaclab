@@ -8,10 +8,12 @@ from judo_isaaclab.put_pot import (
     RigidSupportGeometry,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
+    reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_centered_release,
     reanchor_centered_lowering,
+    reanchor_second_handle_grasp,
     reanchor_supported_center_slide,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
@@ -174,6 +176,75 @@ def test_center_feedback_preserves_completed_smooth_transport():
     lower_end = trajectory.waypoint_steps["support_lower"]
     assert corrected.left_poses[lower_end, :2] == pytest.approx(
         trajectory.left_poses[lower_end, :2] + [0.01, -0.02]
+    )
+
+
+def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
+    cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.8), [0.36, 0.34, 0.10])
+    pot_size = np.asarray([0.30, 0.28, 0.20])
+    nominal = _pose(0.05, 0.05, 0.78)
+    observed = _pose(0.07, 0.04, 0.79)
+    left_contact = _pose(0.0, 0.17, 0.02)
+    right_contact = _pose(0.0, -0.17, 0.02)
+    final = _pose(0.7, -0.3, 0.956)
+    program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1),
+        _pose(0.1, 1.0),
+        compose_pose(nominal, left_contact),
+        compose_pose(nominal, right_contact),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=3,
+    )
+    program.smooth_bimanual_transport_to_center(
+        nominal,
+        _pose(0.7, -0.3, 1.081),
+        left_contact,
+        right_contact,
+        pot_size,
+        cooktop,
+        steps=20,
+        collision_clearance_m=0.025,
+    )
+    program.short_lower_release_and_settle(
+        compose_pose(final, left_contact),
+        compose_pose(final, right_contact),
+        _pose(0.6, 0.0, 1.2),
+        _pose(0.6, -0.4, 1.2),
+        lower_steps=4,
+        release_steps=2,
+        withdraw_steps=3,
+        settle_steps=3,
+    )
+    trajectory = program.build()
+    observed_left = compose_pose(observed, left_contact)
+    observed_right = compose_pose(observed, right_contact)
+    grasp = reanchor_second_handle_grasp(
+        trajectory, nominal, observed, observed_left, observed_right
+    )
+    right_end = trajectory.waypoint_steps["right_handle_grasp"]
+    assert grasp.right_poses[right_end] == pytest.approx(observed_right)
+
+    corrected, transport = reanchor_bimanual_transport_from_observation(
+        grasp,
+        observed,
+        observed_left,
+        observed_right,
+        final,
+        pot_size,
+        cooktop,
+        transport_clearance_m=0.025,
+        collision_clearance_m=0.025,
+    )
+    start = right_end + 1
+    assert compose_pose(inverse_pose(transport.pot_poses[0]), corrected.left_poses[start]) == (
+        pytest.approx(left_contact)
+    )
+    assert transport.minimum_cooktop_clearance_m >= 0.025 - 1.0e-9
+    lower_end = trajectory.waypoint_steps["support_lower"]
+    assert corrected.left_poses[lower_end] == pytest.approx(
+        compose_pose(final, left_contact)
     )
 
 

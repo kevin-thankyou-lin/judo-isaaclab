@@ -227,6 +227,27 @@ def infer_pot_parts(values: Iterable[object]) -> PotParts:
     )
 
 
+def bimanual_handle_sides(
+    pot_root_pose: object,
+    parts: PotParts,
+    left_eef_position: object,
+    right_eef_position: object,
+) -> tuple[int, int]:
+    """Assign distinct authored handle sides to the two observed wrists."""
+
+    from judo_isaaclab.put_marker import compose_pose
+
+    handles = {
+        -1: compose_pose(pot_root_pose, parts.negative_handle_frame)[:3],
+        1: compose_pose(pot_root_pose, parts.positive_handle_frame)[:3],
+    }
+    left = np.asarray(left_eef_position, dtype=np.float64)[:3]
+    right = np.asarray(right_eef_position, dtype=np.float64)[:3]
+    direct = np.linalg.norm(left - handles[-1]) + np.linalg.norm(right - handles[1])
+    crossed = np.linalg.norm(left - handles[1]) + np.linalg.norm(right - handles[-1])
+    return (-1, 1) if direct <= crossed else (1, -1)
+
+
 def infer_mug_parts(values: Iterable[object]) -> MugParts:
     """Infer a mug body frame and the center of its handle opening."""
 
