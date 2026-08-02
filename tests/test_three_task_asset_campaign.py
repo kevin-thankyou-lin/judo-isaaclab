@@ -13,6 +13,7 @@ from run_three_task_asset_campaign import (
 from run_replay_success_semantic_audit import (
     reusable_semantic_result,
     select_replay_success_pairs,
+    semantic_acceptance_satisfied,
 )
 
 
@@ -160,3 +161,21 @@ def test_semantic_audit_reuses_hash_verified_task_failure(tmp_path):
     assert reusable_semantic_result(result, str(target))
     trace.write_bytes(b"corrupt")
     assert not reusable_semantic_result(result, str(target))
+
+
+def test_semantic_audit_excludes_only_direct_replay_failure_control():
+    result = {
+        "mode": "skill",
+        "status": "failed",
+        "checks": {"coded_task_success": True},
+        "acceptance_checks": {
+            "coded_task_success": True,
+            "all_stages_latched": True,
+            "stable_support_window": True,
+            "fully_decodable": True,
+            "direct_source_action_replay_failed": False,
+        },
+    }
+    assert semantic_acceptance_satisfied(result)
+    result["acceptance_checks"]["stable_support_window"] = False
+    assert not semantic_acceptance_satisfied(result)

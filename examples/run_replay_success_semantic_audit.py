@@ -27,6 +27,28 @@ from run_three_task_asset_campaign import (
 )
 
 
+SEMANTIC_AUDIT_CONTROL_CHECKS = frozenset({"direct_source_action_replay_failed"})
+
+
+def semantic_acceptance_satisfied(result: dict[str, Any]) -> bool:
+    """Evaluate skill success while excluding only the replay-failure control.
+
+    Replay failure is required for adaptation evidence, but this audit selects
+    replay successes by construction.  Every physical, media, provenance, and
+    continuity acceptance check remains authoritative.
+    """
+
+    if result.get("mode") != "skill" or not _task_success(result):
+        return False
+    checks = result.get("acceptance_checks", {})
+    semantic_checks = {
+        name: value
+        for name, value in checks.items()
+        if name not in SEMANTIC_AUDIT_CONTROL_CHECKS
+    }
+    return bool(semantic_checks) and all(value is True for value in semantic_checks.values())
+
+
 def reusable_semantic_result(
     result: dict[str, Any], target_dataset: str
 ) -> bool:
@@ -70,6 +92,57 @@ def select_replay_success_pairs(
     ]
 
 
+def _summary(ledger: dict[str, Any], selected: int) -> dict[str, int]:
+    return {
+        "selected": selected,
+        "completed": sum(
+            value.get("status") in {"accepted", "semantic_failed"}
+            for value in ledger["pairs"].values()
+        ),
+        "accepted": sum(
+            value.get("status") == "accepted" for value in ledger["pairs"].values()
+        ),
+        "semantic_failed": sum(
+            value.get("status") == "semantic_failed"
+            for value in ledger["pairs"].values()
+        ),
+    }
+
+
+def _classify_result(
+    result: dict[str, Any],
+    *,
+    returncode: int,
+    result_path: Path,
+    audit_root: Path,
+    assets: dict[str, str],
+) -> dict[str, Any]:
+    if returncode != 0 or not result:
+        return {
+            "status": "infrastructure_failed",
+            "returncode": returncode,
+            "result": str(result_path.resolve()),
+        }
+    if semantic_acceptance_satisfied(result):
+        demo_path = audit_root / "skill_demo.hdf5"
+        demonstration = validate_demo(demo_path, assets) if demo_path.is_file() else None
+        return {
+            "status": "accepted",
+            "result": str(result_path.resolve()),
+            "video": str((audit_root / "skill.mp4").resolve()),
+            "demonstration": demonstration,
+            "semantic_acceptance_excluded_controls": sorted(
+                SEMANTIC_AUDIT_CONTROL_CHECKS
+            ),
+        }
+    return {
+        "status": "semantic_failed",
+        "returncode": returncode,
+        "result": str(result_path.resolve()),
+        "video": str((audit_root / "skill.mp4").resolve()),
+    }
+
+
 def run_task_audit(
     task: dict[str, Any],
     *,
@@ -111,15 +184,35 @@ def run_task_audit(
         pair_id = pair["pair_id"]
         existing = ledger["pairs"].get(pair_id, {})
         if existing.get("status") == "accepted":
-            validate_demo(existing["demonstration"]["path"], pair["assets"])
-            print(f"SEMANTIC_AUDIT_RESUME_ACCEPTED={task['name']}:{pair_id}")
-            continue
+            existing_result = _load(existing["result"])
+            if semantic_acceptance_satisfied(existing_result):
+                demonstration = existing.get("demonstration")
+                if demonstration:
+                    validate_demo(demonstration["path"], pair["assets"])
+                print(f"SEMANTIC_AUDIT_RESUME_ACCEPTED={task['name']}:{pair_id}")
+                continue
         if existing.get("status") == "semantic_failed":
             existing_result = _load(existing["result"])
             if reusable_semantic_result(existing_result, pair["dataset"]):
-                print(
-                    f"SEMANTIC_AUDIT_RESUME_FAILED={task['name']}:{pair_id}"
+                reconciled = _classify_result(
+                    existing_result,
+                    returncode=int(existing.get("returncode", 0)),
+                    result_path=Path(existing["result"]),
+                    audit_root=Path(existing["result"]).parent,
+                    assets=pair["assets"],
                 )
+                reconciled.update(
+                    {
+                        "dataset": pair["dataset"],
+                        "assets": pair["assets"],
+                        "baseline_method": "source_action_replay",
+                    }
+                )
+                ledger["pairs"][pair_id] = reconciled
+                ledger["summary"] = _summary(ledger, len(selected))
+                _atomic_json(ledger_path, ledger)
+                label = "ACCEPTED" if reconciled["status"] == "accepted" else "FAILED"
+                print(f"SEMANTIC_AUDIT_RECONCILE_{label}={task['name']}:{pair_id}")
                 continue
 
         pair_root = task_root / pair_id
@@ -141,27 +234,13 @@ def run_task_audit(
             continue
 
         result = _load(result_path) if result_path.is_file() else {}
-        if returncode != 0 or not result:
-            record = {
-                "status": "infrastructure_failed",
-                "returncode": returncode,
-                "result": str(result_path.resolve()),
-            }
-        elif result.get("status") == "passed" and _task_success(result):
-            demo = validate_demo(audit_root / "skill_demo.hdf5", pair["assets"])
-            record = {
-                "status": "accepted",
-                "result": str(result_path.resolve()),
-                "video": str((audit_root / "skill.mp4").resolve()),
-                "demonstration": demo,
-            }
-        else:
-            record = {
-                "status": "semantic_failed",
-                "returncode": returncode,
-                "result": str(result_path.resolve()),
-                "video": str((audit_root / "skill.mp4").resolve()),
-            }
+        record = _classify_result(
+            result,
+            returncode=returncode,
+            result_path=result_path,
+            audit_root=audit_root,
+            assets=pair["assets"],
+        )
         record.update(
             {
                 "dataset": pair["dataset"],
@@ -170,21 +249,7 @@ def run_task_audit(
             }
         )
         ledger["pairs"][pair_id] = record
-        ledger["summary"] = {
-            "selected": len(selected),
-            "completed": sum(
-                value.get("status") in {"accepted", "semantic_failed"}
-                for value in ledger["pairs"].values()
-            ),
-            "accepted": sum(
-                value.get("status") == "accepted"
-                for value in ledger["pairs"].values()
-            ),
-            "semantic_failed": sum(
-                value.get("status") == "semantic_failed"
-                for value in ledger["pairs"].values()
-            ),
-        }
+        ledger["summary"] = _summary(ledger, len(selected))
         _atomic_json(ledger_path, ledger)
         print(
             "SEMANTIC_AUDIT_PAIR="

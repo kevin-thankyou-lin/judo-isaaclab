@@ -87,6 +87,12 @@ def _strict_semantic_success(source: dict[str, Any]) -> bool:
     )
 
 
+def _semantic_motion_success(source: dict[str, Any]) -> bool:
+    from run_replay_success_semantic_audit import semantic_acceptance_satisfied
+
+    return semantic_acceptance_satisfied(source["result"])
+
+
 def _diagnosis(task: str, source: dict[str, Any]) -> dict[str, Any]:
     from judo_isaaclab.semantic_repair import diagnose_semantic_failure
 
@@ -154,13 +160,29 @@ def refresh_ledger(
                 audit_pairs.get(pair_id, {}),
             )
             successes = [source for source in sources if _strict_semantic_success(source)]
-            failures = [source for source in sources if not _strict_semantic_success(source)]
+            motion_successes = [
+                source
+                for source in sources
+                if not _strict_semantic_success(source) and _semantic_motion_success(source)
+            ]
+            failures = [
+                source
+                for source in sources
+                if not _strict_semantic_success(source)
+                and not _semantic_motion_success(source)
+            ]
             record = {
                 "task": task["name"],
                 "pair_id": pair_id,
                 "dataset": pair["dataset"],
                 "assets": pair["assets"],
-                "status": "accepted" if successes else "pending",
+                "status": (
+                    "accepted"
+                    if successes
+                    else "semantic_success_artifact_pending"
+                    if motion_successes
+                    else "pending"
+                ),
                 "attempts": previous.get("attempts", []),
                 "diagnoses": [_diagnosis(task["name"], source) for source in failures],
             }
@@ -177,6 +199,15 @@ def refresh_ledger(
                         "demonstration": demonstration,
                     }
                 )
+            elif motion_successes:
+                selected = motion_successes[-1]
+                record["semantic_success_evidence"] = {
+                    "source": selected["source"],
+                    "result": selected["result_path"],
+                    "video": selected["result"].get("video", {}).get("path"),
+                    "excluded_controls": ["direct_source_action_replay_failed"],
+                    "artifact_gap": "strict semantic demo was not written",
+                }
             elif not sources:
                 record["status"] = "awaiting_semantic_audit"
             records[key] = record
@@ -198,6 +229,9 @@ def refresh_ledger(
             "total": len(records),
             "accepted": status_counts.get("accepted", 0),
             "pending": status_counts.get("pending", 0),
+            "semantic_success_artifact_pending": status_counts.get(
+                "semantic_success_artifact_pending", 0
+            ),
             "awaiting_semantic_audit": status_counts.get("awaiting_semantic_audit", 0),
             "status_counts": status_counts,
         },

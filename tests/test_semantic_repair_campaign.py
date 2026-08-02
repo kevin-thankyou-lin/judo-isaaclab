@@ -44,3 +44,25 @@ def test_audit_coded_success_is_classified_as_packaging_not_motion_failure():
 
     assert diagnosis["first_failed_stage"] == "evidence_packaging"
     assert diagnosis["visual_evidence"]["frame"] == 606
+
+
+def test_repair_ingestion_accepts_semantic_motion_without_replay_failure_control():
+    module = _module()
+    source = {
+        "result": {
+            "mode": "skill",
+            "status": "failed",
+            "checks": {"coded_task_success": True},
+            "acceptance_checks": {
+                "coded_task_success": True,
+                "all_stages_latched": True,
+                "stable_support_window": True,
+                "direct_source_action_replay_failed": False,
+            },
+        }
+    }
+
+    assert module._semantic_motion_success(source)
+    assert not module._strict_semantic_success(source)
+    source["result"]["acceptance_checks"]["stable_support_window"] = False
+    assert not module._semantic_motion_success(source)
