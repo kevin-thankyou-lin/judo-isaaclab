@@ -10,6 +10,10 @@ from run_three_task_asset_campaign import (
     validate_asset_inventory,
     validate_demo,
 )
+from run_replay_success_semantic_audit import (
+    reusable_semantic_result,
+    select_replay_success_pairs,
+)
 
 
 def _dataset(path, assets):
@@ -102,3 +106,57 @@ def test_reuses_only_hash_verified_classification(tmp_path):
     assert _reusable_classification(result, str(target))
     video.write_bytes(b"corrupt")
     assert not _reusable_classification(result, str(target))
+
+
+def test_semantic_audit_selects_only_plain_replay_successes():
+    pairs = [
+        {"pair_id": "replay"},
+        {"pair_id": "adapted"},
+        {"pair_id": "failed"},
+    ]
+    ledger = {
+        "pairs": {
+            "replay": {"status": "accepted", "method": "source_action_replay"},
+            "adapted": {
+                "status": "accepted",
+                "method": "deterministic_semantic_skill",
+            },
+            "failed": {
+                "status": "adaptation_failed",
+                "method": "deterministic_semantic_skill",
+            },
+        }
+    }
+    assert select_replay_success_pairs(pairs, ledger) == [{"pair_id": "replay"}]
+
+
+def test_semantic_audit_reuses_hash_verified_task_failure(tmp_path):
+    target = tmp_path / "target.hdf5"
+    video = tmp_path / "skill.mp4"
+    trace = tmp_path / "skill_trace.npz"
+    target.write_bytes(b"target")
+    video.write_bytes(b"video")
+    trace.write_bytes(b"trace")
+    import hashlib
+
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    result = {
+        "status": "failed",
+        "mode": "skill",
+        "acceptance_checks": {
+            "coded_task_success": False,
+            "fully_decodable": True,
+            "h264_nonempty": True,
+            "one_reset": True,
+            "real_target_assets": True,
+            "zero_inter_stage_resets": True,
+        },
+        "provenance": {
+            "target_dataset": {"sha256": digest(target)},
+            "trace": {"path": str(trace), "sha256": digest(trace)},
+        },
+        "video": {"path": str(video), "sha256": digest(video)},
+    }
+    assert reusable_semantic_result(result, str(target))
+    trace.write_bytes(b"corrupt")
+    assert not reusable_semantic_result(result, str(target))
