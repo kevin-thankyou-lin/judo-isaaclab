@@ -10,6 +10,7 @@
       "objects_root": "${PUTPOT_DATA_ROOT}/objects",
       "runner": "examples/run_putpot_skill_program.py",
       "needs_keyframes": true,
+      "repair_mode": "replay_center",
       "runner_args": ["--device", "cpu"]
     },
     {

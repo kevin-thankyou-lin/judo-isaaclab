@@ -31,7 +31,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--source-dataset", required=True)
     parser.add_argument("--target-dataset", required=True)
     parser.add_argument("--objects-root", required=True)
-    parser.add_argument("--mode", choices=("replay", "skill"), required=True)
+    parser.add_argument("--mode", choices=("replay", "replay_center", "skill"), required=True)
     parser.add_argument("--source-keyframes")
     parser.add_argument("--write-keyframes")
     parser.add_argument("--expect-failure", action="store_true")
@@ -55,6 +55,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--release-steps", type=int, default=20)
     parser.add_argument("--withdraw-steps", type=int, default=30)
     parser.add_argument("--settle-steps", type=int, default=35)
+    parser.add_argument("--center-repair-steps", type=int, default=60)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -384,6 +385,56 @@ def _build_skill(keyframes, source, target, source_geometry, target_geometry, le
     return trajectory, final_pot_pose, plan_metrics
 
 
+def _build_center_repair(sample, args):
+    """Slide an already-supported, right-held pot to center before release."""
+    from judo_isaaclab.put_marker import SkillTrajectory, compose_pose, interpolate_poses, inverse_pose
+
+    pot_pose = np.asarray(sample["pot_pose"], dtype=np.float64)
+    cooktop_pose = np.asarray(sample["cooktop_pose"], dtype=np.float64)
+    left_pose = np.asarray(sample["left_eef_pose"], dtype=np.float64)
+    right_pose = np.asarray(sample["right_eef_pose"], dtype=np.float64)
+    right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
+    centered_pot = pot_pose.copy()
+    centered_pot[:2] = cooktop_pose[:2]
+    right_center = compose_pose(centered_pot, right_contact)
+    right_withdraw = right_center.copy()
+    right_withdraw[:3] += np.asarray([0.0, -0.08, 0.12])
+
+    center = int(args.center_repair_steps)
+    release = int(args.release_steps)
+    withdraw = int(args.withdraw_steps)
+    settle = int(args.settle_steps)
+    left = np.repeat(left_pose[None], center + release + withdraw + settle, axis=0)
+    right = np.concatenate(
+        (
+            interpolate_poses(right_pose, right_center, center),
+            np.repeat(right_center[None], release, axis=0),
+            interpolate_poses(right_center, right_withdraw, withdraw),
+            np.repeat(right_withdraw[None], settle, axis=0),
+        )
+    )
+    grippers = np.empty((len(left), 2), dtype=np.float64)
+    grippers[:center] = (-0.0475, 0.0)
+    grippers[center:] = (-0.0475, -0.0475)
+    stages = (
+        ["supported_center_repair"] * center
+        + ["unload_release"] * release
+        + ["stable_settle"] * (withdraw + settle)
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=grippers,
+        stage_names=stages,
+        waypoint_steps={
+            "center_slide": center - 1,
+            "pot_release": center + release - 1,
+            "bimanual_withdraw": center + release + withdraw - 1,
+            "stable_settle": len(left) - 1,
+        },
+    )
+
+
 def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
     actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
     source_indices = keyframes["semantic_indices"]
@@ -465,8 +516,8 @@ def main() -> None:
     args = _parser()
     if args.render and not args.video:
         raise ValueError("--render requires --video")
-    if args.mode == "skill" and not args.source_keyframes:
-        raise ValueError("skill mode requires --source-keyframes")
+    if args.mode in {"skill", "replay_center"} and not args.source_keyframes:
+        raise ValueError(f"{args.mode} mode requires --source-keyframes")
     if (
         args.support_clearance_m < 0.0
         or args.transport_clearance_m <= 0.0
@@ -523,10 +574,10 @@ def main() -> None:
         env.reset_success_check(env_ids)
         source_geometry = _geometry(source_assets["pot"], source["pot_pose"][0])
         target_geometry = _geometry(target_assets["pot"], target["pot_pose"][0])
-        keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode == "skill" else None
+        keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
         trajectory, intended_final_pot, transport_plan = (
             _build_skill(keyframes, source, target, source_geometry, target_geometry, _eef_pose(env, "left_arm"), _eef_pose(env, "right_arm"), args)
-            if keyframes is not None else (None, None, None)
+            if args.mode == "skill" else (None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
@@ -538,7 +589,17 @@ def main() -> None:
             trajectory.waypoint_steps["right_handle_grasp"]
             if trajectory is not None else None
         )
-        total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
+        repair_prefix_steps = (
+            int(keyframes["frames"]["support_align"]["action_index"]) + 1
+            if args.mode == "replay_center" else None
+        )
+        repair_trajectory = None
+        repair_joint_nominal = None
+        total_steps = (
+            repair_prefix_steps + args.center_repair_steps + args.release_steps + args.withdraw_steps + args.settle_steps
+            if repair_prefix_steps is not None
+            else trajectory.steps if trajectory is not None else len(source["actions"])
+        )
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
         demo_recorder = DemonstrationRecorder()
@@ -550,7 +611,31 @@ def main() -> None:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
         for step in range(total_steps):
-            if trajectory is None:
+            if repair_prefix_steps is not None and step < repair_prefix_steps:
+                action = source["actions"][step : step + 1]
+                stage = "source_action_prefix"
+            elif repair_prefix_steps is not None:
+                if repair_trajectory is None:
+                    repair_trajectory = _build_center_repair(samples[-1], args)
+                    repair_joint_nominal = np.asarray(
+                        source["actions"][repair_prefix_steps - 1].detach().cpu(),
+                        dtype=np.float64,
+                    )
+                suffix_step = step - repair_prefix_steps
+                stage = repair_trajectory.stage_names[suffix_step]
+                action = _ik_action(
+                    env,
+                    repair_trajectory.left_poses[suffix_step],
+                    repair_trajectory.right_poses[suffix_step],
+                    repair_trajectory.grippers[suffix_step],
+                    repair_joint_nominal,
+                    args,
+                    integrate_left_ik=True,
+                    integrate_right_ik=True,
+                )
+                desired_left.append(repair_trajectory.left_poses[suffix_step])
+                desired_right.append(repair_trajectory.right_poses[suffix_step])
+            elif trajectory is None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
             else:
@@ -685,7 +770,13 @@ def main() -> None:
             desired_left_eef_poses=np.asarray(desired_left, dtype=np.float32),
             desired_right_eef_poses=np.asarray(desired_right, dtype=np.float32),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
-            program_stages=np.asarray(trajectory.stage_names if trajectory is not None else ["direct_source_action_replay"] * len(actions)),
+            program_stages=np.asarray(
+                trajectory.stage_names
+                if trajectory is not None
+                else (["source_action_prefix"] * repair_prefix_steps + repair_trajectory.stage_names)
+                if repair_trajectory is not None
+                else ["direct_source_action_replay"] * len(actions)
+            ),
         )
         final = samples[-1]
         extracted = None
@@ -812,7 +903,12 @@ def main() -> None:
                 success=True,
                 metadata={
                     "task": "PutPotOnCooktop-v0",
-                    "controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_skill",
+                    "controller": (
+                        "source_action_prefix_with_supported_center_repair"
+                        if repair_trajectory is not None
+                        else "direct_source_action_replay" if trajectory is None
+                        else "deterministic_semantic_skill"
+                    ),
                     "candidate_sampling": False,
                     "source_dataset_sha256": _sha256(args.source_dataset),
                     "target_dataset_sha256": _sha256(args.target_dataset),
@@ -824,7 +920,12 @@ def main() -> None:
             "status": "passed" if all(acceptance_checks.values()) else "failed",
             "mode": args.mode,
             "protocol": {
-                "controller": "direct_source_action_replay" if trajectory is None else "semantic_support_frames_with_cartesian_dls",
+                "controller": (
+                    "source_action_prefix_with_supported_center_repair"
+                    if repair_trajectory is not None
+                    else "direct_source_action_replay" if trajectory is None
+                    else "semantic_support_frames_with_cartesian_dls"
+                ),
                 "candidate_sampling": False,
                 "scene_resets": 1,
                 "inter_stage_resets": 0,
@@ -833,7 +934,7 @@ def main() -> None:
                 "steps": len(actions),
                 "seed": args.seed,
                 "grasp_assistance": "none",
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "transport_steps": args.transport_steps, "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "integrated_target_ik": integrate_target_ik, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": False, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "transport_steps": args.transport_steps, "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},

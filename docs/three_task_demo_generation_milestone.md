@@ -26,10 +26,12 @@ layout and is rejected unless its success attribute is true.
 ### PutPotOnCooktop
 
 Use the source demonstration to identify bimanual handle acquisition and the
-cooktop support frame. Execute one smooth collision-aware bimanual transport,
-lower onto support, use closed-loop centering feedback, release, and validate a
-stable centered terminal pot. No grasp assistance or sampled optimization is
-used.
+cooktop support frame. When replay already reaches stable support but misses the
+stricter center gate, preserve its contact-rich prefix and perform only a
+right-held supported center repair before release. For replay failures, execute
+one smooth collision-aware bimanual semantic transport, lower onto support, use
+closed-loop centering feedback, release, and validate a stable centered terminal
+pot. No grasp assistance or sampled optimization is used.
 
 ### PutMarkerInDrawer
 

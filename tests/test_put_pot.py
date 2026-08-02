@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 import pytest
 
 from judo_isaaclab.put_pot import (
@@ -15,6 +16,30 @@ from judo_isaaclab.put_pot import (
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
 )
+
+from run_putpot_skill_program import _build_center_repair
+
+
+def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
+    sample = {
+        "pot_pose": [0.10, 0.20, 0.80, 1.0, 0.0, 0.0, 0.0],
+        "cooktop_pose": [0.16, 0.25, 0.73, 1.0, 0.0, 0.0, 0.0],
+        "left_eef_pose": [0.3, 0.3, 1.0, 1.0, 0.0, 0.0, 0.0],
+        "right_eef_pose": [0.0, 0.20, 0.85, 1.0, 0.0, 0.0, 0.0],
+    }
+    trajectory = _build_center_repair(
+        sample,
+        SimpleNamespace(center_repair_steps=6, release_steps=2, withdraw_steps=3, settle_steps=4),
+    )
+    assert trajectory.steps == 15
+    assert trajectory.stage_names[:6] == ["supported_center_repair"] * 6
+    assert np.all(trajectory.grippers[:6, 1] == 0.0)
+    assert np.all(trajectory.grippers[6:, 1] < 0.0)
+    np.testing.assert_allclose(
+        trajectory.right_poses[5, :2] - np.asarray(sample["right_eef_pose"])[:2],
+        np.asarray(sample["cooktop_pose"])[:2] - np.asarray(sample["pot_pose"])[:2],
+        atol=1e-9,
+    )
 from judo_isaaclab.put_marker import compose_pose, interpolate_poses, inverse_pose
 
 

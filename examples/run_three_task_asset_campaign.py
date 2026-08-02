@@ -249,6 +249,44 @@ def run_task(
                     "dataset": pair["dataset"], "assets": pair["assets"],
                 }
             else:
+                repair_record = None
+                repair_mode = task.get("repair_mode")
+                if repair_mode and replay_result.get("checks", {}).get("coded_task_success"):
+                    repair = _command(
+                        task,
+                        python=python,
+                        gear_repo=gear_repo,
+                        target=pair["dataset"],
+                        mode=repair_mode,
+                        output=pair_root,
+                        source_keyframes=keyframes,
+                        direct_replay_result=replay_result_path,
+                    )
+                    repair_rc = _run(repair, pair_root / f"{repair_mode}.log", dry_run=False)
+                    repair_result_path = pair_root / f"{repair_mode}_result.json"
+                    repair_result = _load(repair_result_path) if repair_result_path.is_file() else {}
+                    if repair_rc == 0 and repair_result.get("status") == "passed" and _task_success(repair_result):
+                        demo = validate_demo(pair_root / f"{repair_mode}_demo.hdf5", pair["assets"])
+                        repair_record = {
+                            "status": "accepted", "method": "source_action_prefix_with_supported_center_repair",
+                            "dataset": pair["dataset"], "assets": pair["assets"],
+                            "replay_result": str(replay_result_path.resolve()),
+                            "result": str(repair_result_path.resolve()),
+                            "video": str((pair_root / f"{repair_mode}.mp4").resolve()),
+                            "demonstration": demo,
+                        }
+                if repair_record is not None:
+                    record = repair_record
+                    ledger["pairs"][pair_id] = record
+                    ledger["summary"] = {
+                        "accepted": sum(v.get("status") == "accepted" for v in ledger["pairs"].values()),
+                        "replay_successes": sum(v.get("method") == "source_action_replay" and v.get("status") == "accepted" for v in ledger["pairs"].values()),
+                        "adapted_successes": sum(v.get("method") != "source_action_replay" and v.get("status") == "accepted" for v in ledger["pairs"].values()),
+                        "nonterminal": sum(v.get("status") != "accepted" for v in ledger["pairs"].values()),
+                    }
+                    _atomic_json(ledger_path, ledger)
+                    print("CAMPAIGN_PAIR=" + json.dumps({"task": task["name"], "pair": pair_id, **record}, sort_keys=True), flush=True)
+                    continue
                 skill = _command(
                     task,
                     python=python,
@@ -283,7 +321,7 @@ def run_task(
         ledger["summary"] = {
             "accepted": sum(v.get("status") == "accepted" for v in ledger["pairs"].values()),
             "replay_successes": sum(v.get("method") == "source_action_replay" and v.get("status") == "accepted" for v in ledger["pairs"].values()),
-            "adapted_successes": sum(v.get("method") == "deterministic_semantic_skill" and v.get("status") == "accepted" for v in ledger["pairs"].values()),
+            "adapted_successes": sum(v.get("method") != "source_action_replay" and v.get("status") == "accepted" for v in ledger["pairs"].values()),
             "nonterminal": sum(v.get("status") != "accepted" for v in ledger["pairs"].values()),
         }
         _atomic_json(ledger_path, ledger)
