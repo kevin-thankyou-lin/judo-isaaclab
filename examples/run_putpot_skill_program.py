@@ -305,21 +305,22 @@ def _build_skill(
 
     def handle(parts, side):
         if side < 0:
-            return parts.negative_handle_frame, parts.negative_handle_size
-        return parts.positive_handle_frame, parts.positive_handle_size
+            return parts.negative_handle_frame
+        return parts.positive_handle_frame
 
     def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
         frame = frames[frame_name]
         side = left_side if arm == "left" else right_side
-        source_handle, source_size = handle(source_parts, side)
-        target_handle, target_size = handle(target_parts, side)
+        source_handle = handle(source_parts, side)
+        target_handle = handle(target_parts, side)
         source_frame = compose_pose(frame["pot_pose"], source_handle)
         target_frame = compose_pose(target_initial.root_pose, target_handle)
+        # The authored handle center changes with the asset; the rigid
+        # gripper-to-contact transform does not scale with handle thickness.
         return transfer_pose(
             frame[f"{arm}_eef_pose"],
             source_frame,
             target_frame,
-            local_position_scale=target_size / source_size,
         )
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
