@@ -1,11 +1,18 @@
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
     reanchor_physical_handover,
 )
+from run_hangmug_skill_program import _validate_datagen_grasp_assists
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -17,6 +24,17 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
     target = RigidAssetGeometry(_pose(4.0, 5.0, 6.0), [0.4, 0.15, 0.24])
     transferred = target.transfer_pose_from(source, _pose(1.05, 2.04, 3.1))
     assert transferred[:3] == pytest.approx([4.1, 5.06, 6.08])
+
+
+def test_datagen_grasp_assist_validation_requires_canonical_mechanism():
+    FixedJointGraspAssist = type("FixedJointGraspAssist", (), {})
+    env = SimpleNamespace(grasp_assists={"left": FixedJointGraspAssist()})
+    config = {"left": {"mechanism": "fixed_joint", "arm": "left_arm"}}
+    assert _validate_datagen_grasp_assists(env, config) == (
+        "task_config:left=fixed_joint"
+    )
+    with pytest.raises(RuntimeError, match="names differ"):
+        _validate_datagen_grasp_assists(env, {"right": config["left"]})
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():
