@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "policy": "source action replay first; deterministic semantic skill only on coded failure; no MPC",
+  "tasks": [
+    {
+      "name": "putpot",
+      "expected_pairs": 40,
+      "source_dataset": "${PUTPOT_DATA_ROOT}/teleop/putpot_000.hdf5",
+      "dataset_globs": ["${PUTPOT_DATA_ROOT}/teleop/putpot_*.hdf5"],
+      "objects_root": "${PUTPOT_DATA_ROOT}/objects",
+      "runner": "examples/run_putpot_skill_program.py",
+      "needs_keyframes": true,
+      "runner_args": ["--device", "cpu"]
+    },
+    {
+      "name": "putmarker",
+      "expected_pairs": 40,
+      "source_dataset": "${PUTMARKER_DATA_ROOT}/annotated/annotated_drawer_000.hdf5",
+      "dataset_globs": [
+        "${PUTMARKER_DATA_ROOT}/annotated/annotated_*.hdf5",
+        "${PUTMARKER_DATA_ROOT}/annotated_cabinet_with_feet/annotated_*.hdf5"
+      ],
+      "objects_root": "${PUTMARKER_DATA_ROOT}/objects",
+      "runner": "examples/run_putmarker_skill_program.py",
+      "needs_keyframes": false,
+      "runner_args": ["--device", "cpu", "--replay-actions-from", "source"]
+    },
+    {
+      "name": "hangmug",
+      "expected_pairs": 40,
+      "source_dataset": "${HANGMUG_DATA_ROOT}/teleop/hangmug_000.hdf5",
+      "dataset_globs": ["${HANGMUG_DATA_ROOT}/teleop/hangmug_*.hdf5"],
+      "objects_root": "${HANGMUG_DATA_ROOT}/objects",
+      "runner": "examples/run_hangmug_skill_program.py",
+      "needs_keyframes": true,
+      "runner_args": ["--device", "cuda:0", "--grasp-assist-mechanism", "friction"]
+    }
+  ]
+}

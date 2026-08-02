@@ -52,6 +52,11 @@ def _parser() -> argparse.Namespace:
         action="store_true",
         help="Accept a technically valid replay only when coded task success remains false.",
     )
+    parser.add_argument(
+        "--classification-run",
+        action="store_true",
+        help="Accept a technically valid replay whether task success passes or fails.",
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
@@ -71,6 +76,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--video")
     parser.add_argument("--trace-npz", required=True)
+    parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
     parser.add_argument(
         "--direct-replay-result",
@@ -837,6 +843,10 @@ def main() -> None:
 
             coordinate_draw = debug_draw.acquire_debug_draw_interface()
 
+        from judo_isaaclab.demo_artifact import DemonstrationRecorder
+
+        demo_recorder = DemonstrationRecorder()
+        demo_recorder.start(env.scene.get_state(is_relative=False))
         samples.append(_sample(env, -1, "reset"))
         for step in range(total_steps):
             if trajectory is None:
@@ -868,8 +878,14 @@ def main() -> None:
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
-            _, _, terminated, truncated, info = env.step(action)
+            observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
+            demo_recorder.append(
+                action,
+                env.scene.get_state(is_relative=False),
+                observation=observation,
+                semantic_observation=sample,
+            )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             marker_poses.append(sample["marker_pose"])
@@ -950,7 +966,17 @@ def main() -> None:
             ),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
-        if args.expect_failure:
+        if args.classification_run:
+            if args.mode != "replay":
+                raise ValueError("--classification-run is only valid in replay mode")
+            acceptance_checks = {
+                name: checks[name]
+                for name in (
+                    "one_reset", "zero_inter_stage_resets", "real_target_assets",
+                    "h264_nonempty", "fully_decodable",
+                )
+            }
+        elif args.expect_failure:
             acceptance_checks = {
                 name: checks[name]
                 for name in (
@@ -974,6 +1000,23 @@ def main() -> None:
                         "task_success", True
                     )
                 )
+        demo_artifact = None
+        if args.demo_hdf5 and final["task_success"] and all(acceptance_checks.values()):
+            from judo_isaaclab.demo_artifact import relative_asset_paths
+
+            demo_recorder.write(
+                args.demo_hdf5,
+                assets_instance_paths=relative_asset_paths(target_assets, args.objects_root),
+                success=True,
+                metadata={
+                    "task": "PutMarkerInDrawer-v0",
+                    "controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_skill",
+                    "candidate_sampling": False,
+                    "source_dataset_sha256": _sha256(args.source_dataset),
+                    "target_dataset_sha256": _sha256(args.target_dataset),
+                },
+            )
+            demo_artifact = {"path": os.path.abspath(args.demo_hdf5), "sha256": _sha256(args.demo_hdf5)}
         result = {
             "status": "passed" if all(acceptance_checks.values()) else "failed",
             "mode": args.mode,
@@ -1023,6 +1066,7 @@ def main() -> None:
                     "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/put_marker_in_drawer_manager_cfg.py")),
                 },
                 "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)},
+                "demonstration": demo_artifact,
             },
             "geometry": {
                 "source": {

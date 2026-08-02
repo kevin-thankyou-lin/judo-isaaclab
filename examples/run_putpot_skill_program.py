@@ -35,6 +35,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--source-keyframes")
     parser.add_argument("--write-keyframes")
     parser.add_argument("--expect-failure", action="store_true")
+    parser.add_argument(
+        "--classification-run",
+        action="store_true",
+        help="Accept a technically valid replay whether task success passes or fails.",
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
@@ -56,6 +61,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--video")
     parser.add_argument("--trace-npz", required=True)
+    parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--direct-replay-result")
     return parser.parse_args()
@@ -533,6 +539,10 @@ def main() -> None:
             if trajectory is not None else None
         )
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
+        from judo_isaaclab.demo_artifact import DemonstrationRecorder
+
+        demo_recorder = DemonstrationRecorder()
+        demo_recorder.start(env.scene.get_state(is_relative=False))
         samples = [_sample(env, -1, "reset")]
         actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
         frame_stats = []
@@ -559,8 +569,14 @@ def main() -> None:
                     integrate_right_ik=integrate_ik,
                 )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
-            _, _, terminated, truncated, info = env.step(action)
+            observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
+            demo_recorder.append(
+                action,
+                env.scene.get_state(is_relative=False),
+                observation=observation,
+                semantic_observation=sample,
+            )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
@@ -756,7 +772,17 @@ def main() -> None:
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
-        if args.expect_failure:
+        if args.classification_run:
+            if args.mode != "replay":
+                raise ValueError("--classification-run is only valid in replay mode")
+            acceptance_checks = {
+                name: checks[name]
+                for name in (
+                    "one_reset", "zero_inter_stage_resets", "real_target_assets",
+                    "contact_backed_grasps_only", "h264_nonempty", "fully_decodable",
+                )
+            }
+        elif args.expect_failure:
             acceptance_checks = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "h264_nonempty", "fully_decodable")}
             acceptance_checks["expected_coded_task_failure"] = not bool(final["task_success"])
         else:
@@ -769,7 +795,30 @@ def main() -> None:
                 acceptance_checks.pop("bimanual_transport_completed")
             if direct_replay is not None:
                 acceptance_checks = dict(acceptance_checks)
-                acceptance_checks["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                acceptance_checks["direct_source_action_replay_failed"] = bool(
+                    direct_replay.get("status") == "passed"
+                    and not direct_replay.get("checks", {}).get(
+                        "accepted_task_success",
+                        direct_replay.get("terminal", {}).get("task_success", True),
+                    )
+                )
+        demo_artifact = None
+        if args.demo_hdf5 and checks["accepted_task_success"] and all(acceptance_checks.values()):
+            from judo_isaaclab.demo_artifact import relative_asset_paths
+
+            demo_recorder.write(
+                args.demo_hdf5,
+                assets_instance_paths=relative_asset_paths(target_assets, args.objects_root),
+                success=True,
+                metadata={
+                    "task": "PutPotOnCooktop-v0",
+                    "controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_skill",
+                    "candidate_sampling": False,
+                    "source_dataset_sha256": _sha256(args.source_dataset),
+                    "target_dataset_sha256": _sha256(args.target_dataset),
+                },
+            )
+            demo_artifact = {"path": os.path.abspath(args.demo_hdf5), "sha256": _sha256(args.demo_hdf5)}
         from run_putmarker_skill_program import _asset_provenance
         result = {
             "status": "passed" if all(acceptance_checks.values()) else "failed",
@@ -794,6 +843,7 @@ def main() -> None:
                 "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager.py"))},
                 "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/put_pot_on_cooktop_manager_cfg.py"))},
                 "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)},
+                "demonstration": demo_artifact,
                 "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None),
             },
             "semantic_frames": {

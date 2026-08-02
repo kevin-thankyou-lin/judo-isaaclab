@@ -28,6 +28,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--source-keyframes")
     parser.add_argument("--write-keyframes")
     parser.add_argument("--expect-failure", action="store_true")
+    parser.add_argument(
+        "--classification-run",
+        action="store_true",
+        help="Accept a technically valid replay whether task success passes or fails.",
+    )
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
@@ -48,6 +53,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--video")
     parser.add_argument("--trace-npz", required=True)
+    parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--direct-replay-result")
     return parser.parse_args()
@@ -564,6 +570,10 @@ def main() -> None:
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
+        from judo_isaaclab.demo_artifact import DemonstrationRecorder
+
+        demo_recorder = DemonstrationRecorder()
+        demo_recorder.start(env.scene.get_state(is_relative=False))
         samples = [_sample(env, -1, "reset")]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; frame_stats = []
         if args.render:
@@ -587,8 +597,14 @@ def main() -> None:
                     integrate_right_ik=integrate,
                 )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
-            _, _, _, _, info = env.step(action)
+            observation, _, _, _, info = env.step(action)
             sample = _sample(env, step, stage, info)
+            demo_recorder.append(
+                action,
+                env.scene.get_state(is_relative=False),
+                observation=observation,
+                semantic_observation=sample,
+            )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
             if trajectory is not None and step == trajectory.waypoint_steps["left_lift"]:
@@ -656,7 +672,18 @@ def main() -> None:
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
-        if args.expect_failure:
+        if args.classification_run:
+            if args.mode != "replay":
+                raise ValueError("--classification-run is only valid in replay mode")
+            acceptance = {
+                name: checks[name]
+                for name in (
+                    "one_reset", "zero_inter_stage_resets", "real_target_assets",
+                    "contact_backed_grasps_only", "datagen_grasp_assist_configured",
+                    "h264_nonempty", "fully_decodable",
+                )
+            }
+        elif args.expect_failure:
             acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
             acceptance["expected_coded_task_failure"] = not final["task_success"]
         else:
@@ -672,11 +699,29 @@ def main() -> None:
                     direct_replay.get("protocol", {}).get("physics_device_actual")
                     == str(env.device)
                 )
+        demo_artifact = None
+        if args.demo_hdf5 and final["task_success"] and all(acceptance.values()):
+            from judo_isaaclab.demo_artifact import relative_asset_paths
+
+            demo_recorder.write(
+                args.demo_hdf5,
+                assets_instance_paths=relative_asset_paths(target_assets, args.objects_root),
+                success=True,
+                metadata={
+                    "task": "HangMugOnTree-v0",
+                    "controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_skill",
+                    "candidate_sampling": False,
+                    "grasp_assistance": grasp_assistance,
+                    "source_dataset_sha256": _sha256(args.source_dataset),
+                    "target_dataset_sha256": _sha256(args.target_dataset),
+                },
+            )
+            demo_artifact = {"path": os.path.abspath(args.demo_hdf5), "sha256": _sha256(args.demo_hdf5)}
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
             "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "handover_pregrasp_position_scaling": True, "handover_contact_position_scaling": False}},
-            "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
+            "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {"source_mug": source_mug.root_pose.tolist(), "target_mug": target_mug.root_pose.tolist(), "source_tree": source_tree.root_pose.tolist(), "target_tree": target_tree.root_pose.tolist(), "intended_final_mug_pose": intended_final.tolist() if intended_final is not None else None, "extracted_keyframes": extracted},
             "metrics": {"eef_tracking_error_m": max(desired_error) if desired_error else None, "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None, "handle_branch_error_m": final["mug_tree_xy_error_m"], "terminal_mug_speed_mps": terminal_speed, "terminal_mug_angular_speed_rps": float(np.linalg.norm(final["mug_velocity"][3:])), "left_grasp_frames": sum(row["left_grasp"] for row in samples), "right_grasp_frames": sum(row["right_grasp"] for row in samples)},
             "terminal": final,
