@@ -43,8 +43,18 @@ def main() -> None:
         failed = [name for name, passed in checks.items() if not passed]
         if failed:
             errors.append(f"failed result checks: {failed}")
-        if result.get("protocol", {}).get("grasp_assistance") != "none":
-            errors.append("grasp assistance was not disabled")
+        grasp_assistance = result.get("protocol", {}).get("grasp_assistance", "")
+        if not str(grasp_assistance).startswith("task_config:"):
+            errors.append("canonical task-configured grasp assistance was not used")
+        for name in (
+            "datagen_grasp_assist_configured",
+            "left_grasp_assist_engaged",
+        ):
+            if checks.get(name) is not True:
+                errors.append(f"missing grasp-assist evidence: {name}")
+        if result.get("terminal", {}).get("task_success") is True:
+            if checks.get("left_grasp_assist_released") is not True:
+                errors.append("left grasp assist remained engaged after handover")
         if result.get("protocol", {}).get("candidate_sampling") is not False:
             errors.append("candidate sampling was not disabled")
     if not os.path.isfile(args.trace_npz) or os.path.getsize(args.trace_npz) == 0:

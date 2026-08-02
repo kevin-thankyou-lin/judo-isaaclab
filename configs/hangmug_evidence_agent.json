@@ -67,7 +67,8 @@
     "zero_inter_stage_resets",
     "real_target_assets",
     "contact_backed_grasps_only",
-    "no_grasp_assistance"
+    "datagen_grasp_assist_configured",
+    "left_grasp_assist_engaged"
   ],
   "thresholds": {
     "eef_tracking_error_m": 0.02,
@@ -82,6 +83,11 @@
       "handle-to-branch insertion",
       "release and stable support"
     ],
+    "required": [
+      "canonical task-configured datagen grasp assist",
+      "contact-backed assist engagement",
+      "assist release during physical handover"
+    ],
     "forbidden": [
       "MPC",
       "CEM",
@@ -89,7 +95,7 @@
       "candidate sampling",
       "inter-stage reset",
       "state teleport",
-      "grasp assistance"
+      "non-task-configured grasp assistance"
     ]
   }
 }

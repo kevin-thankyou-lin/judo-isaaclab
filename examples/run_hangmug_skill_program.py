@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -94,18 +95,21 @@ def _geometry(asset_path: str, root_pose: np.ndarray):
     return RigidAssetGeometry(root_pose=np.asarray(root_pose), size=_asset_size(asset_path))
 
 
-def _configure_task_without_assistance() -> dict[str, object]:
+def _configure_task_for_evidence() -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
     import dc_study.envs.tasks.hang_mug_on_tree_manager_cfg as config_module
 
-    manager_module.GRASP_ASSIST_CONFIG = {}
-    config_module.GRASP_ASSIST_CONFIG = {}
+    assist_config = copy.deepcopy(config_module.GRASP_ASSIST_CONFIG)
+    if not assist_config:
+        raise RuntimeError("HangMug datagen grasp-assist config is empty")
+    if manager_module.GRASP_ASSIST_CONFIG != config_module.GRASP_ASSIST_CONFIG:
+        raise RuntimeError("HangMug manager/config grasp-assist maps disagree")
     original_init = config_module.HangMugOnTreeManagerEnvCfg.__init__
 
     def offline_init(instance, *init_args, **init_kwargs):
         original_init(instance, *init_args, **init_kwargs)
-        instance.grasp_assist = {}
+        instance.grasp_assist = copy.deepcopy(assist_config)
         instance.terminations.task_success = None
         instance.terminations.mug_below_table = None
         instance.terminations.mug_tree_below_table = None
@@ -122,11 +126,41 @@ def _configure_task_without_assistance() -> dict[str, object]:
 
     config_module.HangMugOnTreeManagerEnvCfg.__init__ = offline_init
     return {
-        "grasp_assistance": "disabled by empty manager/config assist maps",
+        "grasp_assistance": "canonical task-configured datagen assist preserved",
+        "grasp_assistance_config": assist_config,
         "success_auto_termination": "disabled; coded predicate unchanged",
         "failure_auto_termination": "disabled for one-reset failure evidence",
         "ground": "procedural static cuboid",
     }
+
+
+def _validate_datagen_grasp_assists(env, expected_config) -> str:
+    expected_config = dict(expected_config or {})
+    expected_names = {str(name) for name, spec in expected_config.items() if spec}
+    actual_names = set(env.grasp_assists)
+    if actual_names != expected_names:
+        raise RuntimeError(
+            f"grasp-assist names differ: expected {sorted(expected_names)}, "
+            f"got {sorted(actual_names)}"
+        )
+    expected_classes = {
+        "friction": "FrictionGraspAssist",
+        "fixed_joint": "FixedJointGraspAssist",
+        "none": "NullGraspAssist",
+    }
+    entries = []
+    for name in sorted(expected_names):
+        spec = expected_config[name]
+        mechanism = str(spec.get("mechanism", "friction"))
+        expected_class = expected_classes.get(mechanism)
+        actual_class = type(env.grasp_assists[name]).__name__
+        if expected_class is None or actual_class != expected_class:
+            raise RuntimeError(
+                f"grasp assist {name!r}: expected {mechanism!r}/{expected_class}, "
+                f"got {actual_class}"
+            )
+        entries.append(f"{name}={mechanism}")
+    return "task_config:" + ",".join(entries)
 
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
@@ -147,11 +181,16 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     released = not bool(left_grasp[0].item()) and not bool(right_grasp[0].item())
     elevated = float(mug_pose[2]) > float(env.mug_init_z + 0.05)
     hang_now = xy_error < float(env.hang_xy_tolerance) and elevated and released
+    assist_engaged = {
+        name: bool(assist.engaged[0].item())
+        for name, assist in env.grasp_assists.items()
+    }
     return {
         "step": int(step),
         "program_stage": stage,
         "left_grasp": bool(left_grasp[0].item()),
         "right_grasp": bool(right_grasp[0].item()),
+        "grasp_assist_engaged": assist_engaged,
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
         "stage3": bool(env.stage3_success[0].item()),
@@ -436,6 +475,7 @@ def _frame(env, sample):
             f"step {sample['step']} / {sample['program_stage']}",
             f"pick={sample['stage1']} handover={sample['stage2']} hang={sample['stage3']}",
             f"grasps L={sample['left_grasp']} R={sample['right_grasp']}",
+            f"assist={sample['grasp_assist_engaged']}",
             f"tree xy={sample['mug_tree_xy_error_m']:.4f} m",
         ]
         for row, line in enumerate(lines):
@@ -461,7 +501,7 @@ def main() -> None:
         from dc_study.utils.task_creation import create_task_environment
         from run_putmarker_skill_program import _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state
 
-        override = _configure_task_without_assistance()
+        override = _configure_task_for_evidence()
         source_assets = _dataset_assets(args.source_dataset, args.objects_root)
         target_assets = _dataset_assets(args.target_dataset, args.objects_root)
         env = create_task_environment(
@@ -480,8 +520,9 @@ def main() -> None:
             enable_grasp_ray_viz=False,
             check_gripper_release_for_hang=True,
         )
-        if env.grasp_assists:
-            raise RuntimeError(f"grasp assistance unexpectedly active: {env.grasp_assists}")
+        grasp_assistance = _validate_datagen_grasp_assists(
+            env, override["grasp_assistance_config"]
+        )
         env.reset(warm_up=False, seed=args.seed)
         source = _load_dataset(args.source_dataset, args.episode, env.device)
         target = _load_dataset(args.target_dataset, args.episode, env.device)
@@ -539,7 +580,7 @@ def main() -> None:
             if encoder is not None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
-                print("HANGMUG_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "mug_pose", "mug_tree_xy_error_m")}, sort_keys=True), flush=True)
+                print("HANGMUG_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}, sort_keys=True), flush=True)
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -575,7 +616,13 @@ def main() -> None:
             "zero_inter_stage_resets": True,
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
             "contact_backed_grasps_only": True,
-            "no_grasp_assistance": not bool(env.grasp_assists),
+            "datagen_grasp_assist_configured": bool(env.grasp_assists),
+            "left_grasp_assist_engaged": any(
+                row["grasp_assist_engaged"].get("left", False) for row in samples
+            ),
+            "left_grasp_assist_released": not final[
+                "grasp_assist_engaged"
+            ].get("left", False),
             "coded_task_success": bool(final["task_success"]),
             "all_stages_latched": bool(final["stage1"] and final["stage2"] and final["stage3"]),
             "left_pick_observed": any(row["left_grasp"] and row["stage1"] for row in samples),
@@ -587,17 +634,21 @@ def main() -> None:
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
         if args.expect_failure:
-            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "no_grasp_assistance", "h264_nonempty", "fully_decodable")}
+            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
             acceptance["expected_coded_task_failure"] = not final["task_success"]
         else:
             acceptance = checks
             if direct_replay is not None and _sha256(args.source_dataset) != _sha256(args.target_dataset):
                 acceptance = dict(acceptance)
                 acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                acceptance["direct_replay_grasp_assistance_matched"] = (
+                    direct_replay.get("protocol", {}).get("grasp_assistance")
+                    == grasp_assistance
+                )
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "grasp_assistance": "none", "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "handover_pregrasp_position_scaling": True, "handover_contact_position_scaling": False}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "handover_pregrasp_position_scaling": True, "handover_contact_position_scaling": False}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {"source_mug": source_mug.root_pose.tolist(), "target_mug": target_mug.root_pose.tolist(), "source_tree": source_tree.root_pose.tolist(), "target_tree": target_tree.root_pose.tolist(), "intended_final_mug_pose": intended_final.tolist() if intended_final is not None else None, "extracted_keyframes": extracted},
             "metrics": {"eef_tracking_error_m": max(desired_error) if desired_error else None, "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None, "handle_branch_error_m": final["mug_tree_xy_error_m"], "terminal_mug_speed_mps": terminal_speed, "terminal_mug_angular_speed_rps": float(np.linalg.norm(final["mug_velocity"][3:])), "left_grasp_frames": sum(row["left_grasp"] for row in samples), "right_grasp_frames": sum(row["right_grasp"] for row in samples)},

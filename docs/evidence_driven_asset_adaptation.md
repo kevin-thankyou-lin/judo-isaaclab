@@ -29,6 +29,9 @@ source demo + task predicate + asset geometry
   object-relative relationships—not as a target joint trajectory.
 - Express targets in semantic frames: grasp contacts, support surfaces, handle
   holes, branch tangents, drawer cavities, and articulation axes.
+- Preserve task-native interaction mechanisms used by the authoritative datagen
+  environment, including configured grasp assistance. Record their exact config
+  and state transitions instead of silently disabling or replacing them.
 - Keep skills explicit and editable: `grasp`, `handover`, `transport`,
   `insert/place`, `release`, `close`, and `settle`.
 - Diagnose with both state traces and synchronized cameras. Rendered evidence
@@ -143,6 +146,14 @@ The left arm then stays at that pose throughout final alignment, insertion,
 release, and support validation. This makes the target branch visible without
 changing the successful right-hand path or treating camera visibility as a
 task-success substitute.
+
+HangMug also preserves the datagen environment's canonical left-arm fixed-joint
+grasp assist. It engages only after `0.3 s` of contact-backed left grasp, stores
+the settled relative transform, and is removed during the physical two-hand
+handover. The right-hand transport and insertion remain physically contact
+driven; no extra right-arm assist is introduced. Evidence must show that the
+configured assist existed, actually engaged, and was released before the final
+unsupported hang.
 
 ## CLI
 
