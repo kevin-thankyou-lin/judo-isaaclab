@@ -103,6 +103,21 @@ def _task_success(result: dict[str, Any]) -> bool:
     )
 
 
+def _reusable_classification(result: dict[str, Any], target_dataset: str) -> bool:
+    if result.get("status") != "passed" or result.get("mode") != "replay":
+        return False
+    provenance = result.get("provenance", {})
+    target = provenance.get("target_dataset", {})
+    if target.get("sha256") != _sha256(target_dataset):
+        return False
+    for artifact in (result.get("video"), provenance.get("trace")):
+        if not artifact or not os.path.isfile(artifact.get("path", "")):
+            return False
+        if artifact.get("sha256") != _sha256(artifact["path"]):
+            return False
+    return all(result.get("acceptance_checks", {}).values())
+
+
 def validate_demo(path: str | Path, expected_assets: dict[str, str]) -> dict[str, Any]:
     import h5py
 
@@ -211,20 +226,25 @@ def run_task(
         pair_root = task_root / pair_id
         pair_root.mkdir(parents=True, exist_ok=True)
         write_keyframes = keyframes if pair["dataset"] == os.path.realpath(_expand(task["source_dataset"])) else None
-        replay = _command(
-            task,
-            python=python,
-            gear_repo=gear_repo,
-            target=pair["dataset"],
-            mode="replay",
-            output=pair_root,
-            source_keyframes=write_keyframes,
-            direct_replay_result=None,
-        )
-        replay_rc = _run(replay, pair_root / "replay.log", dry_run=dry_run)
+        replay_result_path = pair_root / "replay_result.json"
+        prior_replay = _load(replay_result_path) if replay_result_path.is_file() else {}
+        if not dry_run and _reusable_classification(prior_replay, pair["dataset"]):
+            replay_rc = 0
+            print(f"CAMPAIGN_REUSE_CLASSIFICATION={task['name']}:{pair_id}", flush=True)
+        else:
+            replay = _command(
+                task,
+                python=python,
+                gear_repo=gear_repo,
+                target=pair["dataset"],
+                mode="replay",
+                output=pair_root,
+                source_keyframes=write_keyframes,
+                direct_replay_result=None,
+            )
+            replay_rc = _run(replay, pair_root / "replay.log", dry_run=dry_run)
         if dry_run:
             continue
-        replay_result_path = pair_root / "replay_result.json"
         replay_result = _load(replay_result_path) if replay_result_path.is_file() else {}
         replay_success = replay_rc == 0 and replay_result.get("status") == "passed" and _task_success(replay_result)
         if replay_success:

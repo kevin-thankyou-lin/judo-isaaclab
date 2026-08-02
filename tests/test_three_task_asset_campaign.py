@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import pytest
 
-from run_three_task_asset_campaign import enumerate_pairs, validate_demo
+from run_three_task_asset_campaign import _reusable_classification, enumerate_pairs, validate_demo
 
 
 def _dataset(path, assets):
@@ -49,3 +49,28 @@ def test_demo_validation_checks_alignment_and_assets(tmp_path):
     value = validate_demo(path, {"object": "Object/object_000"})
     assert value["actions"] == 2
     assert len(value["sha256"]) == 64
+
+
+def test_reuses_only_hash_verified_classification(tmp_path):
+    target = tmp_path / "target.hdf5"
+    video = tmp_path / "video.mp4"
+    trace = tmp_path / "trace.npz"
+    target.write_bytes(b"target")
+    video.write_bytes(b"video")
+    trace.write_bytes(b"trace")
+    import hashlib
+
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    result = {
+        "status": "passed",
+        "mode": "replay",
+        "acceptance_checks": {"technical": True},
+        "provenance": {
+            "target_dataset": {"sha256": digest(target)},
+            "trace": {"path": str(trace), "sha256": digest(trace)},
+        },
+        "video": {"path": str(video), "sha256": digest(video)},
+    }
+    assert _reusable_classification(result, str(target))
+    video.write_bytes(b"corrupt")
+    assert not _reusable_classification(result, str(target))
