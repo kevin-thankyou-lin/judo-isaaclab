@@ -147,6 +147,29 @@ def _git_head() -> str:
     ).strip()
 
 
+def _taxonomy(records: dict[str, Any]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    total = 0
+    for key, record in records.items():
+        task_groups = grouped.setdefault(record["task"], {})
+        for diagnosis in record.get("diagnoses", []):
+            total += 1
+            stage = diagnosis["first_failed_stage"]
+            group = task_groups.setdefault(
+                stage, {"failure_records": 0, "pairs": [], "sources": []}
+            )
+            group["failure_records"] += 1
+            if key not in group["pairs"]:
+                group["pairs"].append(key)
+            source = diagnosis.get("source")
+            if source and source not in group["sources"]:
+                group["sources"].append(source)
+    return {
+        "diagnosed_failure_records": total,
+        "by_task_and_first_failed_stage": grouped,
+    }
+
+
 def refresh_ledger(
     config: dict[str, Any], output_root: Path, ledger_path: Path
 ) -> dict[str, Any]:
@@ -284,6 +307,7 @@ def refresh_ledger(
         "code_head": _git_head(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "pairs": records,
+        "taxonomy": _taxonomy(records),
         "summary": {
             "total": len(records),
             "accepted": status_counts.get("accepted", 0),

@@ -80,3 +80,38 @@ def test_preserved_deterministic_primary_success_is_not_replayed():
     assert module._preserved_primary_success(entry, result)
     entry["method"] = "source_action_replay"
     assert not module._preserved_primary_success(entry, result)
+
+
+def test_taxonomy_groups_every_failure_record_by_first_failed_stage():
+    module = _module()
+    taxonomy = module._taxonomy(
+        {
+            "putmarker:a": {
+                "task": "putmarker",
+                "diagnoses": [
+                    {
+                        "first_failed_stage": "open_drawer",
+                        "source": "primary_campaign",
+                    },
+                    {
+                        "first_failed_stage": "open_drawer",
+                        "source": "replay_success_semantic_audit",
+                    },
+                ],
+            },
+            "hangmug:b": {
+                "task": "hangmug",
+                "diagnoses": [
+                    {
+                        "first_failed_stage": "physical_handover",
+                        "source": "primary_campaign",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert taxonomy["diagnosed_failure_records"] == 3
+    drawer = taxonomy["by_task_and_first_failed_stage"]["putmarker"]["open_drawer"]
+    assert drawer["failure_records"] == 2
+    assert drawer["pairs"] == ["putmarker:a"]
