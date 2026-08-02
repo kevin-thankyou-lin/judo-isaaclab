@@ -1,0 +1,382 @@
+"""Deterministic part frames inferred from authored collision geometry.
+
+The campaign assets do not contain semantic prim names for pot handles, mug
+handles, or mug-tree branches.  They do, however, contain convex collision
+components.  This module turns those measured components into stable local
+part frames without asset identifiers, sampling, or simulator rollouts.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable
+
+import numpy as np
+
+from judo_isaaclab.put_marker import pose_from_matrix
+
+
+def _points(value: object) -> np.ndarray:
+    result = np.asarray(value, dtype=np.float64)
+    if result.ndim != 2 or result.shape[1] != 3 or len(result) < 4:
+        raise ValueError("collision component points must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(result)):
+        raise ValueError("collision component points must be finite")
+    return result
+
+
+def _components(values: Iterable[object]) -> tuple[np.ndarray, ...]:
+    result = tuple(_points(value) for value in values)
+    if not result:
+        raise ValueError("at least one collision component is required")
+    return result
+
+
+def _bounds(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    return points.min(axis=0), points.max(axis=0)
+
+
+def _union_bounds(values: Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    points = np.concatenate(tuple(values), axis=0)
+    return _bounds(points)
+
+
+def _frame(origin: object, x_axis: object, z_hint: object = (0.0, 0.0, 1.0)) -> np.ndarray:
+    origin = np.asarray(origin, dtype=np.float64)
+    x_axis = np.asarray(x_axis, dtype=np.float64)
+    z_hint = np.asarray(z_hint, dtype=np.float64)
+    x_axis = x_axis / np.linalg.norm(x_axis)
+    y_axis = np.cross(z_hint, x_axis)
+    if np.linalg.norm(y_axis) < 1.0e-8:
+        raise ValueError("part-frame x axis is parallel to its z hint")
+    y_axis = y_axis / np.linalg.norm(y_axis)
+    z_axis = np.cross(x_axis, y_axis)
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
+    matrix[:3, 3] = origin
+    return pose_from_matrix(matrix)
+
+
+def _projected_size(points: np.ndarray, frame: np.ndarray) -> np.ndarray:
+    from judo_isaaclab.put_marker import inverse_pose, quaternion_rotate
+
+    inverse = inverse_pose(frame)
+    local = np.stack(
+        [quaternion_rotate(inverse[3:], point - frame[:3]) for point in points]
+    )
+    return local.max(axis=0) - local.min(axis=0)
+
+
+@dataclass(frozen=True)
+class PotParts:
+    """Pot handle frames plus the measured bottom support plane."""
+
+    negative_handle_frame: np.ndarray
+    positive_handle_frame: np.ndarray
+    negative_handle_size: np.ndarray
+    positive_handle_size: np.ndarray
+    handle_axis: int
+    bottom_z: float
+    body_xy_min: np.ndarray
+    body_xy_max: np.ndarray
+
+    def __post_init__(self) -> None:
+        for name in ("negative_handle_frame", "positive_handle_frame"):
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            if value.shape != (7,):
+                raise ValueError(f"{name} must have shape (7,)")
+            object.__setattr__(self, name, value)
+        for name in (
+            "negative_handle_size",
+            "positive_handle_size",
+            "body_xy_min",
+            "body_xy_max",
+        ):
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            expected = (3,) if "handle_size" in name else (2,)
+            if value.shape != expected:
+                raise ValueError(f"{name} must have shape {expected}")
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True)
+class MugParts:
+    """Mug body and handle-hole frames in the asset root frame."""
+
+    body_frame: np.ndarray
+    body_size: np.ndarray
+    handle_hole_frame: np.ndarray
+    handle_outer_size: np.ndarray
+    handle_thickness_m: float
+    handle_axis: int
+    handle_sign: int
+
+    def __post_init__(self) -> None:
+        for name in ("body_frame", "handle_hole_frame"):
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            if value.shape != (7,):
+                raise ValueError(f"{name} must have shape (7,)")
+            object.__setattr__(self, name, value)
+        for name in ("body_size", "handle_outer_size"):
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            if value.shape != (3,) or np.any(value <= 0.0):
+                raise ValueError(f"{name} must have three positive values")
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True)
+class BranchPart:
+    """One mug-tree branch, directed from the trunk toward its tip."""
+
+    frame: np.ndarray
+    inner_point: np.ndarray
+    tip_point: np.ndarray
+    tangent: np.ndarray
+    length_m: float
+    radius_m: float
+    normalized_height: float
+    azimuth_rad: float
+
+    def __post_init__(self) -> None:
+        for name, shape in (
+            ("frame", (7,)),
+            ("inner_point", (3,)),
+            ("tip_point", (3,)),
+            ("tangent", (3,)),
+        ):
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            if value.shape != shape:
+                raise ValueError(f"{name} must have shape {shape}")
+            object.__setattr__(self, name, value)
+
+
+def _footprint(components: tuple[np.ndarray, ...]) -> tuple[np.ndarray, np.ndarray]:
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    height = global_max[2] - global_min[2]
+    floor = []
+    for points in components:
+        minimum, maximum = _bounds(points)
+        if (
+            minimum[2] <= global_min[2] + 0.08 * height
+            and maximum[2] - minimum[2] <= 0.28 * height
+        ):
+            floor.append(points)
+    if not floor:
+        raise ValueError("could not infer the object's bottom footprint")
+    return _union_bounds(floor)
+
+
+def infer_pot_parts(values: Iterable[object]) -> PotParts:
+    """Infer the two pot handles from overhang beyond the bottom footprint."""
+
+    components = _components(values)
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    body_min, body_max = _footprint(components)
+    overhang = np.asarray(
+        [
+            body_min[0] - global_min[0],
+            global_max[0] - body_max[0],
+            body_min[1] - global_min[1],
+            global_max[1] - body_max[1],
+        ]
+    )
+    best = int(np.argmax(overhang))
+    axis = best // 2
+    if overhang[best] < 0.008:
+        raise ValueError("pot collision geometry has no measurable handle overhang")
+    side_sets: dict[int, list[np.ndarray]] = {-1: [], 1: []}
+    for points in components:
+        minimum, maximum = _bounds(points)
+        for sign in (-1, 1):
+            reach = (
+                body_min[axis] - minimum[axis]
+                if sign < 0
+                else maximum[axis] - body_max[axis]
+            )
+            side_overhang = (
+                body_min[axis] - global_min[axis]
+                if sign < 0
+                else global_max[axis] - body_max[axis]
+            )
+            if side_overhang >= 0.008 and reach > 0.08 * side_overhang:
+                side_sets[sign].append(points)
+    if not all(side_sets.values()):
+        raise ValueError("pot collision geometry does not contain two handle sides")
+
+    frames: dict[int, np.ndarray] = {}
+    sizes: dict[int, np.ndarray] = {}
+    for sign, selected in side_sets.items():
+        points = np.concatenate(selected)
+        minimum, maximum = _bounds(points)
+        origin = 0.5 * (minimum + maximum)
+        outward = np.zeros(3, dtype=np.float64)
+        outward[axis] = sign
+        frames[sign] = _frame(origin, outward)
+        sizes[sign] = _projected_size(points, frames[sign])
+    return PotParts(
+        negative_handle_frame=frames[-1],
+        positive_handle_frame=frames[1],
+        negative_handle_size=sizes[-1],
+        positive_handle_size=sizes[1],
+        handle_axis=axis,
+        bottom_z=float(global_min[2]),
+        body_xy_min=body_min[:2],
+        body_xy_max=body_max[:2],
+    )
+
+
+def infer_mug_parts(values: Iterable[object]) -> MugParts:
+    """Infer a mug body frame and the center of its handle opening."""
+
+    components = _components(values)
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    body_min, body_max = _footprint(components)
+    candidates = []
+    for axis in (0, 1):
+        candidates.extend(
+            [
+                (body_min[axis] - global_min[axis], axis, -1),
+                (global_max[axis] - body_max[axis], axis, 1),
+            ]
+        )
+    overhang, axis, sign = max(candidates)
+    if overhang < 0.006:
+        raise ValueError("mug collision geometry has no measurable handle overhang")
+    transverse = 1 - axis
+    selected = []
+    for points in components:
+        minimum, maximum = _bounds(points)
+        reach = (
+            body_min[axis] - minimum[axis]
+            if sign < 0
+            else maximum[axis] - body_max[axis]
+        )
+        transverse_span = maximum[transverse] - minimum[transverse]
+        body_span = body_max[transverse] - body_min[transverse]
+        if reach > 0.05 * overhang and transverse_span < 0.55 * body_span:
+            selected.append(points)
+    if not selected:
+        raise ValueError("mug handle collision components could not be isolated")
+    handle_points = np.concatenate(selected)
+    handle_min, handle_max = _bounds(handle_points)
+    outward = np.zeros(3, dtype=np.float64)
+    outward[axis] = sign
+    hole_center = 0.5 * (handle_min + handle_max)
+    hole_frame = _frame(hole_center, outward)
+    handle_size = _projected_size(handle_points, hole_frame)
+    component_thicknesses = []
+    for points in selected:
+        size = _projected_size(points, hole_frame)
+        component_thicknesses.append(min(size[0], size[2]))
+    thickness = float(np.median(component_thicknesses))
+    body_center = 0.5 * (body_min + body_max)
+    body_center[2] = 0.5 * (global_min[2] + global_max[2])
+    body_frame = _frame(body_center, outward)
+    body_points = all_points[
+        (all_points[:, axis] >= body_min[axis] - 1.0e-6)
+        & (all_points[:, axis] <= body_max[axis] + 1.0e-6)
+    ]
+    return MugParts(
+        body_frame=body_frame,
+        body_size=_projected_size(body_points, body_frame),
+        handle_hole_frame=hole_frame,
+        handle_outer_size=handle_size,
+        handle_thickness_m=thickness,
+        handle_axis=axis,
+        handle_sign=sign,
+    )
+
+
+def infer_tree_branches(values: Iterable[object]) -> tuple[BranchPart, ...]:
+    """Infer every non-base radial branch and its deterministic support frame."""
+
+    components = _components(values)
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    height = global_max[2] - global_min[2]
+    radial_global = np.linalg.norm(all_points[:, :2], axis=1).max()
+    result = []
+    for points in components:
+        minimum, maximum = _bounds(points)
+        radial = np.linalg.norm(points[:, :2], axis=1)
+        radial_span = float(radial.max() - radial.min())
+        z_span = float(maximum[2] - minimum[2])
+        if 0.5 * (minimum[2] + maximum[2]) < global_min[2] + 0.20 * height:
+            continue
+        if radial.max() < 0.45 * radial_global or radial_span < 0.025:
+            continue
+        outer_seed = points[int(np.argmax(radial))]
+        horizontal = outer_seed[:2] / np.linalg.norm(outer_seed[:2])
+        projection = points[:, :2] @ horizontal
+        low = np.quantile(projection, 0.12)
+        high = np.quantile(projection, 0.88)
+        inner = points[projection <= low].mean(axis=0)
+        tip = points[projection >= high].mean(axis=0)
+        tangent = tip - inner
+        length = float(np.linalg.norm(tangent))
+        if length < 0.035 or radial_span < 0.75 * z_span:
+            continue
+        tangent /= length
+        along = (points - inner) @ tangent
+        perpendicular = points - inner - along[:, None] * tangent
+        radius = float(np.quantile(np.linalg.norm(perpendicular, axis=1), 0.55))
+        support = tip - tangent * min(0.35 * length, max(2.5 * radius, 0.012))
+        frame = _frame(support, tangent)
+        result.append(
+            BranchPart(
+                frame=frame,
+                inner_point=inner,
+                tip_point=tip,
+                tangent=tangent,
+                length_m=length,
+                radius_m=radius,
+                normalized_height=float((support[2] - global_min[2]) / height),
+                azimuth_rad=float(np.arctan2(tangent[1], tangent[0])),
+            )
+        )
+    if len(result) < 2:
+        raise ValueError("fewer than two mug-tree branches were inferred")
+    return tuple(sorted(result, key=lambda item: (item.normalized_height, item.azimuth_rad)))
+
+
+def closest_branch(branches: Iterable[BranchPart], point: object) -> BranchPart:
+    """Return the branch segment closest to a local-frame point."""
+
+    point = np.asarray(point, dtype=np.float64)
+
+    def distance(branch: BranchPart) -> float:
+        segment = branch.tip_point - branch.inner_point
+        fraction = np.clip(
+            np.dot(point - branch.inner_point, segment) / np.dot(segment, segment),
+            0.0,
+            1.0,
+        )
+        return float(np.linalg.norm(point - (branch.inner_point + fraction * segment)))
+
+    values = tuple(branches)
+    if not values:
+        raise ValueError("at least one branch is required")
+    return min(values, key=distance)
+
+
+def corresponding_branch(
+    source: BranchPart, targets: Iterable[BranchPart]
+) -> BranchPart:
+    """Match a branch by object-local height rank and outward azimuth."""
+
+    def angle_error(value: float) -> float:
+        return abs(float(np.arctan2(np.sin(value), np.cos(value))))
+
+    values = tuple(targets)
+    if not values:
+        raise ValueError("at least one target branch is required")
+    return min(
+        values,
+        key=lambda target: (
+            2.0 * abs(target.normalized_height - source.normalized_height)
+            + angle_error(target.azimuth_rad - source.azimuth_rad)
+        ),
+    )
