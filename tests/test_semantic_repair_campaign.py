@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _module():
     path = Path(__file__).parents[1] / "examples/run_semantic_repair_campaign.py"
@@ -115,3 +117,20 @@ def test_taxonomy_groups_every_failure_record_by_first_failed_stage():
     drawer = taxonomy["by_task_and_first_failed_stage"]["putmarker"]["open_drawer"]
     assert drawer["failure_records"] == 2
     assert drawer["pairs"] == ["putmarker:a"]
+
+
+def test_preserved_demo_receipt_must_match_recorded_hash(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "validate_demo",
+        lambda path, assets: {"path": path, "sha256": "actual", "actions": 607},
+    )
+
+    assert module._validate_demo_receipt(
+        {"path": "/tmp/demo.hdf5", "sha256": "actual", "actions": 607}, {}
+    )["sha256"] == "actual"
+    with pytest.raises(RuntimeError, match="hash does not match"):
+        module._validate_demo_receipt(
+            {"path": "/tmp/demo.hdf5", "sha256": "stale", "actions": 607}, {}
+        )

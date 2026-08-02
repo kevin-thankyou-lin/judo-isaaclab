@@ -104,6 +104,21 @@ def _semantic_motion_success(source: dict[str, Any]) -> bool:
     return semantic_acceptance_satisfied(source["result"])
 
 
+def _validate_demo_receipt(
+    demonstration: dict[str, Any], assets: dict[str, str]
+) -> dict[str, Any]:
+    actual = validate_demo(demonstration["path"], assets)
+    if demonstration.get("sha256") not in (None, actual["sha256"]):
+        raise RuntimeError(
+            f"demonstration hash does not match its ledger: {demonstration['path']}"
+        )
+    if demonstration.get("actions") not in (None, actual["actions"]):
+        raise RuntimeError(
+            f"demonstration action count does not match its ledger: {demonstration['path']}"
+        )
+    return actual
+
+
 def _diagnosis(task: str, source: dict[str, Any]) -> dict[str, Any]:
     from judo_isaaclab.semantic_repair import diagnose_semantic_failure
 
@@ -245,8 +260,9 @@ def refresh_ledger(
             if successes:
                 selected = successes[-1]
                 result = selected["result"]
-                demonstration = result["provenance"]["demonstration"]
-                validate_demo(demonstration["path"], pair["assets"])
+                demonstration = _validate_demo_receipt(
+                    result["provenance"]["demonstration"], pair["assets"]
+                )
                 record.update(
                     {
                         "accepted_source": selected["source"],
@@ -256,7 +272,7 @@ def refresh_ledger(
                     }
                 )
             elif preserved_primary:
-                demonstration = validate_demo(primary_demo["path"], pair["assets"])
+                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
                 record.update(
                     {
                         "accepted_source": "preserved_primary_deterministic",
@@ -267,7 +283,7 @@ def refresh_ledger(
                 )
             elif combined_audit_success:
                 selected = audit_motion_successes[-1]
-                demonstration = validate_demo(primary_demo["path"], pair["assets"])
+                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
                 record.update(
                     {
                         "accepted_source": "semantic_audit_with_preserved_primary_demo",
