@@ -21,6 +21,7 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
 
 def test_hangmug_program_is_one_continuous_named_rollout():
     program = HangMugSkillProgram(_pose(), _pose(0.0, -1.0, 0.0))
+    left_observer = _pose(0.4, 0.3, 0.4)
     program.semantic_left_grasp(
         _pose(0.1),
         _pose(0.2),
@@ -45,6 +46,7 @@ def test_hangmug_program_is_one_continuous_named_rollout():
         transport_steps=2,
         approach_steps=2,
         insert_steps=2,
+        left_observer=left_observer,
     )
     program.release_and_support(
         _pose(0.71, -0.5, 0.3),
@@ -74,6 +76,11 @@ def test_hangmug_program_is_one_continuous_named_rollout():
     assert trajectory.grippers[
         trajectory.waypoint_steps["right_release"]
     ] == pytest.approx([-0.0475, -0.0475])
+    transport_end = trajectory.waypoint_steps["tree_transport"]
+    assert trajectory.left_poses[transport_end] == pytest.approx(left_observer)
+    assert trajectory.left_poses[transport_end:] == pytest.approx(
+        np.broadcast_to(left_observer, trajectory.left_poses[transport_end:].shape)
+    )
 
 
 def test_handover_reanchor_changes_only_handover_and_transport_entry():

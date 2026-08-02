@@ -342,6 +342,11 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
     right_transport = held(transport_mug_pose, right_contact)
     right_approach = held(approach_mug_pose, right_contact)
     right_insert = held(final_mug.root_pose, right_contact)
+    source_insert = frames["inserted_held"]
+    left_branch_observer = target_tree.transfer_pose_from(
+        RigidAssetGeometry(source_insert["tree_pose"], source_tree.size),
+        source_insert["left_eef_pose"],
+    )
 
     program = HangMugSkillProgram(left_start, right_start)
     program.semantic_left_grasp(
@@ -371,6 +376,7 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
         transport_steps=100,
         approach_steps=70,
         insert_steps=70,
+        left_observer=left_branch_observer,
     )
     program.release_and_support(
         right_insert,

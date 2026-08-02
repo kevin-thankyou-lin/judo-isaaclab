@@ -30,7 +30,8 @@
     "mug.left_grasp": "left grasp contact frame",
     "mug.right_grasp": "right handover contact frame",
     "mug.handle": "handle-hole center and insertion axis",
-    "mug_tree.branch": "branch root, tip, tangent, and support normal"
+    "mug_tree.branch": "branch root, tip, tangent, and support normal",
+    "left_wrist.observer": "source-derived view pose transferred into the target branch frame"
   },
   "result_paths": {
     "task_success": [
@@ -77,6 +78,7 @@
     "strategy": [
       "semantic left grasp",
       "physical right-hand handover",
+      "left wrist observes the target branch",
       "handle-to-branch insertion",
       "release and stable support"
     ],
