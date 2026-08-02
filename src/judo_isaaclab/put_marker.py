@@ -239,6 +239,29 @@ class DrawerGeometry:
         )
 
 
+def geometry_conditioned_drawer_open_position(
+    geometry: DrawerGeometry,
+    requested_m: float,
+    *,
+    coded_threshold_m: float = 0.05,
+    threshold_margin_m: float = 0.025,
+    limit_margin_m: float = 0.02,
+) -> float:
+    """Choose one deterministic working position from measured joint limits.
+
+    The target remains safely inside the authored upper limit while maintaining
+    a positive margin above the immutable coded opening threshold.
+    """
+
+    required = float(coded_threshold_m + threshold_margin_m)
+    upper = float(geometry.upper_limit_m - limit_margin_m)
+    if upper < required:
+        raise ValueError(
+            "drawer joint has no safe opening interval above the coded threshold"
+        )
+    return float(np.clip(max(float(requested_m), required), geometry.lower_limit_m, upper))
+
+
 @dataclass(frozen=True)
 class SkillWaypoint:
     name: str

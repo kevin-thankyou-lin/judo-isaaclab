@@ -5,6 +5,7 @@ from judo_isaaclab.put_marker import (
     DrawerGeometry,
     PutMarkerSkillProgram,
     compose_pose,
+    geometry_conditioned_drawer_open_position,
     interpolate_poses,
     inverse_pose,
     pose_from_matrix,
@@ -83,6 +84,24 @@ def test_drawer_geometry_preserves_open_fraction_and_semantic_offsets():
     target_marker = target.transfer_drawer_pose(source, source_marker, source_joint)
     target_cavity = target.drawer_frame(0.15)
     assert target_marker[:3] - target_cavity[:3] == pytest.approx([0.06, 0.032, 0.024])
+
+
+def test_geometry_conditioned_open_position_has_threshold_and_limit_margins():
+    geometry = DrawerGeometry(
+        root_pose=_pose(),
+        slide_axis_local=[1.0, 0.0, 0.0],
+        joint_origin_local=[0.0, 0.0, 0.0],
+        handle_point_local=[0.1, 0.0, 0.0],
+        lower_limit_m=0.0,
+        upper_limit_m=0.11,
+        cavity_size=[0.2, 0.3, 0.1],
+    )
+    assert geometry_conditioned_drawer_open_position(geometry, 0.06) == pytest.approx(
+        0.075
+    )
+    assert geometry_conditioned_drawer_open_position(geometry, 0.10) == pytest.approx(
+        0.09
+    )
 
 
 def test_quintic_pose_interpolation_is_continuous_and_hits_target():

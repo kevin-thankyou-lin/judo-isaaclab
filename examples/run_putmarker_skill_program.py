@@ -64,11 +64,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-joint-delta", type=float, default=0.16)
     parser.add_argument("--max-position-step", type=float, default=0.025)
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
-    parser.add_argument("--handle-pull-dls-gain", type=float, default=0.0)
+    parser.add_argument("--handle-pull-dls-gain", type=float, default=1.0)
     parser.add_argument("--handle-pull-joint-extension", type=float, default=-0.05)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
-    parser.add_argument("--rigid-handle-pull-m", type=float, default=0.075)
+    parser.add_argument("--rigid-handle-pull-m", type=float, default=0.10)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--draw-coordinate-axes", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -244,6 +244,7 @@ def _build_skill(
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
         compose_pose,
+        geometry_conditioned_drawer_open_position,
         inverse_pose,
         quaternion_rotate,
         transfer_pose,
@@ -264,6 +265,9 @@ def _build_skill(
     right_tool_to_attach = compose_pose(
         inverse_pose(_pose_at(target["eef_right"], 0)), target_right_start
     )
+    working_q = geometry_conditioned_drawer_open_position(
+        target_geometry, rigid_handle_pull_m
+    )
 
     def source_attach(arm: str, index: int) -> np.ndarray:
         matrices = source[f"eef_{arm}"]
@@ -282,13 +286,7 @@ def _build_skill(
     def left_drawer(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
-        target_q = float(
-            np.clip(
-                drawer_placement_q_m,
-                target_geometry.lower_limit_m,
-                target_geometry.upper_limit_m,
-            )
-        )
+        target_q = working_q
         return transfer_pose(
             source_attach("left", index),
             source_geometry.drawer_frame(source_q),
@@ -303,16 +301,10 @@ def _build_skill(
             source_geometry, source_attach("right", index), source_q
         )
 
-    if rigid_target_handle_pull:
-        handle_open = right_handle("handle_grasp")
-        handle_open[:3] += quaternion_rotate(
-            target_geometry.root_pose[3:], target_geometry.slide_axis_local
-        ) * float(rigid_handle_pull_m)
-    else:
-        handle_open = right_handle("drawer_open")
-        handle_open[:3] += quaternion_rotate(
-            target_geometry.root_pose[3:], target_geometry.slide_axis_local
-        ) * float(drawer_pull_extra_m)
+    handle_open = right_handle("handle_grasp")
+    handle_open[:3] += quaternion_rotate(
+        target_geometry.root_pose[3:], target_geometry.slide_axis_local
+    ) * working_q
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -797,7 +789,10 @@ def main() -> None:
                 - source_geometry.handle_frame(0.0)[:3]
             )
         )
-        integrated_target_handle_ik = handle_displacement_m > 0.04
+        # Every asset uses the measured handle frame and joint axis.  The old
+        # source-nominal-only pull left all 21 original semantic failures below
+        # the immutable 5 cm opening stage (and recorded zero handle grasps).
+        integrated_target_handle_ik = True
         trajectory = (
             _build_skill(
                 source,
@@ -876,6 +871,7 @@ def main() -> None:
                     args,
                     right_dls_gain=right_dls_gain,
                     integrate_right_ik=integrate_right_ik,
+                    integrate_left_ik=step >= SEMANTIC_INDICES["marker_grasp"],
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
