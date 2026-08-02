@@ -26,6 +26,13 @@
     "handover",
     "hang"
   ],
+  "grasp_assistance": {
+    "mechanism": "friction",
+    "arm": "left_arm",
+    "engage_delay_s": 0.3,
+    "high": 100.0,
+    "low": 0.5
+  },
   "semantic_frames": {
     "mug.left_grasp": "left grasp contact frame",
     "mug.right_grasp": "right handover contact frame",
@@ -84,7 +91,7 @@
       "release and stable support"
     ],
     "required": [
-      "canonical task-configured datagen grasp assist",
+      "datagen-supported left fingertip friction assist",
       "contact-backed assist engagement",
       "assist release during physical handover"
     ],

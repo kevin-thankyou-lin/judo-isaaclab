@@ -12,7 +12,11 @@ from judo_isaaclab.hang_mug import (
     RigidAssetGeometry,
     reanchor_physical_handover,
 )
-from run_hangmug_skill_program import _validate_datagen_grasp_assists
+from run_hangmug_skill_program import (
+    _install_grasp_assist_config,
+    _select_grasp_assist_config,
+    _validate_datagen_grasp_assists,
+)
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -35,6 +39,26 @@ def test_datagen_grasp_assist_validation_requires_canonical_mechanism():
     )
     with pytest.raises(RuntimeError, match="names differ"):
         _validate_datagen_grasp_assists(env, {"right": config["left"]})
+
+
+def test_datagen_grasp_assist_mechanism_override():
+    config = {
+        "left": {
+            "mechanism": "fixed_joint",
+            "arm": "left_arm",
+            "target": {"object": "mug"},
+            "friction": {"high": 100.0, "low": 0.5},
+        }
+    }
+    selected = _select_grasp_assist_config(config, "friction")
+    manager_module = SimpleNamespace(GRASP_ASSIST_CONFIG=config)
+    config_module = SimpleNamespace(GRASP_ASSIST_CONFIG=config)
+    _install_grasp_assist_config(manager_module, config_module, selected)
+
+    assert selected["left"]["mechanism"] == "friction"
+    assert manager_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
+    assert config_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
+    assert config["left"]["mechanism"] == "fixed_joint"
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():

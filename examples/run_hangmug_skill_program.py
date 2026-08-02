@@ -30,6 +30,12 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--expect-failure", action="store_true")
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--grasp-assist-mechanism",
+        choices=("task_config", "friction", "fixed_joint"),
+        default="task_config",
+        help="Use the configured datagen assist or select another mechanism exposed by it.",
+    )
     parser.add_argument("--seed", type=int, default=20260801)
     parser.add_argument("--damping", type=float, default=0.045)
     parser.add_argument("--max-joint-delta", type=float, default=0.16)
@@ -95,16 +101,32 @@ def _geometry(asset_path: str, root_pose: np.ndarray):
     return RigidAssetGeometry(root_pose=np.asarray(root_pose), size=_asset_size(asset_path))
 
 
-def _configure_task_for_evidence() -> dict[str, object]:
+def _select_grasp_assist_config(config, mechanism: str):
+    selected = copy.deepcopy(config)
+    if mechanism != "task_config":
+        for spec in selected.values():
+            spec["mechanism"] = mechanism
+    return selected
+
+
+def _install_grasp_assist_config(manager_module, config_module, config) -> None:
+    manager_module.GRASP_ASSIST_CONFIG = copy.deepcopy(config)
+    config_module.GRASP_ASSIST_CONFIG = copy.deepcopy(config)
+
+
+def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
     import dc_study.envs.tasks.hang_mug_on_tree_manager_cfg as config_module
 
-    assist_config = copy.deepcopy(config_module.GRASP_ASSIST_CONFIG)
+    assist_config = _select_grasp_assist_config(
+        config_module.GRASP_ASSIST_CONFIG, mechanism
+    )
     if not assist_config:
         raise RuntimeError("HangMug datagen grasp-assist config is empty")
     if manager_module.GRASP_ASSIST_CONFIG != config_module.GRASP_ASSIST_CONFIG:
         raise RuntimeError("HangMug manager/config grasp-assist maps disagree")
+    _install_grasp_assist_config(manager_module, config_module, assist_config)
     original_init = config_module.HangMugOnTreeManagerEnvCfg.__init__
 
     def offline_init(instance, *init_args, **init_kwargs):
@@ -126,7 +148,8 @@ def _configure_task_for_evidence() -> dict[str, object]:
 
     config_module.HangMugOnTreeManagerEnvCfg.__init__ = offline_init
     return {
-        "grasp_assistance": "canonical task-configured datagen assist preserved",
+        "grasp_assistance": "datagen-supported grasp assist selected",
+        "grasp_assistance_selection": mechanism,
         "grasp_assistance_config": assist_config,
         "success_auto_termination": "disabled; coded predicate unchanged",
         "failure_auto_termination": "disabled for one-reset failure evidence",
@@ -501,7 +524,7 @@ def main() -> None:
         from dc_study.utils.task_creation import create_task_environment
         from run_putmarker_skill_program import _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state
 
-        override = _configure_task_for_evidence()
+        override = _configure_task_for_evidence(args.grasp_assist_mechanism)
         source_assets = _dataset_assets(args.source_dataset, args.objects_root)
         target_assets = _dataset_assets(args.target_dataset, args.objects_root)
         env = create_task_environment(
