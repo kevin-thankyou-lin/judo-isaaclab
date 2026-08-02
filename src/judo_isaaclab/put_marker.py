@@ -175,13 +175,20 @@ class DrawerGeometry:
     slide_axis_local: np.ndarray
     joint_origin_local: np.ndarray
     handle_point_local: np.ndarray
+    cavity_center_local: np.ndarray
     lower_limit_m: float
     upper_limit_m: float
     cavity_size: np.ndarray
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root_pose", _pose(self.root_pose, "root_pose"))
-        for name in ("slide_axis_local", "joint_origin_local", "handle_point_local", "cavity_size"):
+        for name in (
+            "slide_axis_local",
+            "joint_origin_local",
+            "handle_point_local",
+            "cavity_center_local",
+            "cavity_size",
+        ):
             value = np.asarray(getattr(self, name), dtype=np.float64)
             if value.shape != (3,):
                 raise ValueError(f"{name} must have shape (3,)")
@@ -195,7 +202,7 @@ class DrawerGeometry:
 
     def drawer_frame(self, joint_position_m: float) -> np.ndarray:
         joint_position_m = float(np.clip(joint_position_m, self.lower_limit_m, self.upper_limit_m))
-        local = np.asarray([*self.joint_origin_local, 1.0, 0.0, 0.0, 0.0])
+        local = np.asarray([*self.cavity_center_local, 1.0, 0.0, 0.0, 0.0])
         local[:3] += self.slide_axis_local * joint_position_m
         return compose_pose(self.root_pose, local)
 

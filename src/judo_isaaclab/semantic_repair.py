@@ -182,7 +182,18 @@ def diagnose_semantic_failure(
                 q_values = terminal.get("drawer_joint_position", [maximum_open])
                 q = max(q_values) if q_values else maximum_open
                 cavity_local = np.asarray(
-                    [*target_geometry.get("joint_origin_local", [0.0, 0.0, 0.0]), 1.0, 0.0, 0.0, 0.0]
+                    [
+                        *target_geometry.get(
+                            "cavity_center_local",
+                            target_geometry.get(
+                                "joint_origin_local", [0.0, 0.0, 0.0]
+                            ),
+                        ),
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ]
                 )
                 cavity_local[:3] += slide_axis * q
                 cavity_world = compose_pose(cabinet, cavity_local)

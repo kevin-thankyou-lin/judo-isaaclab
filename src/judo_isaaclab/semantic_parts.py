@@ -363,6 +363,59 @@ def infer_tree_branches(values: Iterable[object]) -> tuple[BranchPart, ...]:
     return tuple(sorted(result, key=lambda item: (item.normalized_height, item.azimuth_rad)))
 
 
+def infer_open_drawer_cavity(
+    values: Iterable[object], slide_axis_local: object
+) -> tuple[np.ndarray, np.ndarray]:
+    """Infer the open-top interior region bounded by authored drawer walls."""
+
+    components = _components(values)
+    axis = np.asarray(slide_axis_local, dtype=np.float64)
+    slide_dimension = int(np.argmax(np.abs(axis)))
+    if slide_dimension not in (0, 1):
+        raise ValueError("drawer slide axis must be horizontal")
+    transverse_dimension = 1 - slide_dimension
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    global_size = global_max - global_min
+    bounds = [_bounds(points) for points in components]
+
+    interior_min = global_min.copy()
+    interior_max = global_max.copy()
+    for dimension in (slide_dimension, transverse_dimension):
+        low_walls = []
+        high_walls = []
+        tolerance = 0.08 * global_size[dimension]
+        for minimum, maximum in bounds:
+            span = maximum - minimum
+            if span[2] < 0.45 * global_size[2]:
+                continue
+            if span[dimension] > 0.30 * global_size[dimension]:
+                continue
+            if minimum[dimension] <= global_min[dimension] + tolerance:
+                low_walls.append(maximum[dimension])
+            if maximum[dimension] >= global_max[dimension] - tolerance:
+                high_walls.append(minimum[dimension])
+        if not low_walls or not high_walls:
+            raise ValueError("could not infer both authored drawer side walls")
+        interior_min[dimension] = max(low_walls)
+        interior_max[dimension] = min(high_walls)
+
+    floor_tops = []
+    for minimum, maximum in bounds:
+        if (
+            minimum[2] <= global_min[2] + 0.08 * global_size[2]
+            and maximum[2] - minimum[2] <= 0.30 * global_size[2]
+        ):
+            floor_tops.append(maximum[2])
+    if not floor_tops:
+        raise ValueError("could not infer the authored drawer floor")
+    interior_min[2] = max(floor_tops)
+    size = interior_max - interior_min
+    if np.any(size <= 0.0):
+        raise ValueError("inferred drawer cavity is empty")
+    return 0.5 * (interior_min + interior_max), size
+
+
 def closest_branch(branches: Iterable[BranchPart], point: object) -> BranchPart:
     """Return the branch segment closest to a local-frame point."""
 

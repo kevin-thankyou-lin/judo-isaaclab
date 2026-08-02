@@ -5,6 +5,7 @@ from judo_isaaclab.semantic_parts import (
     closest_branch,
     corresponding_branch,
     infer_mug_parts,
+    infer_open_drawer_cavity,
     infer_pot_parts,
     infer_tree_branches,
 )
@@ -77,6 +78,21 @@ def test_infer_mug_parts_separates_body_footprint_and_handle_hole():
     np.testing.assert_allclose(parts.body_frame[:2], [-0.0125, 0.0], atol=1.0e-8)
     np.testing.assert_allclose(parts.handle_hole_frame[:3], [0.0415, 0.0, 0.0025])
     assert 0.009 < parts.handle_thickness_m < 0.014
+
+
+def test_infer_open_drawer_cavity_uses_authored_floor_and_walls():
+    components = [
+        _box((-0.12, -0.18, -0.24), (0.14, 0.18, -0.22)),
+        _box((-0.12, -0.18, -0.24), (-0.10, 0.18, 0.0)),
+        _box((0.12, -0.18, -0.24), (0.14, 0.18, 0.0)),
+        _box((-0.12, -0.18, -0.24), (0.14, -0.16, 0.0)),
+        _box((-0.12, 0.16, -0.24), (0.14, 0.18, 0.0)),
+    ]
+
+    center, size = infer_open_drawer_cavity(components, [1.0, 0.0, 0.0])
+
+    np.testing.assert_allclose(center, [0.01, 0.0, -0.11])
+    np.testing.assert_allclose(size, [0.22, 0.32, 0.22])
 
 
 def test_tree_branch_selection_and_correspondence_use_local_geometry():

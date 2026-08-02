@@ -210,13 +210,35 @@ def _drawer_geometry(asset_path: str, root_pose: np.ndarray):
     # The central grip bar is the handle component furthest along the pull axis;
     # the two symmetric lower-X components attach it to the drawer face.
     handle = max(handle_points, key=lambda point: float(np.dot(point, axis)))
-    size = _asset_size(asset_path)
-    cavity_size = np.asarray([0.72 * size[0], 0.82 * size[1], 0.22 * size[2]])
+    drawer_components = []
+    for prim in stage.TraverseAll():
+        path = str(prim.GetPath())
+        if (
+            not prim.IsA(UsdGeom.Mesh)
+            or "/object/link_2/collisions/" not in path
+            or "handle_col" in path
+        ):
+            continue
+        points = np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=np.float64)
+        transform = np.asarray(
+            UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode.Default()
+            ),
+            dtype=np.float64,
+        )
+        homogeneous = np.concatenate(
+            (points, np.ones((len(points), 1), dtype=np.float64)), axis=1
+        )
+        drawer_components.append((homogeneous @ transform)[:, :3])
+    from judo_isaaclab.semantic_parts import infer_open_drawer_cavity
+
+    cavity_center, cavity_size = infer_open_drawer_cavity(drawer_components, axis)
     return DrawerGeometry(
         root_pose=np.asarray(root_pose, dtype=np.float64),
         slide_axis_local=axis,
         joint_origin_local=origin,
         handle_point_local=handle,
+        cavity_center_local=cavity_center,
         lower_limit_m=float(joint.GetLowerLimitAttr().Get()),
         upper_limit_m=float(joint.GetUpperLimitAttr().Get()),
         cavity_size=cavity_size,
@@ -1070,6 +1092,7 @@ def main() -> None:
                     "slide_axis_local": source_geometry.slide_axis_local.tolist(),
                     "joint_origin_local": source_geometry.joint_origin_local.tolist(),
                     "handle_point_local": source_geometry.handle_point_local.tolist(),
+                    "cavity_center_local": source_geometry.cavity_center_local.tolist(),
                     "limits_m": [source_geometry.lower_limit_m, source_geometry.upper_limit_m],
                     "cavity_size_m": source_geometry.cavity_size.tolist(),
                 },
@@ -1077,6 +1100,7 @@ def main() -> None:
                     "slide_axis_local": target_geometry.slide_axis_local.tolist(),
                     "joint_origin_local": target_geometry.joint_origin_local.tolist(),
                     "handle_point_local": target_geometry.handle_point_local.tolist(),
+                    "cavity_center_local": target_geometry.cavity_center_local.tolist(),
                     "limits_m": [target_geometry.lower_limit_m, target_geometry.upper_limit_m],
                     "cavity_size_m": target_geometry.cavity_size.tolist(),
                 },
