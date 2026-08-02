@@ -57,6 +57,8 @@ def main() -> None:
                 errors.append("left grasp assist remained engaged after handover")
         if result.get("protocol", {}).get("candidate_sampling") is not False:
             errors.append("candidate sampling was not disabled")
+        if not result.get("protocol", {}).get("physics_device_actual"):
+            errors.append("actual physics device was not recorded")
     if not os.path.isfile(args.trace_npz) or os.path.getsize(args.trace_npz) == 0:
         errors.append(f"missing or empty trace: {args.trace_npz}")
     if args.video:
