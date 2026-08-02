@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from judo_isaaclab.put_marker import inverse_pose, quaternion_rotate
+from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 
 
 @dataclass(frozen=True)
@@ -37,11 +37,13 @@ def _tracking_residuals(
     for arm in ("left", "right"):
         actual = trace.get(f"{arm}_eef_poses")
         desired = trace.get(f"desired_{arm}_eef_poses")
-        if actual is None or desired is None or index >= len(actual) or index >= len(desired):
+        if actual is None or desired is None or not len(actual) or not len(desired):
             continue
+        sample_index = min(index, len(actual) - 1, len(desired) - 1)
         result[f"{arm}_eef_position_error_local_m"] = _local_offset(
             reference_pose,
-            np.asarray(actual[index, :3]) - np.asarray(desired[index, :3])
+            np.asarray(actual[sample_index, :3])
+            - np.asarray(desired[sample_index, :3])
             + np.asarray(reference_pose[:3]),
         )
     return result
@@ -100,6 +102,41 @@ def diagnose_semantic_failure(
                 cooktop,
                 np.asarray(pot[:3]) - np.asarray(intended[:3]) + np.asarray(cooktop[:3]),
             )
+        parts = result.get("semantic_frames", {}).get("target_pot_parts") or {}
+        cooktop_top = result.get("semantic_frames", {}).get("target_cooktop_top")
+        if pot and cooktop_top and "bottom_z" in parts:
+            pot_bottom = compose_pose(
+                pot, [0.0, 0.0, parts["bottom_z"], 1.0, 0.0, 0.0, 0.0]
+            )
+            residuals["pot_bottom_in_cooktop_support_frame_m"] = _local_offset(
+                cooktop_top, pot_bottom[:3]
+            )
+        if trace and parts and stage == "bimanual_handle_grasp":
+            poses = trace.get("pot_poses")
+            if poses is not None and len(poses):
+                index = min(frame, len(poses) - 1)
+                pot_at_failure = poses[index]
+                handles = {
+                    "negative": compose_pose(
+                        pot_at_failure, parts["negative_handle_frame"]
+                    ),
+                    "positive": compose_pose(
+                        pot_at_failure, parts["positive_handle_frame"]
+                    ),
+                }
+                for arm in ("left", "right"):
+                    eef = trace.get(f"{arm}_eef_poses")
+                    if eef is None or not len(eef):
+                        continue
+                    point = eef[min(index, len(eef) - 1), :3]
+                    name, handle_pose = min(
+                        handles.items(),
+                        key=lambda item: np.linalg.norm(point - item[1][:3]),
+                    )
+                    residuals[f"{arm}_eef_nearest_handle_side"] = name
+                    residuals[f"{arm}_eef_in_handle_frame_m"] = _local_offset(
+                        handle_pose, point
+                    )
         reference = pot or cooktop
         if reference:
             residuals.update(
@@ -141,10 +178,44 @@ def diagnose_semantic_failure(
             residuals["marker_center_in_cabinet_frame_m"] = _local_offset(
                 cabinet, marker[:3]
             )
+            if target_geometry:
+                q_values = terminal.get("drawer_joint_position", [maximum_open])
+                q = max(q_values) if q_values else maximum_open
+                cavity_local = np.asarray(
+                    [*target_geometry.get("joint_origin_local", [0.0, 0.0, 0.0]), 1.0, 0.0, 0.0, 0.0]
+                )
+                cavity_local[:3] += slide_axis * q
+                cavity_world = compose_pose(cabinet, cavity_local)
+                marker_in_cavity = np.asarray(
+                    _local_offset(cavity_world, marker[:3])
+                )
+                cavity_size = np.asarray(
+                    target_geometry.get("cavity_size_m", [np.nan] * 3)
+                )
+                residuals["marker_center_in_drawer_cavity_frame_m"] = (
+                    marker_in_cavity.tolist()
+                )
+                residuals["marker_center_cavity_half_margin_m"] = (
+                    0.5 * cavity_size - np.abs(marker_in_cavity)
+                ).tolist()
         if cabinet:
             residuals.update(
                 _tracking_residuals(trace, index=min(frame, 418), reference_pose=cabinet)
             )
+        if trace and cabinet and target_geometry and stage == "open_drawer":
+            joints = trace.get("cabinet_joint_positions")
+            right = trace.get("right_eef_poses")
+            if joints is not None and len(joints) and right is not None and len(right):
+                index = min(frame, len(joints) - 1, len(right) - 1)
+                q = float(np.max(joints[index]))
+                handle_local = np.asarray(
+                    [*target_geometry["handle_point_local"], 1.0, 0.0, 0.0, 0.0]
+                )
+                handle_local[:3] += slide_axis * q
+                handle_world = compose_pose(cabinet, handle_local)
+                residuals["right_eef_in_drawer_handle_frame_m"] = _local_offset(
+                    handle_world, right[index, :3]
+                )
         return FailureDiagnosis(stage, reason, residuals, frame)
 
     if task == "hangmug":
@@ -177,6 +248,30 @@ def diagnose_semantic_failure(
                 tree,
                 np.asarray(mug[:3]) - np.asarray(intended[:3]) + np.asarray(tree[:3]),
             )
+        semantic_frames = result.get("semantic_frames", {})
+        parts = semantic_frames.get("target_mug_parts") or {}
+        branch = semantic_frames.get("target_branch") or {}
+        if tree and mug and parts and branch:
+            handle_world = compose_pose(mug, parts["handle_hole_frame"])
+            branch_world = compose_pose(tree, branch["frame"])
+            residuals["handle_hole_center_in_branch_support_frame_m"] = (
+                _local_offset(branch_world, handle_world[:3])
+            )
+            residuals["branch_tangent_tree_local"] = branch["tangent"]
+            residuals["branch_tip_tree_local_m"] = branch["tip_point"]
+            residuals["branch_radius_m"] = float(branch["radius_m"])
+            if intended:
+                intended_handle = compose_pose(
+                    intended, parts["handle_hole_frame"]
+                )
+                residuals["terminal_minus_intended_handle_in_branch_frame_m"] = (
+                    _local_offset(
+                        branch_world,
+                        handle_world[:3]
+                        - intended_handle[:3]
+                        + branch_world[:3],
+                    )
+                )
         if tree:
             residuals.update(
                 _tracking_residuals(trace, index=min(frame, 419), reference_pose=tree)

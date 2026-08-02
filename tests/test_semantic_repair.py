@@ -18,7 +18,11 @@ def test_putpot_diagnosis_keeps_signed_cooktop_residuals():
         },
         "metrics": {"left_grasp_frames": 100, "right_grasp_frames": 90},
         "protocol": {"steps": 505, "parameters": {"center_tolerance_m": 0.03}},
-        "semantic_frames": {"intended_final_pot_pose": _pose(0.7, -0.3, 0.9)},
+        "semantic_frames": {
+            "intended_final_pot_pose": _pose(0.7, -0.3, 0.9),
+            "target_cooktop_top": _pose(0.7, -0.3, 0.85),
+            "target_pot_parts": {"bottom_z": -0.05},
+        },
     }
 
     diagnosis = diagnose_semantic_failure("putpot", result)
@@ -29,6 +33,10 @@ def test_putpot_diagnosis_keeps_signed_cooktop_residuals():
         [0.04, -0.02, 0.1],
     )
     assert diagnosis.signed_residuals["center_margin_m"] < 0.0
+    np.testing.assert_allclose(
+        diagnosis.signed_residuals["pot_bottom_in_cooktop_support_frame_m"],
+        [0.04, -0.02, 0.0],
+    )
 
 
 def test_putmarker_diagnosis_reports_slide_axis_deficit():
@@ -43,7 +51,14 @@ def test_putmarker_diagnosis_reports_slide_axis_deficit():
             "drawer_joint_position": [0.0, 0.0],
         },
         "metrics": {"maximum_drawer_open_m": 0.031, "right_handle_grasp_frames": 0},
-        "geometry": {"target": {"slide_axis_local": [1.0, 0.0, 0.0]}},
+        "geometry": {
+            "target": {
+                "slide_axis_local": [1.0, 0.0, 0.0],
+                "joint_origin_local": [0.1, 0.0, -0.1],
+                "handle_point_local": [0.2, 0.0, -0.1],
+                "cavity_size_m": [0.4, 0.3, 0.2],
+            }
+        },
         "protocol": {"steps": 607},
     }
 
@@ -54,6 +69,7 @@ def test_putmarker_diagnosis_reports_slide_axis_deficit():
         diagnosis.signed_residuals["drawer_open_residual_along_slide_axis_m"],
         -0.019,
     )
+    assert "marker_center_in_drawer_cavity_frame_m" in diagnosis.signed_residuals
 
 
 def test_hangmug_diagnosis_distinguishes_handover_from_support():
@@ -61,7 +77,16 @@ def test_hangmug_diagnosis_distinguishes_handover_from_support():
         "checks": {},
         "metrics": {"left_grasp_frames": 100, "right_grasp_frames": 0},
         "protocol": {"steps": 800},
-        "semantic_frames": {"intended_final_mug_pose": _pose(0.7, -0.2, 1.0)},
+        "semantic_frames": {
+            "intended_final_mug_pose": _pose(0.7, -0.2, 1.0),
+            "target_mug_parts": {"handle_hole_frame": _pose(0.1, 0.0, 0.0)},
+            "target_branch": {
+                "frame": _pose(0.0, 0.0, 0.1),
+                "tangent": [1.0, 0.0, 0.0],
+                "tip_point": [0.2, 0.0, 0.1],
+                "radius_m": 0.01,
+            },
+        },
     }
     handover = {
         **base,
@@ -89,4 +114,8 @@ def test_hangmug_diagnosis_distinguishes_handover_from_support():
     )
     assert diagnose_semantic_failure("hangmug", support).first_failed_stage == (
         "handle_to_branch_support"
+    )
+    support_diagnosis = diagnose_semantic_failure("hangmug", support)
+    assert "handle_hole_center_in_branch_support_frame_m" in (
+        support_diagnosis.signed_residuals
     )
