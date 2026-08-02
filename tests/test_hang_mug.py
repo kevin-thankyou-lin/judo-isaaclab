@@ -10,8 +10,10 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    geometry_conditioned_hang_pose,
     reanchor_physical_handover,
 )
+from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from run_hangmug_skill_program import (
     _install_grasp_assist_config,
     _select_grasp_assist_config,
@@ -28,6 +30,55 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
     target = RigidAssetGeometry(_pose(4.0, 5.0, 6.0), [0.4, 0.15, 0.24])
     transferred = target.transfer_pose_from(source, _pose(1.05, 2.04, 3.1))
     assert transferred[:3] == pytest.approx([4.1, 5.06, 6.08])
+
+
+def test_hang_pose_preserves_measured_handle_to_branch_support_relation():
+    source_parts = MugParts(
+        body_frame=_pose(),
+        body_size=np.asarray([0.2, 0.2, 0.3]),
+        handle_hole_frame=_pose(0.1),
+        handle_outer_size=np.asarray([0.08, 0.04, 0.06]),
+        handle_thickness_m=0.01,
+        handle_axis=0,
+        handle_sign=1,
+    )
+    target_parts = MugParts(
+        body_frame=_pose(),
+        body_size=np.asarray([0.3, 0.3, 0.25]),
+        handle_hole_frame=_pose(0.15),
+        handle_outer_size=np.asarray([0.10, 0.08, 0.03]),
+        handle_thickness_m=0.012,
+        handle_axis=0,
+        handle_sign=1,
+    )
+
+    def branch(x, z, length):
+        return BranchPart(
+            frame=_pose(x, 0.0, z),
+            inner_point=np.asarray([x - 0.4, 0.0, z]),
+            tip_point=np.asarray([x + 0.1, 0.0, z]),
+            tangent=np.asarray([1.0, 0.0, 0.0]),
+            length_m=length,
+            radius_m=0.01,
+            normalized_height=z / 2.0,
+            azimuth_rad=0.0,
+        )
+
+    source_branch = branch(1.0, 1.0, 1.0)
+    target_branch = branch(1.5, 1.5, 1.5)
+    final, matched_source, matched_target = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (branch(-1.0, 0.3, 0.8), source_branch),
+        _pose(2.0, 3.0, 0.0),
+        (branch(-1.0, 0.4, 0.9), target_branch),
+    )
+
+    assert matched_source is source_branch
+    assert matched_target is target_branch
+    assert final[:3] == pytest.approx([3.5, 3.04, 1.515])
 
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():

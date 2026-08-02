@@ -348,43 +348,86 @@ def _load_keyframes(path: str, source_dataset: str):
     return value
 
 
-def _build_skill(keyframes, source_geometry, target_geometry, source_tree, target_tree, left_start, right_start, args):
-    from judo_isaaclab.hang_mug import HangMugSkillProgram, RigidAssetGeometry
-    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+def _build_skill(
+    keyframes,
+    source_geometry,
+    target_geometry,
+    source_tree,
+    target_tree,
+    source_parts,
+    target_parts,
+    source_branches,
+    target_branches,
+    left_start,
+    right_start,
+    args,
+):
+    from judo_isaaclab.hang_mug import (
+        HangMugSkillProgram,
+        RigidAssetGeometry,
+        geometry_conditioned_hang_pose,
+    )
+    from judo_isaaclab.put_marker import (
+        compose_pose,
+        inverse_pose,
+        quaternion_rotate,
+        transfer_pose,
+    )
 
     frames = keyframes["frames"]
-    source_size = np.asarray(keyframes["source_assets"]["mug"]["size_m"])
+    source_initial_body = compose_pose(
+        source_geometry.root_pose, source_parts.body_frame
+    )
+    target_initial_body = compose_pose(
+        target_geometry.root_pose, target_parts.body_frame
+    )
 
     def transfer_mug_frame(name, arm):
         frame = frames[name]
-        source_frame = RigidAssetGeometry(frame["mug_pose"], source_size)
-        return target_geometry.transfer_pose_from(source_frame, frame[f"{arm}_eef_pose"])
+        source_frame = compose_pose(frame["mug_pose"], source_parts.body_frame)
+        return transfer_pose(
+            frame[f"{arm}_eef_pose"],
+            source_frame,
+            target_initial_body,
+            local_position_scale=target_parts.body_size / source_parts.body_size,
+        )
 
     left_grasp = transfer_mug_frame("left_grasp", "left")
     left_contact = compose_pose(inverse_pose(target_geometry.root_pose), left_grasp)
     source_dual = frames["dual_grasp"]
-    source_dual_mug = RigidAssetGeometry(source_dual["mug_pose"], source_size)
+    source_dual_body = compose_pose(
+        source_dual["mug_pose"], source_parts.body_frame
+    )
+    target_handover_body = transfer_pose(
+        source_dual_body,
+        source_initial_body,
+        target_initial_body,
+        local_position_scale=target_parts.body_size / source_parts.body_size,
+    )
     target_handover_mug = RigidAssetGeometry(
-        target_geometry.transfer_pose_from(
-            RigidAssetGeometry(source_geometry.root_pose, source_size),
-            source_dual["mug_pose"],
-        ),
+        compose_pose(target_handover_body, inverse_pose(target_parts.body_frame)),
         target_geometry.size,
     )
-    right_grasp = target_handover_mug.transfer_pose_from(
-        source_dual_mug,
+    right_grasp = transfer_pose(
         source_dual["right_eef_pose"],
-        scale_local_position=False,
+        source_dual_body,
+        target_handover_body,
+        local_position_scale=target_parts.body_size / source_parts.body_size,
     )
-    right_contact = compose_pose(inverse_pose(target_handover_mug.root_pose), right_grasp)
+    right_contact = compose_pose(
+        inverse_pose(target_handover_mug.root_pose), right_grasp
+    )
 
-    source_final_mug = RigidAssetGeometry(frames["stable_settle"]["mug_pose"], source_size)
-    source_final_tree = RigidAssetGeometry(
-        frames["stable_settle"]["tree_pose"], source_tree.size
+    final_mug_pose, source_branch, target_branch = geometry_conditioned_hang_pose(
+        frames["stable_settle"]["mug_pose"],
+        frames["stable_settle"]["tree_pose"],
+        source_parts,
+        target_parts,
+        source_branches,
+        target_tree.root_pose,
+        target_branches,
     )
-    final_mug_pose = target_tree.transfer_pose_from(
-        source_final_tree, source_final_mug.root_pose
-    )
+    target_branch_world = compose_pose(target_tree.root_pose, target_branch.frame)
     final_mug = RigidAssetGeometry(final_mug_pose, target_geometry.size)
     transport_mug_pose = target_handover_mug.root_pose.copy()
     transport_mug_pose[:2] = 0.5 * (
@@ -394,11 +437,10 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
         target_handover_mug.root_pose[2], final_mug_pose[2] + args.insert_clearance_m
     )
     approach_mug_pose = final_mug_pose.copy()
-    direction = target_geometry.root_pose[:2] - target_tree.root_pose[:2]
-    norm = float(np.linalg.norm(direction))
-    if norm <= 1.0e-9:
-        raise ValueError("cannot define branch approach direction")
-    approach_mug_pose[:2] += direction / norm * args.insert_clearance_m
+    branch_tangent_world = quaternion_rotate(
+        target_branch_world[3:], [1.0, 0.0, 0.0]
+    )
+    approach_mug_pose[:3] += branch_tangent_world * args.insert_clearance_m
     approach_mug_pose[2] += 0.03
 
     def held(mug_pose, local):
@@ -427,9 +469,11 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
     )
     program.physical_handover(
         left_lift,
-        target_handover_mug.transfer_pose_from(
-            source_dual_mug,
+        transfer_pose(
             frames["right_pregrasp"]["right_eef_pose"],
+            source_dual_body,
+            target_handover_body,
+            local_position_scale=target_parts.body_size / source_parts.body_size,
         ),
         right_grasp,
         left_release,
@@ -453,7 +497,13 @@ def _build_skill(keyframes, source_geometry, target_geometry, source_tree, targe
         release_steps=40,
         settle_steps=60,
     )
-    return program.build(), final_mug_pose, target_handover_mug.root_pose
+    return (
+        program.build(),
+        final_mug_pose,
+        target_handover_mug.root_pose,
+        source_branch,
+        target_branch,
+    )
 
 
 def _sparse_joint_nominal(source, trajectory, keyframes):
@@ -564,10 +614,29 @@ def main() -> None:
         target_mug = _geometry(target_assets["mug"], target["mug_pose"][0])
         source_tree = _geometry(source_assets["mug_tree"], source["tree_pose"][0])
         target_tree = _geometry(target_assets["mug_tree"], target["tree_pose"][0])
+        from semantic_asset_geometry import jsonable, mug_parts, tree_branches
+
+        source_parts = mug_parts(source_assets["mug"])
+        target_parts = mug_parts(target_assets["mug"])
+        source_branches = tree_branches(source_assets["mug_tree"])
+        target_branches = tree_branches(target_assets["mug_tree"])
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode == "skill" else None
-        trajectory, intended_final, nominal_handover_mug = (
-            _build_skill(keyframes, source_mug, target_mug, source_tree, target_tree, _eef_pose(env, "left_arm"), _eef_pose(env, "right_arm"), args)
-            if keyframes is not None else (None, None, None)
+        trajectory, intended_final, nominal_handover_mug, source_branch, target_branch = (
+            _build_skill(
+                keyframes,
+                source_mug,
+                target_mug,
+                source_tree,
+                target_tree,
+                source_parts,
+                target_parts,
+                source_branches,
+                target_branches,
+                _eef_pose(env, "left_arm"),
+                _eef_pose(env, "right_arm"),
+                args,
+            )
+            if keyframes is not None else (None, None, None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
@@ -630,6 +699,9 @@ def main() -> None:
             mug_poses=np.asarray(mug_poses, dtype=np.float32),
             left_eef_poses=np.asarray(left_eef, dtype=np.float32),
             right_eef_poses=np.asarray(right_eef, dtype=np.float32),
+            program_stages=np.asarray(
+                [row["program_stage"] for row in samples], dtype="U32"
+            ),
             desired_left_eef_poses=np.asarray(desired_left, dtype=np.float32),
             desired_right_eef_poses=np.asarray(desired_right, dtype=np.float32),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
@@ -721,9 +793,22 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "handover_pregrasp_position_scaling": True, "handover_contact_position_scaling": False}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_feedback_reanchor": trajectory is not None, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
-            "semantic_frames": {"source_mug": source_mug.root_pose.tolist(), "target_mug": target_mug.root_pose.tolist(), "source_tree": source_tree.root_pose.tolist(), "target_tree": target_tree.root_pose.tolist(), "intended_final_mug_pose": intended_final.tolist() if intended_final is not None else None, "extracted_keyframes": extracted},
+            "semantic_frames": {
+                "source_mug": source_mug.root_pose.tolist(),
+                "target_mug": target_mug.root_pose.tolist(),
+                "source_tree": source_tree.root_pose.tolist(),
+                "target_tree": target_tree.root_pose.tolist(),
+                "source_mug_parts": jsonable(source_parts),
+                "target_mug_parts": jsonable(target_parts),
+                "source_branch": jsonable(source_branch),
+                "target_branch": jsonable(target_branch),
+                "intended_final_mug_pose": (
+                    intended_final.tolist() if intended_final is not None else None
+                ),
+                "extracted_keyframes": extracted,
+            },
             "metrics": {"eef_tracking_error_m": max(desired_error) if desired_error else None, "maximum_eef_tracking_error_m": max(desired_error) if desired_error else None, "handle_branch_error_m": final["mug_tree_xy_error_m"], "terminal_mug_speed_mps": terminal_speed, "terminal_mug_angular_speed_rps": float(np.linalg.norm(final["mug_velocity"][3:])), "left_grasp_frames": sum(row["left_grasp"] for row in samples), "right_grasp_frames": sum(row["right_grasp"] for row in samples)},
             "terminal": final,
             "checks": checks,

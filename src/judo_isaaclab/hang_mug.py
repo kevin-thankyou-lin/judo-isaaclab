@@ -11,7 +11,9 @@ from .put_marker import (
     SkillTrajectory,
     SkillWaypoint,
     _pose,
+    compose_pose,
     interpolate_poses,
+    inverse_pose,
     transfer_pose,
 )
 
@@ -44,6 +46,48 @@ class RigidAssetGeometry:
             self.root_pose,
             local_position_scale=scale,
         )
+
+
+def geometry_conditioned_hang_pose(
+    source_mug_pose: Any,
+    source_tree_pose: Any,
+    source_parts: Any,
+    target_parts: Any,
+    source_branches: Any,
+    target_tree_pose: Any,
+    target_branches: Any,
+) -> tuple[np.ndarray, Any, Any]:
+    """Map a verified handle-on-branch relationship through measured parts."""
+
+    from .semantic_parts import closest_branch, corresponding_branch
+
+    source_handle_world = compose_pose(
+        source_mug_pose, source_parts.handle_hole_frame
+    )
+    source_handle_tree_local = compose_pose(
+        inverse_pose(source_tree_pose), source_handle_world
+    )
+    source_branch = closest_branch(source_branches, source_handle_tree_local[:3])
+    target_branch = corresponding_branch(source_branch, target_branches)
+    source_branch_world = compose_pose(source_tree_pose, source_branch.frame)
+    target_branch_world = compose_pose(target_tree_pose, target_branch.frame)
+    target_handle_world = transfer_pose(
+        source_handle_world,
+        source_branch_world,
+        target_branch_world,
+        local_position_scale=(
+            target_branch.length_m / source_branch.length_m,
+            target_parts.handle_outer_size[1]
+            / source_parts.handle_outer_size[1],
+            target_parts.handle_outer_size[2]
+            / source_parts.handle_outer_size[2],
+        ),
+    )
+    return (
+        compose_pose(target_handle_world, inverse_pose(target_parts.handle_hole_frame)),
+        source_branch,
+        target_branch,
+    )
 
 
 def reanchor_physical_handover(
