@@ -147,13 +147,18 @@ release, and support validation. This makes the target branch visible without
 changing the successful right-hand path or treating camera visibility as a
 task-success substitute.
 
-HangMug also preserves the datagen environment's canonical left-arm fixed-joint
-grasp assist. It engages only after `0.3 s` of contact-backed left grasp, stores
-the settled relative transform, and is removed during the physical two-hand
-handover. The right-hand transport and insertion remain physically contact
-driven; no extra right-arm assist is introduced. Evidence must show that the
-configured assist existed, actually engaged, and was released before the final
-unsupported hang.
+HangMug uses the datagen environment's grasp-assist interface. The task config
+defaults to a left-arm fixed joint, while the same config exposes a fingertip
+friction mechanism. The evidence-agent config selects friction (`high=100`,
+`low=0.5`) to avoid runtime topology changes. It engages only after `0.3 s` of
+contact-backed left grasp and returns to low friction during the physical
+two-hand handover. The right-hand transport and insertion remain unassisted.
+Evidence must show that the selected mechanism existed, actually engaged, and
+was released before the final unsupported hang.
+
+Use `--grasp-assist-mechanism friction` for the selected evidence lane. Use
+`task_config` to reproduce the YAML's active mechanism or `fixed_joint` for an
+explicit topology-owning comparison.
 
 ## CLI
 
