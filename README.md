@@ -146,9 +146,9 @@ target-replay failure, adapted target-skill success, and a continuous rendered
 success on the same target and revision. Failed attempts produce structured
 diagnoses rather than weakening the task predicate.
 
-The protocol and PutPot deployment bundle are documented in
+The agent loop and PutPot/HangMug deployment bundles are documented in
 `docs/evidence_driven_asset_adaptation.md` and
-`configs/putpot_evidence_agent.json`.
+`configs/putpot_evidence_agent.json` / `configs/hangmug_evidence_agent.json`.
 
 The same test also passes with a 32-action candidate horizon. All clones retain
 the grasp; internal spread remains 0.244 mm and 0.005684 rad, while terminal

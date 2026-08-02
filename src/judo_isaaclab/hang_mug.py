@@ -224,11 +224,20 @@ class HangMugSkillProgram:
         transport_steps: int,
         approach_steps: int,
         insert_steps: int,
+        left_observer: Any | None = None,
     ) -> None:
+        """Transport and insert while the left wrist observes the branch.
+
+        When supplied, ``left_observer`` is reached during transport and then
+        held through branch alignment, insertion, release, and settling.  This
+        keeps the target branch visible without adding a stop or changing the
+        right-arm insertion trajectory.
+        """
         self._append(
             "tree_transport",
             "handle_to_branch_insertion",
             transport_steps,
+            left_pose=left_observer,
             right_pose=right_transport,
         )
         self._append(
