@@ -67,7 +67,10 @@ def diagnose_semantic_failure(
             stage = "bimanual_handle_grasp"
             reason = "two contact-backed handle grasps did not latch the lifted-pot stage"
             frame = 199
-        elif not checks.get("bimanual_transport_completed", False):
+        elif (
+            not checks.get("bimanual_transport_completed", False)
+            or not checks.get("smooth_collision_aware_transport", True)
+        ):
             stage = "bimanual_transport"
             reason = "the pot did not remain bimanually held through transport"
             frame = int(metrics.get("transport_plan", {}).get("end_step", 379))

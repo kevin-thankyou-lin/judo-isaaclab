@@ -39,6 +39,23 @@ def test_putpot_diagnosis_keeps_signed_cooktop_residuals():
     )
 
 
+def test_putpot_task_success_with_clearance_failure_is_transport_failure():
+    result = {
+        "checks": {
+            "bimanual_transport_completed": True,
+            "smooth_collision_aware_transport": False,
+            "centered_on_cooktop": True,
+        },
+        "terminal": {"stage1": True, "task_success": True},
+        "metrics": {"transport_plan": {"end_step": 379}},
+        "protocol": {"steps": 505},
+    }
+
+    assert diagnose_semantic_failure("putpot", result).first_failed_stage == (
+        "bimanual_transport"
+    )
+
+
 def test_putmarker_diagnosis_reports_slide_axis_deficit():
     result = {
         "checks": {},

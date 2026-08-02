@@ -123,25 +123,14 @@ def _diagnosis(task: str, source: dict[str, Any]) -> dict[str, Any]:
     from judo_isaaclab.semantic_repair import diagnose_semantic_failure
 
     result = source["result"]
-    if _task_success(result) and result.get("status") != "passed":
-        diagnosis = {
-            "first_failed_stage": "evidence_packaging",
-            "reason": (
-                "coded semantic success was observed, but the comparison audit applied "
-                "the adaptation-only direct-replay-failure check and did not write a demo"
-            ),
-            "signed_residuals": {},
-            "visual_frame": int(result.get("protocol", {}).get("steps", 1)) - 1,
-        }
-    else:
-        trace = _trace(Path(source["trace_path"]))
-        value = diagnose_semantic_failure(task, result, trace)
-        diagnosis = {
-            "first_failed_stage": value.first_failed_stage,
-            "reason": value.reason,
-            "signed_residuals": value.signed_residuals,
-            "visual_frame": value.visual_frame,
-        }
+    trace = _trace(Path(source["trace_path"]))
+    value = diagnose_semantic_failure(task, result, trace)
+    diagnosis = {
+        "first_failed_stage": value.first_failed_stage,
+        "reason": value.reason,
+        "signed_residuals": value.signed_residuals,
+        "visual_frame": value.visual_frame,
+    }
     video = result.get("video") or {}
     fps = float(result.get("protocol", {}).get("control_rate_hz", 30))
     diagnosis["visual_evidence"] = {

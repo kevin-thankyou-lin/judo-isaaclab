@@ -29,7 +29,7 @@ def test_strict_semantic_success_requires_demo_and_all_acceptance_checks():
     assert not module._strict_semantic_success(source)
 
 
-def test_audit_coded_success_is_classified_as_packaging_not_motion_failure():
+def test_failed_acceptance_check_is_diagnosed_even_if_task_success_was_seen():
     module = _module()
     source = {
         "source": "replay_success_semantic_audit",
@@ -38,14 +38,16 @@ def test_audit_coded_success_is_classified_as_packaging_not_motion_failure():
         "result": {
             "status": "failed",
             "checks": {"coded_task_success": True},
+            "terminal": {"stage1": True, "stage2": False, "stage3": False},
+            "metrics": {"maximum_drawer_open_m": 0.04},
             "protocol": {"steps": 607, "control_rate_hz": 30},
             "video": {"path": "/tmp/skill.mp4", "sha256": "abc"},
         },
     }
     diagnosis = module._diagnosis("putmarker", source)
 
-    assert diagnosis["first_failed_stage"] == "evidence_packaging"
-    assert diagnosis["visual_evidence"]["frame"] == 606
+    assert diagnosis["first_failed_stage"] == "open_drawer"
+    assert diagnosis["visual_evidence"]["frame"] == 418
 
 
 def test_repair_ingestion_accepts_semantic_motion_without_replay_failure_control():
