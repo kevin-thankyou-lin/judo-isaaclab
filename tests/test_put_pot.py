@@ -17,6 +17,7 @@ from judo_isaaclab.put_pot import (
     reanchor_supported_center_slide,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
+    track_bimanual_handle_targets,
 )
 
 from run_putpot_skill_program import _build_center_repair
@@ -225,6 +226,17 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     )
     right_end = trajectory.waypoint_steps["right_handle_grasp"]
     assert grasp.right_poses[right_end] == pytest.approx(observed_right)
+    left_end = trajectory.waypoint_steps["left_handle_grasp"]
+    tracked = track_bimanual_handle_targets(
+        trajectory,
+        left_end,
+        observed,
+        trajectory.right_poses[left_end],
+        left_contact,
+        right_contact,
+    )
+    assert tracked.left_poses[left_end + 1] == pytest.approx(observed_left)
+    assert tracked.right_poses[right_end] == pytest.approx(observed_right)
 
     corrected, transport = reanchor_bimanual_transport_from_observation(
         grasp,

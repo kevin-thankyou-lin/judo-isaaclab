@@ -632,6 +632,23 @@ def main() -> None:
             trajectory.waypoint_steps["right_handle_grasp"]
             if trajectory is not None else None
         )
+        left_grasp_step = (
+            trajectory.waypoint_steps["left_handle_grasp"]
+            if trajectory is not None else None
+        )
+        if trajectory is not None:
+            from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+            left_handle_contact = compose_pose(
+                inverse_pose(target_geometry.root_pose),
+                trajectory.left_poses[left_grasp_step],
+            )
+            right_handle_contact = compose_pose(
+                inverse_pose(target_geometry.root_pose),
+                trajectory.right_poses[grasp_complete_step],
+            )
+        else:
+            left_handle_contact = right_handle_contact = None
         repair_prefix_steps = (
             int(keyframes["frames"]["support_align"]["action_index"]) + 1
             if args.mode == "replay_center" else None
@@ -706,18 +723,16 @@ def main() -> None:
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
-            if (
-                trajectory is not None
-                and step == trajectory.waypoint_steps["left_handle_grasp"]
-            ):
-                from judo_isaaclab.put_pot import reanchor_second_handle_grasp
+            if trajectory is not None and left_grasp_step <= step < grasp_complete_step:
+                from judo_isaaclab.put_pot import track_bimanual_handle_targets
 
-                trajectory = reanchor_second_handle_grasp(
+                trajectory = track_bimanual_handle_targets(
                     trajectory,
-                    target_geometry.root_pose,
+                    step,
                     sample["pot_pose"],
-                    sample["left_eef_pose"],
                     sample["right_eef_pose"],
+                    left_handle_contact,
+                    right_handle_contact,
                 )
             if trajectory is not None and step == grasp_complete_step:
                 from judo_isaaclab.put_pot import (

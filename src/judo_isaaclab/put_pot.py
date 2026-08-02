@@ -212,6 +212,41 @@ def reanchor_second_handle_grasp(
     )
 
 
+def track_bimanual_handle_targets(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    observed_pot_pose: Any,
+    observed_right_pose: Any,
+    left_contact_local: Any,
+    right_contact_local: Any,
+) -> SkillTrajectory:
+    """Track both fixed local handle contacts during the second-arm approach."""
+
+    steps = trajectory.waypoint_steps
+    left_end = steps.get("left_handle_grasp")
+    right_end = steps.get("right_handle_grasp")
+    if left_end is None or right_end is None:
+        raise ValueError("handle trajectory is missing grasp waypoints")
+    if current_step < left_end or current_step >= right_end:
+        raise ValueError("current_step is outside the second-handle approach")
+    start = current_step + 1
+    left_target = compose_pose(observed_pot_pose, left_contact_local)
+    right_target = compose_pose(observed_pot_pose, right_contact_local)
+    left = trajectory.left_poses.copy()
+    right = trajectory.right_poses.copy()
+    left[start : right_end + 1] = left_target
+    right[start : right_end + 1] = interpolate_poses(
+        observed_right_pose, right_target, right_end - current_step
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 def reanchor_bimanual_transport_from_observation(
     trajectory: SkillTrajectory,
     observed_pot_pose: Any,
