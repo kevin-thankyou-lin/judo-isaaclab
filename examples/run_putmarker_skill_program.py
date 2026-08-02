@@ -740,6 +740,9 @@ def main() -> None:
     for path in (args.result_json, args.trace_npz, args.video):
         if path and os.path.isfile(path):
             os.unlink(path)
+    # Validate cheap dataset/asset provenance before the expensive app launch.
+    source_assets = _dataset_assets(args.source_dataset, args.objects_root)
+    target_assets = _dataset_assets(args.target_dataset, args.objects_root)
     sys.path.insert(0, os.path.abspath(args.gear_repo))
 
     from isaaclab.app import AppLauncher
@@ -756,8 +759,6 @@ def main() -> None:
         from dc_study.utils.task_creation import create_task_environment
 
         offline_ground = _configure_offline_ground()
-        source_assets = _dataset_assets(args.source_dataset, args.objects_root)
-        target_assets = _dataset_assets(args.target_dataset, args.objects_root)
         modalities = ["proprioception"] + (["rgb"] if args.render else [])
         env = create_task_environment(
             task_name="PutMarkerInDrawer-v0",

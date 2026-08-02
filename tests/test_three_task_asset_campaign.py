@@ -4,7 +4,12 @@ import h5py
 import numpy as np
 import pytest
 
-from run_three_task_asset_campaign import _reusable_classification, enumerate_pairs, validate_demo
+from run_three_task_asset_campaign import (
+    _reusable_classification,
+    enumerate_pairs,
+    validate_asset_inventory,
+    validate_demo,
+)
 
 
 def _dataset(path, assets):
@@ -33,6 +38,29 @@ def test_enumeration_fails_closed_on_wrong_count(tmp_path):
             "source_dataset": str(tmp_path / "task_0.hdf5"),
             "dataset_globs": [str(tmp_path / "*.hdf5")],
         })
+
+
+def test_asset_inventory_fails_before_simulator_startup(tmp_path):
+    dataset = tmp_path / "task_0.hdf5"
+    _dataset(dataset, {"object": "Object/object_000"})
+    task = {
+        "name": "task",
+        "objects_root": str(tmp_path / "objects"),
+    }
+    pair = {
+        "dataset": str(dataset),
+        "pair_id": "object_000",
+        "assets": {"object": "Object/object_000"},
+    }
+    with pytest.raises(RuntimeError, match="missing 1 official asset directories"):
+        validate_asset_inventory(task, [pair])
+
+    (tmp_path / "objects/Object/object_000").mkdir(parents=True)
+    assert validate_asset_inventory(task, [pair]) == {
+        "objects_root": str((tmp_path / "objects").resolve()),
+        "pairs": 1,
+        "asset_directories": 1,
+    }
 
 
 def test_demo_validation_checks_alignment_and_assets(tmp_path):

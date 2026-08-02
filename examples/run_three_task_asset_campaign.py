@@ -81,6 +81,32 @@ def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, str]]:
     return pairs
 
 
+def validate_asset_inventory(
+    task: dict[str, Any], pairs: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Fail before Isaac startup unless every selected pair has matched assets."""
+    objects_root = Path(_expand(task["objects_root"])).resolve()
+    missing: list[str] = []
+    for pair in pairs:
+        for relative in pair["assets"].values():
+            path = objects_root / relative
+            if not path.is_dir():
+                missing.append(str(path))
+    if missing:
+        unique = sorted(set(missing))
+        preview = unique[:8]
+        suffix = f" (and {len(unique) - len(preview)} more)" if len(unique) > len(preview) else ""
+        raise RuntimeError(
+            f"{task['name']}: missing {len(unique)} official asset directories: "
+            f"{preview}{suffix}"
+        )
+    return {
+        "objects_root": str(objects_root),
+        "pairs": len(pairs),
+        "asset_directories": sum(len(pair["assets"]) for pair in pairs),
+    }
+
+
 def _run(command: list[str], log_path: Path, *, dry_run: bool) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     print("CAMPAIGN_COMMAND=" + json.dumps(command), flush=True)
@@ -203,6 +229,12 @@ def run_task(
     pairs = enumerate_pairs(task)
     if max_pairs is not None:
         pairs = pairs[:max_pairs]
+    inventory = validate_asset_inventory(task, pairs)
+    print(
+        "CAMPAIGN_ASSET_PREFLIGHT="
+        + json.dumps({"task": task["name"], **inventory}, sort_keys=True),
+        flush=True,
+    )
     task_root = output_root / task["name"]
     ledger_path = task_root / "ledger.json"
     ledger = _load(ledger_path) if ledger_path.is_file() else {
@@ -346,6 +378,10 @@ def run_task(
         }
         _atomic_json(ledger_path, ledger)
         print("CAMPAIGN_PAIR=" + json.dumps({"task": task["name"], "pair": pair_id, **record}, sort_keys=True), flush=True)
+        if record.get("status") == "infrastructure_failed":
+            raise RuntimeError(
+                f"{task['name']}:{pair_id}: infrastructure failure; stopping campaign"
+            )
     return ledger
 
 

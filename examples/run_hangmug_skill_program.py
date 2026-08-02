@@ -520,6 +520,9 @@ def main() -> None:
     for path in (args.result_json, args.trace_npz, args.video, args.write_keyframes):
         if path and os.path.isfile(path):
             os.unlink(path)
+    # Validate cheap dataset/asset provenance before the expensive app launch.
+    source_assets = _dataset_assets(args.source_dataset, args.objects_root)
+    target_assets = _dataset_assets(args.target_dataset, args.objects_root)
     sys.path.insert(0, os.path.abspath(args.gear_repo))
     from isaaclab.app import AppLauncher
 
@@ -531,8 +534,6 @@ def main() -> None:
         from run_putmarker_skill_program import _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state
 
         override = _configure_task_for_evidence(args.grasp_assist_mechanism)
-        source_assets = _dataset_assets(args.source_dataset, args.objects_root)
-        target_assets = _dataset_assets(args.target_dataset, args.objects_root)
         env = create_task_environment(
             task_name="HangMugOnTree-v0",
             assets_instance_paths=target_assets,
