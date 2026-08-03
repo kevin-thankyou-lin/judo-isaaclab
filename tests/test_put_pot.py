@@ -1163,6 +1163,26 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
         trajectory.waypoint_steps["pot_release"]
     ] == pytest.approx([-0.0475, -0.0475])
 
+    transport_reanchored, _ = reanchor_bimanual_transport_from_observation(
+        trajectory,
+        _pose(0.0, 0.0, 0.1),
+        _pose(0.2, 0.0, 0.1),
+        _pose(0.2, 1.0, 0.1),
+        _pose(0.4, 0.0, 0.1),
+        [0.1, 0.1, 0.1],
+        RigidSupportGeometry(_pose(10.0), [0.4, 0.4, 0.1]),
+        transport_clearance_m=0.025,
+        collision_clearance_m=0.025,
+    )
+    lower_end = trajectory.waypoint_steps["support_lower"]
+    left_release_end = trajectory.waypoint_steps["left_unload_release"]
+    assert transport_reanchored.left_poses[left_release_end, :3] == pytest.approx(
+        transport_reanchored.left_poses[lower_end, :3] + [-0.1, 0.2, 0.2]
+    )
+    assert transport_reanchored.left_poses[left_release_end + 1] == pytest.approx(
+        transport_reanchored.left_poses[left_release_end]
+    )
+
     unloaded = reanchor_supported_center_slide(
         trajectory,
         _pose(0.6, 0.1, 0.1),

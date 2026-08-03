@@ -1256,15 +1256,30 @@ def reanchor_bimanual_transport_from_observation(
     right[transport_end + 1 : lower_end + 1] = interpolate_poses(
         transport.right_poses[-1], right_lower, lower_end - transport_end
     )
-    left[lower_end + 1 : release_end + 1] = left_lower
-    right[lower_end + 1 : release_end + 1] = right_lower
     left_withdraw = left_lower.copy()
     right_withdraw = right_lower.copy()
-    left_withdraw[:3] += [0.0, 0.08, 0.12]
+    if "center_slide" in steps:
+        left_release_end = steps["left_unload_release"]
+        nominal_left_withdraw_delta = (
+            trajectory.left_poses[left_release_end, :3]
+            - trajectory.left_poses[lower_end, :3]
+        )
+        left_withdraw[:3] += nominal_left_withdraw_delta
+        left[lower_end + 1 : left_release_end + 1] = interpolate_poses(
+            left_lower,
+            left_withdraw,
+            left_release_end - lower_end,
+        )
+        left[left_release_end + 1 :] = left_withdraw
+    else:
+        left[lower_end + 1 : release_end + 1] = left_lower
+        left_withdraw[:3] += [0.0, 0.08, 0.12]
+    right[lower_end + 1 : release_end + 1] = right_lower
     right_withdraw[:3] += [0.0, -0.08, 0.12]
-    left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
-        left_lower, left_withdraw, withdraw_end - release_end
-    )
+    if "center_slide" not in steps:
+        left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
+            left_lower, left_withdraw, withdraw_end - release_end
+        )
     right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
         right_lower, right_withdraw, withdraw_end - release_end
     )
