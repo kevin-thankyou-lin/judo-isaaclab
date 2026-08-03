@@ -174,6 +174,12 @@ def _taxonomy(records: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stop_after_attempt(stop_on_failure: bool, record: dict[str, Any]) -> bool:
+    """Stop a sequential lane before the next pair after one failed repair."""
+
+    return bool(stop_on_failure and record.get("status") != "accepted")
+
+
 def refresh_ledger(
     config: dict[str, Any], output_root: Path, ledger_path: Path
 ) -> dict[str, Any]:
@@ -406,6 +412,7 @@ def main() -> None:
     parser.add_argument("--task", action="append")
     parser.add_argument("--pair", action="append")
     parser.add_argument("--max-pairs", type=int)
+    parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
 
@@ -448,6 +455,9 @@ def main() -> None:
             flush=True,
         )
         ledger = refresh_ledger(config, output_root, ledger_path)
+        if _stop_after_attempt(args.stop_on_failure, ledger["pairs"][key]):
+            print(f"SEMANTIC_REPAIR_STOP_ON_FAILURE={key}", flush=True)
+            break
 
     summary = ledger["summary"]
     print(f"SEMANTIC_REPAIR_FINAL={summary['accepted']}/{summary['total']}", flush=True)

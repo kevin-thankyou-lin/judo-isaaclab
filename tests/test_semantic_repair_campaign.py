@@ -136,3 +136,11 @@ def test_preserved_demo_receipt_must_match_recorded_hash(monkeypatch):
         module._validate_demo_receipt(
             {"path": "/tmp/demo.hdf5", "sha256": "stale", "actions": 607}, {}
         )
+
+
+def test_fail_fast_lane_stops_only_after_a_failed_attempt():
+    module = _module()
+
+    assert not module._stop_after_attempt(True, {"status": "accepted"})
+    assert module._stop_after_attempt(True, {"status": "pending"})
+    assert not module._stop_after_attempt(False, {"status": "pending"})
