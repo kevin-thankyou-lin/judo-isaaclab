@@ -167,6 +167,28 @@ def ensure_pick_latch_clearance(
     return handover
 
 
+def geometry_conditioned_right_contact(
+    nominal_contact: Any,
+    body_frame: Any,
+    body_size: Any,
+    handle_axis: int,
+) -> np.ndarray:
+    """Move the handover close stroke into the measured mug-body support band."""
+
+    size = np.asarray(body_size, dtype=np.float64)
+    if size.shape != (3,) or np.any(size <= 0.0):
+        raise ValueError("body_size must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be a horizontal axis")
+    contact_body = compose_pose(inverse_pose(body_frame), nominal_contact)
+    sign = 1.0 if contact_body[handle_axis] >= 0.0 else -1.0
+    contact_body[handle_axis] = sign * min(
+        abs(contact_body[handle_axis]), 0.25 * size[handle_axis]
+    )
+    contact_body[2] += 0.25 * size[2]
+    return compose_pose(body_frame, contact_body)
+
+
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,

@@ -11,6 +11,7 @@ from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
     ensure_pick_latch_clearance,
+    geometry_conditioned_right_contact,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
@@ -223,6 +224,16 @@ def test_pick_clearance_uses_measured_mug_height():
     adjusted = ensure_pick_latch_clearance(shallow, initial, 0.07)
     assert adjusted[:2] == pytest.approx(shallow[:2])
     assert adjusted[2] == pytest.approx(0.92)
+
+
+def test_right_contact_uses_measured_body_support_band():
+    body_frame = _pose(-0.013, 0.0, 0.0)
+    nominal = _pose(-0.058, -0.041, 0.114)
+    adjusted = geometry_conditioned_right_contact(
+        nominal, body_frame, [0.076, 0.09, 0.064], 0
+    )
+    body_local = adjusted[:3] - body_frame[:3]
+    assert body_local == pytest.approx([-0.019, -0.041, 0.13])
 
 
 def test_branch_transport_reanchors_observed_right_contact():
