@@ -272,6 +272,12 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.069219, 0.061195, 0.020012],
         0,
     ) == 365
+    assert geometry_conditioned_transport_steps(
+        60,
+        [0.059453, 0.085784, 0.040560],
+        [0.069219, 0.061195, 0.020012],
+        0,
+    ) == 122
 
 
 def test_support_staging_uses_authored_boundary_and_inset():

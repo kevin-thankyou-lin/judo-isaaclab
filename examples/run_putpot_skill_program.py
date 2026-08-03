@@ -715,6 +715,16 @@ def _build_skill(
         )
         for side in (left_side, right_side)
     )
+    center_slide_steps = max(
+        geometry_conditioned_transport_steps(
+            args.center_repair_steps,
+            handle_size(source_parts, side),
+            handle_size(target_parts, side),
+            target_parts.handle_axis,
+        )
+        for side in (left_side, right_side)
+    )
+    grasp_geometry["left"]["center_slide_steps"] = center_slide_steps
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
@@ -747,7 +757,7 @@ def _build_skill(
             right_withdraw,
             lower_steps=args.lower_steps,
             left_release_steps=args.release_steps,
-            center_steps=args.center_repair_steps,
+            center_steps=center_slide_steps,
             right_release_steps=args.release_steps,
             withdraw_steps=args.withdraw_steps,
             settle_steps=args.settle_steps,
