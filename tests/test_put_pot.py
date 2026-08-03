@@ -42,6 +42,7 @@ from judo_isaaclab.put_pot import (
     seat_handle_inside_finger_pads,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
+    support_boundary_staging_pose,
     track_bimanual_handle_targets,
     transfer_handle_approach_orientation,
     transfer_handle_pose_through_contact_frames,
@@ -271,6 +272,18 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.069219, 0.061195, 0.020012],
         0,
     ) == 365
+
+
+def test_support_staging_uses_authored_boundary_and_inset():
+    cooktop = RigidSupportGeometry(_pose(), [0.4, 0.6, 0.1])
+    staged = support_boundary_staging_pose(
+        _pose(x=1.0),
+        _pose(),
+        cooktop,
+        support_inset_m=0.006,
+    )
+    assert staged[:2] == pytest.approx([0.194, 0.0])
+    assert staged[2:] == pytest.approx(_pose()[2:])
 
 
 def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():
@@ -1108,6 +1121,16 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
         left_close_steps=2,
         right_close_steps=2,
     )
+    program.smooth_bimanual_transport_to_center(
+        _pose(),
+        _pose(0.4),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        [0.1, 0.1, 0.1],
+        RigidSupportGeometry(_pose(10.0), [0.4, 0.4, 0.1]),
+        steps=8,
+        collision_clearance_m=0.025,
+    )
     program.supported_center_slide_and_settle(
         _pose(0.6, 0.0, 0.1),
         _pose(0.6, 1.0, 0.1),
@@ -1132,8 +1155,23 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
         trajectory.waypoint_steps["pot_release"]
     ] == pytest.approx([-0.0475, -0.0475])
 
-    reanchored = reanchor_supported_center_slide(
+    lowered = reanchor_centered_lowering(
         trajectory,
+        [0.0, 0.0],
+        _pose(0.55, 0.0, 0.1),
+        _pose(0.55, 1.0, 0.1),
+        vertical_correction_m=0.0,
+    )
+    left_release_end = trajectory.waypoint_steps["left_unload_release"]
+    assert lowered.left_poses[left_release_end, :3] == pytest.approx(
+        [0.45, 0.2, 0.3]
+    )
+    assert lowered.right_poses[left_release_end] == pytest.approx(
+        _pose(0.55, 1.0, 0.1)
+    )
+
+    reanchored = reanchor_supported_center_slide(
+        lowered,
         _pose(0.6, 0.1, 0.1),
         _pose(0.7, -0.2, 0.1),
         _pose(0.65, 0.9, 0.2),

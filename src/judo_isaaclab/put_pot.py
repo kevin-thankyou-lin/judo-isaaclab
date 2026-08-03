@@ -306,6 +306,40 @@ def geometry_conditioned_transport_steps(
     return int(np.ceil(base_steps / retained_ratio))
 
 
+def support_boundary_staging_pose(
+    initial_pot_pose: Any,
+    centered_pot_pose: Any,
+    cooktop: "RigidSupportGeometry",
+    *,
+    support_inset_m: float,
+) -> np.ndarray:
+    """Place the pot center just inside the measured cooktop support boundary."""
+
+    initial = _pose(initial_pot_pose, "initial_pot_pose")
+    centered = _pose(centered_pot_pose, "centered_pot_pose")
+    if not np.isfinite(support_inset_m) or support_inset_m < 0.0:
+        raise ValueError("support_inset_m must be finite and nonnegative")
+    direction_world = initial[:2] - centered[:2]
+    distance = float(np.linalg.norm(direction_world))
+    if distance <= 1.0e-9:
+        return centered.copy()
+    direction_world /= distance
+    direction_local = quaternion_rotate(
+        inverse_pose(cooktop.root_pose)[3:],
+        np.asarray([direction_world[0], direction_world[1], 0.0]),
+    )[:2]
+    limits = [
+        0.5 * float(cooktop.size[axis]) / abs(float(direction_local[axis]))
+        for axis in range(2)
+        if abs(float(direction_local[axis])) > 1.0e-9
+    ]
+    boundary_distance = min(limits)
+    staging_distance = min(distance, max(0.0, boundary_distance - support_inset_m))
+    staged = centered.copy()
+    staged[:2] += staging_distance * direction_world
+    return staged
+
+
 def geometry_conditioned_grasp_hold_steps(
     base_steps: int,
     source_handle_size: Any,
@@ -1337,6 +1371,28 @@ def reanchor_centered_lowering(
     right[start : lower_end + 1] = interpolate_poses(
         observed_right_pose, right_lower, lower_end - start + 1
     )
+    if "center_slide" in steps:
+        left_release_end = steps["left_unload_release"]
+        slide_end = steps["center_slide"]
+        nominal_left_lower = trajectory.left_poses[lower_end]
+        left_withdraw_delta = (
+            trajectory.left_poses[left_release_end, :3]
+            - nominal_left_lower[:3]
+        )
+        left_withdraw = left_lower.copy()
+        left_withdraw[:3] += left_withdraw_delta
+        left[lower_end + 1 : left_release_end + 1] = interpolate_poses(
+            left_lower, left_withdraw, left_release_end - lower_end
+        )
+        left[left_release_end + 1 :] = left_withdraw
+        right[lower_end + 1 : slide_end + 1] = right_lower
+        return SkillTrajectory(
+            left_poses=left,
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        )
     left[lower_end + 1 : release_end + 1] = left_lower
     right[lower_end + 1 : release_end + 1] = right_lower
     left[release_end + 1 : withdraw_end + 1] = interpolate_poses(
@@ -1493,7 +1549,8 @@ def reanchor_centered_release(
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     left_release = _pose(observed_left_pose, "observed_left_pose")
     right_release = _pose(observed_right_pose, "observed_right_pose")
-    left_release[:2] += correction
+    if anchor_name != "center_slide":
+        left_release[:2] += correction
     right_release[:2] += correction
     left[start : release_end + 1] = interpolate_poses(
         observed_left_pose, left_release, release_end - start + 1
@@ -1544,13 +1601,19 @@ def reanchor_supported_center_slide(
     release_end = steps["pot_release"]
     withdraw_end = steps["bimanual_withdraw"]
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    nominal_withdraw_delta = (
+        trajectory.right_poses[withdraw_end, :3]
+        - trajectory.right_poses[slide_end, :3]
+    )
+    right_withdraw = right_center.copy()
+    right_withdraw[:3] += nominal_withdraw_delta
     right[start : slide_end + 1] = interpolate_poses(
         right_pose, right_center, slide_end - start + 1
     )
     right[slide_end + 1 : release_end + 1] = right_center
     right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
         right_center,
-        trajectory.right_poses[withdraw_end],
+        right_withdraw,
         withdraw_end - release_end,
     )
     return SkillTrajectory(

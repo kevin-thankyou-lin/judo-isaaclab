@@ -623,24 +623,9 @@ def _build_skill(
         xy_offset_local=(0.0, 0.0),
         clearance_m=args.support_clearance_m,
     )
-    transport_target = final_pot_pose.copy()
-    transport_target[2] += (
-        max(args.transport_clearance_m, args.collision_clearance_m)
-        + TRANSPORT_PLANNING_MARGIN_M
-    )
 
     def held(pot_pose, local):
         return compose_pose(pot_pose, local)
-
-    left_lower = held(final_pot_pose, left_contact_local)
-    right_lower = held(final_pot_pose, right_contact_local)
-    left_withdraw = left_lower.copy()
-    right_withdraw = right_lower.copy()
-    withdraw_delta = np.asarray([0.0, 0.0, 0.12])
-    left_withdraw[:3] += withdraw_delta
-    right_withdraw[:3] += withdraw_delta
-    left_withdraw[1] += 0.08
-    right_withdraw[1] -= 0.08
 
     from judo_isaaclab.put_pot import (
         geometry_conditioned_grasp_hold_steps,
@@ -680,6 +665,34 @@ def _build_skill(
         grasp_geometry["left"]["regrasp_approach_local_m"] = (
             approach_local.tolist()
         )
+
+    transport_final_pot = final_pot_pose.copy()
+    supported_center_slide = bool(right_first_close)
+    if supported_center_slide:
+        from judo_isaaclab.put_pot import support_boundary_staging_pose
+
+        transport_final_pot = support_boundary_staging_pose(
+            target_initial.root_pose,
+            final_pot_pose,
+            target_cooktop,
+            support_inset_m=args.support_clearance_m,
+        )
+    grasp_geometry["left"]["supported_center_slide"] = supported_center_slide
+    grasp_geometry["left"]["support_staging_offset_m"] = float(
+        np.linalg.norm(transport_final_pot[:2] - final_pot_pose[:2])
+    )
+    transport_target = transport_final_pot.copy()
+    transport_target[2] += (
+        max(args.transport_clearance_m, args.collision_clearance_m)
+        + TRANSPORT_PLANNING_MARGIN_M
+    )
+    left_lower = held(transport_final_pot, left_contact_local)
+    right_lower = held(transport_final_pot, right_contact_local)
+    left_withdraw = left_lower.copy()
+    left_withdraw[:3] += np.asarray([0.0, 0.08, 0.12])
+    right_center = held(final_pot_pose, right_contact_local)
+    right_withdraw = right_center.copy()
+    right_withdraw[:3] += np.asarray([0.0, -0.08, 0.12])
 
     grasp_hold_steps = max(
         geometry_conditioned_grasp_hold_steps(
@@ -725,16 +738,31 @@ def _build_skill(
         steps=transport_steps,
         collision_clearance_m=args.collision_clearance_m,
     )
-    program.short_lower_release_and_settle(
-        left_lower,
-        right_lower,
-        left_withdraw,
-        right_withdraw,
-        lower_steps=args.lower_steps,
-        release_steps=args.release_steps,
-        withdraw_steps=args.withdraw_steps,
-        settle_steps=args.settle_steps,
-    )
+    if supported_center_slide:
+        program.supported_center_slide_and_settle(
+            left_lower,
+            right_lower,
+            left_withdraw,
+            right_center,
+            right_withdraw,
+            lower_steps=args.lower_steps,
+            left_release_steps=args.release_steps,
+            center_steps=args.center_repair_steps,
+            right_release_steps=args.release_steps,
+            withdraw_steps=args.withdraw_steps,
+            settle_steps=args.settle_steps,
+        )
+    else:
+        program.short_lower_release_and_settle(
+            left_lower,
+            right_lower,
+            left_withdraw,
+            right_withdraw,
+            lower_steps=args.lower_steps,
+            release_steps=args.release_steps,
+            withdraw_steps=args.withdraw_steps,
+            settle_steps=args.settle_steps,
+        )
     trajectory = program.build()
     from judo_isaaclab.put_pot import cartesian_smoothness_metrics
 
@@ -755,7 +783,13 @@ def _build_skill(
             "cooktop_overlap_samples": transport.cooktop_overlap_samples,
         }
     )
-    return trajectory, final_pot_pose, plan_metrics, grasp_geometry
+    return (
+        trajectory,
+        final_pot_pose,
+        transport_final_pot,
+        plan_metrics,
+        grasp_geometry,
+    )
 
 
 def _build_center_repair(sample, args):
@@ -970,7 +1004,13 @@ def main() -> None:
             target_assets["cooktop"], target["cooktop_pose"][0]
         )
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
-        trajectory, intended_final_pot, transport_plan, handle_grasp_geometry = (
+        (
+            trajectory,
+            intended_final_pot,
+            transport_final_pot,
+            transport_plan,
+            handle_grasp_geometry,
+        ) = (
             _build_skill(
                 keyframes,
                 source,
@@ -985,7 +1025,7 @@ def main() -> None:
                 _eef_pose(env, "right_arm"),
                 args,
             )
-            if args.mode == "skill" else (None, None, None, None)
+            if args.mode == "skill" else (None, None, None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
@@ -1338,7 +1378,7 @@ def main() -> None:
                             sample["pot_pose"],
                             sample["left_eef_pose"],
                             sample["right_eef_pose"],
-                            intended_final_pot,
+                            transport_final_pot,
                             target_geometry.size,
                             target_cooktop_geometry,
                             transport_clearance_m=args.transport_clearance_m,
@@ -1395,18 +1435,22 @@ def main() -> None:
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:
                 from judo_isaaclab.put_pot import reanchor_centered_lowering
 
-                center_correction = (
+                measured_center_correction = (
                     np.asarray(sample["cooktop_pose"], dtype=np.float64)[:2]
                     - np.asarray(sample["pot_pose"], dtype=np.float64)[:2]
                 )
                 center_lowering_signed_residual_world_m = [
-                    float(center_correction[0]),
-                    float(center_correction[1]),
+                    float(measured_center_correction[0]),
+                    float(measured_center_correction[1]),
                     float(intended_final_pot[2] - sample["pot_pose"][2]),
                 ]
                 trajectory = reanchor_centered_lowering(
                     trajectory,
-                    center_correction,
+                    (
+                        np.zeros(2, dtype=np.float64)
+                        if "center_slide" in trajectory.waypoint_steps
+                        else measured_center_correction
+                    ),
                     sample["left_eef_pose"],
                     sample["right_eef_pose"],
                     vertical_correction_m=(
@@ -1612,7 +1656,6 @@ def main() -> None:
                     and "pot_lift" not in trajectory.waypoint_steps
                     and "pot_transport" not in trajectory.waypoint_steps
                     and "support_align" not in trajectory.waypoint_steps
-                    and "center_slide" not in trajectory.waypoint_steps
                     and transport_plan["minimum_cooktop_clearance_m"]
                     + 1.0e-9
                     >= args.collision_clearance_m
@@ -1730,7 +1773,7 @@ def main() -> None:
                 "transport_reanchor_rejections": transport_reanchor_rejections,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,
                 "release_signed_residual_world_m": release_signed_residual_world_m,
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": bool(trajectory is not None and "center_slide" in trajectory.waypoint_steps) or repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
@@ -1748,6 +1791,7 @@ def main() -> None:
                 "target_pot_bottom": target_geometry.bottom_frame.tolist(),
                 "target_cooktop_top": _geometry(target_assets["cooktop"], target["cooktop_pose"][0]).top_frame.tolist(),
                 "intended_final_pot_pose": intended_final_pot.tolist() if intended_final_pot is not None else None,
+                "transport_final_pot_pose": transport_final_pot.tolist() if transport_final_pot is not None else None,
                 "extracted_keyframes": extracted,
                 "source_pot_parts": jsonable(source_parts),
                 "target_pot_parts": jsonable(target_parts),
