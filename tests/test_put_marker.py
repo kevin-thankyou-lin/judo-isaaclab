@@ -173,6 +173,8 @@ def test_put_marker_skills_build_one_continuous_named_rollout():
         approach_steps=4,
         close_steps=3,
         pull_steps=6,
+        closed=-0.02,
+        pull_closed=0.0,
     )
     program.place_marker_in_drawer(
         _pose(0.4, 0.2, 0.3),
@@ -207,6 +209,10 @@ def test_put_marker_skills_build_one_continuous_named_rollout():
         "close_drawer",
     }
     release_step = trajectory.waypoint_steps["marker_release"]
+    handle_grasp_step = trajectory.waypoint_steps["handle_grasp"]
+    drawer_open_step = trajectory.waypoint_steps["drawer_open"]
+    assert trajectory.grippers[handle_grasp_step, 1] == pytest.approx(-0.02)
+    assert trajectory.grippers[drawer_open_step, 1] == pytest.approx(0.0)
     assert trajectory.grippers[release_step, 0] == pytest.approx(-0.0475)
     assert trajectory.grippers[-1, 1] == pytest.approx(-0.0475)
 

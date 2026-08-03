@@ -44,6 +44,7 @@ SEMANTIC_INDICES = {
 TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
 TARGET_HANDLE_PULL_LIFT_M = 0.050
 TARGET_HANDLE_GRIPPER_CLOSED_POSITION = -0.020
+TARGET_HANDLE_PULL_GRIPPER_POSITION = 0.0
 TARGET_HANDLE_MIN_LATERAL_OFFSET_M = 0.028
 # Keep collision-limited lower-drawer geometry outside both the authored table
 # surface and the millimetre-scale contact skin used by CPU PhysX.
@@ -504,6 +505,11 @@ def _build_skill(
             TARGET_HANDLE_GRIPPER_CLOSED_POSITION
             if target_handle_grasp_index is not None
             else 0.0
+        ),
+        pull_closed=(
+            TARGET_HANDLE_PULL_GRIPPER_POSITION
+            if target_handle_grasp_index is not None
+            else None
         ),
     )
     program.place_marker_in_drawer(
@@ -1483,6 +1489,11 @@ def main() -> None:
                     ),
                     "target_handle_gripper_closed_position": (
                         TARGET_HANDLE_GRIPPER_CLOSED_POSITION
+                        if target_handle_grasp_index is not None
+                        else 0.0
+                    ),
+                    "target_handle_pull_gripper_position": (
+                        TARGET_HANDLE_PULL_GRIPPER_POSITION
                         if target_handle_grasp_index is not None
                         else 0.0
                     ),

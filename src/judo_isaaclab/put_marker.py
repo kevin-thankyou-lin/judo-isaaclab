@@ -482,6 +482,7 @@ class PutMarkerSkillProgram:
         close_steps: int,
         pull_steps: int,
         closed: float = 0.0,
+        pull_closed: float | None = None,
     ) -> None:
         self._append("marker_clear_hold", "open_drawer", hold_steps, left_pose=hold_marker_pose)
         self._append(
@@ -497,7 +498,13 @@ class PutMarkerSkillProgram:
             right_pose=handle_grasp_pose,
             right_gripper=closed,
         )
-        self._append("drawer_open", "open_drawer", pull_steps, right_pose=handle_open_pose)
+        self._append(
+            "drawer_open",
+            "open_drawer",
+            pull_steps,
+            right_pose=handle_open_pose,
+            right_gripper=closed if pull_closed is None else pull_closed,
+        )
 
     def place_marker_in_drawer(
         self,
