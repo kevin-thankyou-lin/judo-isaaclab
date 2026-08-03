@@ -144,6 +144,36 @@ def transfer_handle_approach_orientation(
     return result
 
 
+def expand_handle_pregrasp_clearance(
+    pregrasp_pose: Any,
+    grasp_pose: Any,
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+) -> np.ndarray:
+    """Keep open fingers clear when the target handle is transversely smaller."""
+
+    pregrasp = _pose(pregrasp_pose, "pregrasp_pose")
+    grasp = _pose(grasp_pose, "grasp_pose")
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    approach = pregrasp[:3] - grasp[:3]
+    distance = float(np.linalg.norm(approach))
+    if distance <= 1.0e-9:
+        raise ValueError("pregrasp and grasp positions must be distinct")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    extra = 0.5 * max(
+        0.0, max(float(source[axis] - target[axis]) for axis in transverse)
+    )
+    result = pregrasp.copy()
+    result[:3] += extra * approach / distance
+    return result
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 

@@ -14,6 +14,7 @@ from judo_isaaclab.put_pot import (
     balance_handle_contact_across_finger_pads,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
+    expand_handle_pregrasp_clearance,
     handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
@@ -137,6 +138,20 @@ def test_handle_approach_and_grasp_share_one_contact_frame_rotation():
         inverse_pose(transferred_pregrasp)[3:], transferred_grasp[3:]
     )
     assert target_relative == pytest.approx(source_relative, abs=1.0e-7)
+
+
+def test_pregrasp_clearance_expands_by_measured_transverse_handle_shrink():
+    grasp = _pose(x=0.20)
+    pregrasp = _pose(x=0.20, y=0.03)
+    expanded = expand_handle_pregrasp_clearance(
+        pregrasp,
+        grasp,
+        source_handle_size=[0.06, 0.086, 0.041],
+        target_handle_size=[0.07, 0.059, 0.028],
+        handle_axis=0,
+    )
+    assert expanded[:3] == pytest.approx([0.20, 0.0435, 0.0])
+    assert expanded[3:] == pytest.approx(pregrasp[3:])
 
 
 def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():

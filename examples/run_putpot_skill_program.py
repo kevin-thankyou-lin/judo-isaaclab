@@ -367,6 +367,7 @@ def _build_skill(
         )
 
     contact_frames: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    grasp_poses: dict[str, np.ndarray] = {}
 
     def grasp_contact_frames(arm: str, side: int) -> tuple[np.ndarray, np.ndarray]:
         if arm in contact_frames:
@@ -414,6 +415,17 @@ def _build_skill(
 
             surface_pose = seat_handle_inside_finger_pads(
                 surface_pose, HANDLE_PAD_DEPTH_MARGIN_M
+            )
+            grasp_poses[arm] = surface_pose.copy()
+        else:
+            from judo_isaaclab.put_pot import expand_handle_pregrasp_clearance
+
+            surface_pose = expand_handle_pregrasp_clearance(
+                surface_pose,
+                grasp_poses[arm],
+                handle_size(source_parts, side),
+                handle_size(target_parts, side),
+                target_parts.handle_axis,
             )
         return surface_pose
 
