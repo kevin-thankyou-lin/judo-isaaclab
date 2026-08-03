@@ -742,7 +742,7 @@ def main() -> None:
             if trajectory is not None and any(
                 step == trajectory.waypoint_steps[name]
                 for name in reanchor_waypoints
-            ):
+            ) and sample["right_grasp"]:
                 from judo_isaaclab.hang_mug import reanchor_branch_transport_contact
                 from judo_isaaclab.put_marker import compose_pose, inverse_pose
 
