@@ -1491,11 +1491,16 @@ def main() -> None:
                             sample["left_pad_fractions"],
                         )
                     )
+                    effective_pad_reseat_residual_m = (
+                        0.0
+                        if peer_contact_position_locked
+                        else initial_pad_reseat_residual_m
+                    )
                     trajectory, gripper_hold_steps = (
                         retime_loaded_gripper_close_for_pad_reseat(
                             trajectory,
                             step,
-                            initial_pad_reseat_residual_m,
+                            effective_pad_reseat_residual_m,
                         )
                     )
                     peer_contact_gripper_retime = {
@@ -1505,6 +1510,9 @@ def main() -> None:
                         ),
                         "pad_reseat_residual_m": (
                             initial_pad_reseat_residual_m
+                        ),
+                        "effective_pad_reseat_residual_m": (
+                            effective_pad_reseat_residual_m
                         ),
                         "hold_steps": gripper_hold_steps,
                         "close_end_step": grasp_complete_step,

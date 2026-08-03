@@ -451,6 +451,27 @@ def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():
     assert retimed.left_poses == pytest.approx(trajectory.left_poses)
 
 
+def test_loaded_gripper_close_without_reseat_uses_full_remaining_window():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=8,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["left_handle_grasp"] - 2
+    retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, 0.0
+    )
+    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    expected = np.linspace(
+        trajectory.grippers[step, 0], 0.0, grasp_end - step + 1
+    )
+    assert hold_steps == 0
+    assert retimed.grippers[step : grasp_end + 1, 0] == pytest.approx(expected)
+    assert np.all(np.diff(retimed.grippers[step : grasp_end + 1, 0]) >= 0.0)
+
+
 def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     observed = _pose(0.1, 0.2, 0.3)
     loaded = _pose(0.2, 0.4, 0.6)
