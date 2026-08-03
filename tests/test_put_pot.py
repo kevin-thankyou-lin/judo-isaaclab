@@ -1001,6 +1001,19 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     )
     assert right_first.left_poses[right_end] == pytest.approx(observed_left)
 
+    immediate = track_bimanual_handle_targets(
+        trajectory,
+        left_end,
+        observed,
+        displaced_left,
+        observed_right,
+        left_contact,
+        right_contact,
+        right_contact_latched=True,
+        feedback_horizon_steps=1,
+    )
+    assert immediate.left_poses[left_end + 1] == pytest.approx(observed_left)
+
     corrected, transport = reanchor_bimanual_transport_from_observation(
         grasp,
         observed,

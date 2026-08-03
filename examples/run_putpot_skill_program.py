@@ -1433,6 +1433,7 @@ def main() -> None:
                     peer_single_contact_tracking_residual_world_m = (
                         retained_residual.tolist()
                     )
+                    milestone_feedback_horizon_steps = 1
 
                 for arm in ("left", "right"):
                     if (
