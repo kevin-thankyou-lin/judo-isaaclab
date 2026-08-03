@@ -11,7 +11,9 @@ from judo_isaaclab.put_marker import (
     inverse_pose,
     offset_handle_pull_pose,
     pose_from_matrix,
+    quaternion_rotate,
     reanchor_marker_placement,
+    reorient_pose_about_point,
     retarget_drawer_local_pose,
     transfer_pose,
 )
@@ -51,6 +53,18 @@ def test_transfer_pose_uses_corresponding_frame_and_local_scale():
         local_position_scale=(2.0, 0.5, 1.5),
     )
     assert transferred[:3] == pytest.approx([3.2, 4.1, 5.45])
+
+
+def test_reorient_pose_about_point_preserves_tool_local_contact():
+    pose = np.asarray([1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0])
+    point = np.asarray([1.0, 2.0, 4.0])
+    half = np.sqrt(0.5)
+    result = reorient_pose_about_point(pose, [half, 0.0, half, 0.0], point)
+
+    local_contact = point - pose[:3]
+    assert result[:3] + quaternion_rotate(
+        result[3:], local_contact
+    ) == pytest.approx(point)
 
 
 def test_marker_pose_is_centered_in_measured_cavity_frame():

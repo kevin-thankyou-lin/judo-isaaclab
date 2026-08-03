@@ -317,6 +317,7 @@ def _build_skill(
         inverse_pose,
         offset_handle_pull_pose,
         quaternion_rotate,
+        reorient_pose_about_point,
         transfer_pose,
     )
 
@@ -397,12 +398,18 @@ def _build_skill(
     target_handle_grasp_index = (
         _target_drawer_grasp_index(target) if use_target_handle_keyframe else None
     )
-    if target_handle_grasp_index is None:
-        handle_pregrasp = right_handle("handle_pregrasp")
-        handle_grasp = right_handle("handle_grasp")
-    else:
-        handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
-        handle_grasp = target_right_attach(target_handle_grasp_index)
+    handle_pregrasp = right_handle("handle_pregrasp")
+    handle_grasp = right_handle("handle_grasp")
+    if target_handle_grasp_index is not None:
+        handle_point = target_geometry.handle_frame(0.0)[:3]
+        target_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
+        target_grasp = target_right_attach(target_handle_grasp_index)
+        handle_pregrasp = reorient_pose_about_point(
+            handle_pregrasp, target_pregrasp[3:], handle_point
+        )
+        handle_grasp = reorient_pose_about_point(
+            handle_grasp, target_grasp[3:], handle_point
+        )
     inward = -quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * float(handle_engagement_depth_m)
@@ -1344,7 +1351,7 @@ def main() -> None:
                     ),
                     "handle_engagement_depth_m": handle_engagement_depth_m,
                     "handle_grasp_frame_source": (
-                        "target_matched_semantic_drawer_motion_boundary"
+                        "source_contact_point_target_semantic_orientation"
                         if target_handle_grasp_index is not None
                         else "source_semantic_handle_frame"
                     ),
