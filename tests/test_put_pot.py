@@ -29,6 +29,7 @@ from judo_isaaclab.put_pot import (
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     maximum_bimanual_position_step_m,
+    milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
@@ -513,6 +514,13 @@ def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():
     assert residual == pytest.approx(0.030)
     assert translation == pytest.approx(0.050)
     assert local[:3] == pytest.approx([0.030, 0.2, -0.040])
+
+
+def test_milestone_reanchor_rejects_motion_beyond_authored_clearance():
+    assert milestone_reanchor_within_authored_clearance(0.080, 0.066)
+    assert not milestone_reanchor_within_authored_clearance(0.1765, 0.0666)
+    with pytest.raises(ValueError):
+        milestone_reanchor_within_authored_clearance(-0.001, 0.066)
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():

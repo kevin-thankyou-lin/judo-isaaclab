@@ -604,6 +604,31 @@ def reanchor_authored_handle_in_observed_jaw(
     )
 
 
+def milestone_reanchor_within_authored_clearance(
+    candidate_translation_m: float,
+    regrasp_clearance_m: float,
+    *,
+    pad_depth_margin_m: float = HANDLE_PAD_DEPTH_MARGIN_M,
+) -> bool:
+    """Reject milestone targets that exceed measured collision clearance.
+
+    The pad-depth margin permits the contact target to advance beyond the
+    collision-free pregrasp standoff, while keeping a composed jaw/approach
+    correction from crossing the handle by more than authored geometry allows.
+    """
+
+    values = np.asarray(
+        [candidate_translation_m, regrasp_clearance_m, pad_depth_margin_m],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("milestone distances must be finite and nonnegative")
+    return bool(
+        candidate_translation_m
+        <= regrasp_clearance_m + pad_depth_margin_m
+    )
+
+
 def reanchor_missing_finger_pad_depth(
     contact_local: Any,
     observed_root_pose: Any,

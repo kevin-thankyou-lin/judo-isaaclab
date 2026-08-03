@@ -1090,6 +1090,9 @@ def main() -> None:
         )
         milestone_jaw_center_residual_m = None
         milestone_translation_m = None
+        milestone_applied_translation_m = None
+        milestone_translation_limit_m = None
+        milestone_reanchor_accepted = None
         milestone_feedback_horizon_steps = None
         transport_reanchor_steps = []
         transport_reanchor_evaluation_steps = []
@@ -1227,12 +1230,14 @@ def main() -> None:
                 and sample["right_grasp"]
             ):
                 from judo_isaaclab.put_pot import (
+                    HANDLE_PAD_DEPTH_MARGIN_M,
+                    milestone_reanchor_within_authored_clearance,
                     reanchor_authored_handle_in_observed_jaw,
                 )
 
                 original_left_contact = left_handle_contact.copy()
                 (
-                    left_handle_contact,
+                    candidate_left_contact,
                     milestone_jaw_center_residual_m,
                     milestone_translation_m,
                 ) = reanchor_authored_handle_in_observed_jaw(
@@ -1244,12 +1249,36 @@ def main() -> None:
                         "regrasp_approach_local_m"
                     ],
                 )
+                milestone_translation_limit_m = (
+                    handle_grasp_geometry["left"]["regrasp_clearance_m"]
+                    + HANDLE_PAD_DEPTH_MARGIN_M
+                )
+                milestone_reanchor_accepted = (
+                    milestone_reanchor_within_authored_clearance(
+                        milestone_translation_m,
+                        handle_grasp_geometry["left"]["regrasp_clearance_m"],
+                    )
+                )
+                left_handle_contact = (
+                    candidate_left_contact
+                    if milestone_reanchor_accepted
+                    else original_left_contact
+                )
                 left_handle_contact[3:] = original_left_contact[3:]
+                applied_left_world = compose_pose(
+                    sample["pot_pose"], left_handle_contact
+                )
+                milestone_applied_translation_m = float(
+                    np.linalg.norm(
+                        applied_left_world[:3]
+                        - np.asarray(sample["left_eef_pose"])[:3]
+                    )
+                )
                 milestone_feedback_horizon_steps = max(
                     1,
                     int(
                         np.ceil(
-                            milestone_translation_m
+                            milestone_applied_translation_m
                             / args.max_position_step
                         )
                     ),
@@ -1870,6 +1899,11 @@ def main() -> None:
                     milestone_feedback_horizon_steps
                 ),
                 "milestone_translation_m": milestone_translation_m,
+                "milestone_applied_translation_m": (
+                    milestone_applied_translation_m
+                ),
+                "milestone_translation_limit_m": milestone_translation_limit_m,
+                "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None
                 ),
