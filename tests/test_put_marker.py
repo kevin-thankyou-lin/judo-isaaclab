@@ -9,6 +9,7 @@ from judo_isaaclab.put_marker import (
     geometry_conditioned_drawer_open_position,
     interpolate_poses,
     inverse_pose,
+    lift_handle_pull_pose,
     pose_from_matrix,
     reanchor_marker_placement,
     transfer_pose,
@@ -114,6 +115,15 @@ def test_geometry_conditioned_open_position_has_threshold_and_limit_margins():
     assert geometry_conditioned_drawer_open_position(geometry, 0.10) == pytest.approx(
         0.09
     )
+
+
+def test_handle_pull_lift_uses_cabinet_semantic_up_axis():
+    half = np.sqrt(0.5)
+    root = np.asarray([0.0, 0.0, 0.0, half, half, 0.0, 0.0])
+    lifted = lift_handle_pull_pose(_pose(1.0, 2.0, 3.0), root, 0.025)
+    assert lifted[:3] == pytest.approx([1.0, 1.975, 3.0])
+    with pytest.raises(ValueError, match="nonnegative"):
+        lift_handle_pull_pose(_pose(), root, -0.001)
 
 
 def test_quintic_pose_interpolation_is_continuous_and_hits_target():

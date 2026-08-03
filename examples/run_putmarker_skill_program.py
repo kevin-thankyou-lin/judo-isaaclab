@@ -69,6 +69,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--rigid-handle-pull-m", type=float, default=0.10)
+    parser.add_argument("--handle-pull-lift-m", type=float, default=0.025)
     parser.add_argument(
         "--integrate-left-ik",
         action="store_true",
@@ -305,12 +306,14 @@ def _build_skill(
     drawer_pull_extra_m,
     rigid_target_handle_pull,
     rigid_handle_pull_m,
+    handle_pull_lift_m,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
         compose_pose,
         geometry_conditioned_drawer_open_position,
         inverse_pose,
+        lift_handle_pull_pose,
         quaternion_rotate,
         transfer_pose,
     )
@@ -386,6 +389,9 @@ def _build_skill(
     handle_open[:3] += quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * working_q
+    handle_open = lift_handle_pull_pose(
+        handle_open, target_geometry.root_pose, handle_pull_lift_m
+    )
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -812,6 +818,8 @@ def main() -> None:
         raise ValueError("--handle-pull-joint-extension must be in [-0.5, 0.5]")
     if not 0.05 <= args.rigid_handle_pull_m <= 0.15:
         raise ValueError("--rigid-handle-pull-m must be in [0.05, 0.15]")
+    if not 0.0 <= args.handle_pull_lift_m <= 0.05:
+        raise ValueError("--handle-pull-lift-m must be in [0, 0.05]")
     # Exact task-owned outputs are removed up front so a crashed process cannot
     # leave a stale artifact that a wrapper mistakes for this run's evidence.
     for path in (args.result_json, args.trace_npz, args.video):
@@ -896,6 +904,7 @@ def main() -> None:
                 args.drawer_pull_extra_m,
                 integrated_target_handle_ik,
                 args.rigid_handle_pull_m,
+                args.handle_pull_lift_m,
             )
             if args.mode == "skill" else (None, None, None)
         )
@@ -1148,6 +1157,7 @@ def main() -> None:
                     "integrated_target_handle_ik": integrated_target_handle_ik,
                     "rigid_target_handle_pull": integrated_target_handle_ik,
                     "rigid_handle_pull_m": args.rigid_handle_pull_m,
+                    "handle_pull_lift_m": args.handle_pull_lift_m,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,

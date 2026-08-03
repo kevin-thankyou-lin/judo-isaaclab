@@ -328,6 +328,23 @@ def geometry_conditioned_drawer_open_position(
     return float(np.clip(max(float(requested_m), required), geometry.lower_limit_m, upper))
 
 
+def lift_handle_pull_pose(
+    pose: Any, cabinet_root_pose: Any, lift_m: float
+) -> np.ndarray:
+    """Bias the pull endpoint along the cabinet's semantic up axis.
+
+    A small upward hook keeps closing fingers engaged with high drawer pulls
+    as the arm approaches its inner-workspace limit.  Expressing the offset in
+    the cabinet frame also preserves the meaning for rotated assets.
+    """
+    result = _pose(pose, "pose").copy()
+    root = _pose(cabinet_root_pose, "cabinet_root_pose")
+    if not np.isfinite(lift_m) or lift_m < 0.0:
+        raise ValueError("lift_m must be finite and nonnegative")
+    result[:3] += quaternion_rotate(root[3:], [0.0, 0.0, 1.0]) * float(lift_m)
+    return result
+
+
 @dataclass(frozen=True)
 class SkillWaypoint:
     name: str
