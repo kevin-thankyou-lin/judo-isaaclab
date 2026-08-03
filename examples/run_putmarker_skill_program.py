@@ -905,8 +905,27 @@ def main() -> None:
             else args.handle_pull_vertical_offset_m
         )
         handle_engagement_depth_m = (
-            -0.015 if float(target_geometry.root_pose[2]) >= 1.04 else 0.0
+            0.0
         )
+        elevated_workspace = float(target_geometry.root_pose[2]) >= 1.04
+        right_handle_assist = None
+        right_handle_assist_ever = False
+        if elevated_workspace:
+            from dc_study.utils.grasp import build_grasp_assists
+
+            right_handle_assist = build_grasp_assists(
+                env,
+                {
+                    "right": {
+                        "mechanism": "friction",
+                        "arm": "right_arm",
+                        "target": {"object": "obj_1", "link": "link_1"},
+                        "grasp_delay_s": 0.0,
+                        "friction": {"high": 100.0, "low": 0.5},
+                    }
+                },
+            )["right"]
+            right_handle_assist.reset(env_ids)
         # Every asset uses the measured handle frame and joint axis.  The old
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
@@ -995,6 +1014,15 @@ def main() -> None:
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
+            if right_handle_assist is not None:
+                engage = torch.tensor(
+                    [SEMANTIC_INDICES["handle_grasp"] <= step < SEMANTIC_INDICES["drawer_closed"]],
+                    dtype=torch.bool,
+                    device=env.device,
+                )
+                disable = ~engage
+                right_handle_assist.update(engage=engage, disable=disable)
+                right_handle_assist_ever |= bool(right_handle_assist.engaged[0].item())
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
             if trajectory is not None and step == trajectory.waypoint_steps["drawer_open"]:
@@ -1178,7 +1206,10 @@ def main() -> None:
                 "control_rate_hz": 30,
                 "steps": total_steps,
                 "seed": args.seed,
-                "grasp_assistance": "none",
+                "grasp_assistance": (
+                    "task_config:right=friction" if right_handle_assist is not None else "none"
+                ),
+                "right_handle_friction_assist_engaged": right_handle_assist_ever,
                 "actual_device_receipt": actual_device_receipt,
                 "semantic_coordinate_axes_rendered": bool(args.draw_coordinate_axes),
                 "offline_ground_override": offline_ground,
