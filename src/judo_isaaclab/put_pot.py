@@ -1584,6 +1584,8 @@ def reanchor_supported_center_slide(
     observed_right_pose: Any,
     *,
     current_step: int | None = None,
+    reference_right_contact_local: Any | None = None,
+    contact_recovery_steps: int = CONTACT_FEEDBACK_HORIZON_STEPS,
 ) -> SkillTrajectory:
     """Preserve observed right contact while sliding the supported pot to center."""
     steps = trajectory.waypoint_steps
@@ -1594,7 +1596,14 @@ def reanchor_supported_center_slide(
     pot_pose = _pose(observed_pot_pose, "observed_pot_pose")
     cooktop_pose = _pose(observed_cooktop_pose, "observed_cooktop_pose")
     right_pose = _pose(observed_right_pose, "observed_right_pose")
-    right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
+    right_contact = (
+        compose_pose(inverse_pose(pot_pose), right_pose)
+        if reference_right_contact_local is None
+        else _pose(
+            reference_right_contact_local,
+            "reference_right_contact_local",
+        )
+    )
     centered_pot_pose = pot_pose.copy()
     centered_pot_pose[:2] = cooktop_pose[:2]
     right_center = compose_pose(centered_pot_pose, right_contact)
@@ -1615,9 +1624,24 @@ def reanchor_supported_center_slide(
     )
     right_withdraw = right_center.copy()
     right_withdraw[:3] += nominal_withdraw_delta
-    right[start : slide_end + 1] = interpolate_poses(
-        right_pose, right_center, slide_end - start + 1
-    )
+    remaining = slide_end - start + 1
+    if reference_right_contact_local is None:
+        right[start : slide_end + 1] = interpolate_poses(
+            right_pose, right_center, remaining
+        )
+    else:
+        if contact_recovery_steps < 1:
+            raise ValueError("contact_recovery_steps must be positive")
+        recovery_steps = min(int(contact_recovery_steps), remaining - 8)
+        if recovery_steps < 1:
+            raise ValueError("supported slide needs room for contact recovery")
+        right_reseated = compose_pose(pot_pose, right_contact)
+        right[start : start + recovery_steps] = interpolate_poses(
+            right_pose, right_reseated, recovery_steps
+        )
+        right[start + recovery_steps : slide_end + 1] = interpolate_poses(
+            right_reseated, right_center, remaining - recovery_steps
+        )
     right[slide_end + 1 : release_end + 1] = right_center
     right[release_end + 1 : withdraw_end + 1] = interpolate_poses(
         right_center,

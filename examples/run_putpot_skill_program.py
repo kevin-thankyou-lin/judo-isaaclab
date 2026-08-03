@@ -1550,9 +1550,9 @@ def main() -> None:
                         sample["cooktop_pose"],
                         sample["right_eef_pose"],
                         current_step=step,
-                    )
-                    center_slide_reference_right_contact_local = (
-                        observed_right_contact_local
+                        reference_right_contact_local=(
+                            center_slide_reference_right_contact_local
+                        ),
                     )
                     center_slide_reanchor_steps.append(step)
                     center_slide_reanchor_signed_residuals_local_m.append(
