@@ -1050,6 +1050,14 @@ def main() -> None:
             )
             for axis in transverse_handle_axes
         )
+        from judo_isaaclab.put_pot import transport_reanchor_position_step_limit_m
+
+        transport_reanchor_position_limit_m = (
+            transport_reanchor_position_step_limit_m(
+                args.max_position_step,
+                transport_contact_tracking_tolerance_m,
+            )
+        )
         center_lowering_signed_residual_world_m = None
         release_signed_residual_world_m = None
         target_left_handle_points = None
@@ -1318,7 +1326,7 @@ def main() -> None:
                         candidate_trajectory.left_poses[start : end + 1],
                         candidate_trajectory.right_poses[start : end + 1],
                     )
-                    if candidate_maximum_step_m <= args.max_position_step:
+                    if candidate_maximum_step_m <= transport_reanchor_position_limit_m:
                         trajectory = candidate_trajectory
                         transport_reanchor_steps.append(step)
                         transport_reanchor_signed_residuals_world_m.append(
@@ -1349,7 +1357,7 @@ def main() -> None:
                             {
                                 **signed_residual,
                                 "maximum_per_arm_step_m": candidate_maximum_step_m,
-                                "max_position_step_m": args.max_position_step,
+                                "position_step_limit_m": transport_reanchor_position_limit_m,
                             }
                         )
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:
@@ -1685,6 +1693,7 @@ def main() -> None:
                 "transport_reanchor_steps": transport_reanchor_steps,
                 "transport_reanchor_evaluation_steps": transport_reanchor_evaluation_steps,
                 "transport_contact_tracking_tolerance_m": transport_contact_tracking_tolerance_m,
+                "transport_reanchor_position_limit_m": transport_reanchor_position_limit_m,
                 "transport_reanchor_signed_residuals_world_m": transport_reanchor_signed_residuals_world_m,
                 "transport_reanchor_rejections": transport_reanchor_rejections,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,

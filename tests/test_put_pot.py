@@ -47,6 +47,7 @@ from judo_isaaclab.put_pot import (
     transfer_handle_pose_through_contact_frames,
     transfer_handle_pose_preserving_surface_clearance,
     transport_contact_reanchor_required,
+    transport_reanchor_position_step_limit_m,
     _linear_contact_feedback_poses,
 )
 
@@ -561,6 +562,15 @@ def test_bimanual_position_step_limit_is_measured_per_arm():
     right = np.asarray([_pose(y=1.0)] * 4 + [_pose(0.0, 1.02)] * 4)
     assert maximum_bimanual_position_step_m(left, right) == pytest.approx(0.02)
     assert cartesian_smoothness_metrics(left, right)["maximum_step_m"] > 0.02
+
+
+def test_transport_reanchor_step_limit_respects_handle_retention_geometry():
+    assert transport_reanchor_position_step_limit_m(0.025, 0.010) == pytest.approx(
+        0.010
+    )
+    assert transport_reanchor_position_step_limit_m(0.008, 0.010) == pytest.approx(
+        0.008
+    )
 
 
 def test_feedback_transport_recovers_clearance_on_first_commanded_sample():

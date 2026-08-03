@@ -1008,6 +1008,19 @@ def maximum_bimanual_position_step_m(
     )
 
 
+def transport_reanchor_position_step_limit_m(
+    controller_limit_m: float, handle_retention_tolerance_m: float
+) -> float:
+    """Keep feedback steps within both controller and handle geometry limits."""
+
+    values = np.asarray(
+        [controller_limit_m, handle_retention_tolerance_m], dtype=np.float64
+    )
+    if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("transport reanchor step limits must be positive and finite")
+    return float(np.min(values))
+
+
 def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
     """Return planar root-center error for the pot and cooktop."""
     pot = _pose(pot_pose, "pot_pose")
