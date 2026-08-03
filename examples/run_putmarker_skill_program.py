@@ -93,6 +93,35 @@ def _sha256(path: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
+def _actual_device_receipt(
+    requested: object,
+    environment: object,
+    simulation: object,
+    tensor_devices: list[object],
+) -> dict[str, object]:
+    """Return a fail-closed receipt for the device that executed physics/actions."""
+
+    requested_value = str(requested).lower()
+    actual_values = {
+        "manager_environment": str(environment).lower(),
+        "simulation_context": str(simulation).lower(),
+        "action_tensors": sorted({str(value).lower() for value in tensor_devices}),
+    }
+    expected = "cpu" if requested_value == "cpu" else requested_value
+    observed = [actual_values["manager_environment"], actual_values["simulation_context"]]
+    observed.extend(actual_values["action_tensors"])
+    matched = bool(observed) and all(value == expected for value in observed)
+    receipt = {
+        "requested": requested_value,
+        "expected": expected,
+        "actual": actual_values,
+        "matched": matched,
+    }
+    if not matched:
+        raise RuntimeError(f"actual device receipt mismatch: {receipt}")
+    return receipt
+
+
 def _json_attr(value: object) -> dict[str, str]:
     if isinstance(value, bytes):
         value = value.decode("utf-8")
@@ -814,6 +843,12 @@ def main() -> None:
         target = _load_dataset(args.target_dataset, args.episode, env.device)
         source["assets"] = source_assets
         target["assets"] = target_assets
+        actual_device_receipt = _actual_device_receipt(
+            args.device,
+            env.device,
+            getattr(env.sim, "device", env.device),
+            [source["actions"].device, target["actions"].device],
+        )
 
         env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
@@ -1014,6 +1049,7 @@ def main() -> None:
                 )
             ),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
+            "actual_device_matches": bool(actual_device_receipt["matched"]),
         }
         if args.classification_run:
             if args.mode != "replay":
@@ -1083,6 +1119,7 @@ def main() -> None:
                 "steps": total_steps,
                 "seed": args.seed,
                 "grasp_assistance": "none",
+                "actual_device_receipt": actual_device_receipt,
                 "semantic_coordinate_axes_rendered": bool(args.draw_coordinate_axes),
                 "offline_ground_override": offline_ground,
                 "source_semantic_indices": SEMANTIC_INDICES,
