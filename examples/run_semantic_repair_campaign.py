@@ -22,6 +22,7 @@ from run_three_task_asset_campaign import (
     _atomic_json,
     _command,
     _load,
+    _sha256,
     _task_success,
     enumerate_pairs,
     validate_asset_inventory,
@@ -38,17 +39,57 @@ def _trace(path: Path) -> dict[str, np.ndarray] | None:
         return {name: archive[name] for name in archive.files}
 
 
+def _published_artifact_receipt(
+    result_path: Path,
+    artifact: dict[str, Any] | None,
+    sibling_name: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Rebase inaccessible provenance to a hash-identical published sibling."""
+
+    if not artifact or not artifact.get("path"):
+        return artifact, False
+    original = Path(artifact["path"])
+    if original.is_file():
+        return artifact, False
+    sibling = result_path.with_name(sibling_name)
+    expected_hash = artifact.get("sha256")
+    if (
+        not sibling.is_file()
+        or expected_hash is None
+        or _sha256(sibling) != expected_hash
+    ):
+        return artifact, False
+    published = dict(artifact)
+    published["path"] = str(sibling.resolve())
+    return published, True
+
+
 def _result_record(result_path: Path, source: str) -> dict[str, Any] | None:
     if not result_path.is_file():
         return None
     result = _load(result_path)
-    trace_value = result.get("provenance", {}).get("trace", {}).get("path")
+    provenance = result.get("provenance", {})
+    video, video_rebased = _published_artifact_receipt(
+        result_path, result.get("video"), "skill.mp4"
+    )
+    trace, trace_rebased = _published_artifact_receipt(
+        result_path, provenance.get("trace"), "skill_trace.npz"
+    )
+    demonstration, demo_rebased = _published_artifact_receipt(
+        result_path, provenance.get("demonstration"), "skill_demo.hdf5"
+    )
+    trace_value = (trace or {}).get("path")
     trace_path = Path(trace_value) if trace_value else result_path.with_name("skill_trace.npz")
     return {
         "source": source,
         "result_path": str(result_path.resolve()),
         "result": result,
         "trace_path": str(trace_path),
+        "video_path": (video or {}).get("path"),
+        "demonstration": demonstration,
+        "published_artifacts_rebased": bool(
+            video_rebased or trace_rebased or demo_rebased
+        ),
     }
 
 
@@ -270,7 +311,8 @@ def refresh_ledger(
                 selected = successes[-1]
                 result = selected["result"]
                 demonstration = _validate_demo_receipt(
-                    result["provenance"]["demonstration"],
+                    selected.get("demonstration")
+                    or result["provenance"]["demonstration"],
                     pair["assets"],
                     fallback=previous.get("demonstration"),
                 )
@@ -278,10 +320,13 @@ def refresh_ledger(
                     {
                         "accepted_source": selected["source"],
                         "result": selected["result_path"],
-                        "video": result.get("video", {}).get("path"),
+                        "video": selected.get("video_path")
+                        or result.get("video", {}).get("path"),
                         "demonstration": demonstration,
                     }
                 )
+                if selected.get("published_artifacts_rebased"):
+                    record["trace"] = selected["trace_path"]
             elif preserved_primary:
                 demonstration = _validate_demo_receipt(
                     primary_demo,
