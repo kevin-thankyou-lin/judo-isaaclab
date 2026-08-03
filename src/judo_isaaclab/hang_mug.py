@@ -119,9 +119,19 @@ def geometry_conditioned_hang_pose(
         (handle_x, branch_tangent_world, handle_z)
     )
     target_handle_world[3:] = pose_from_matrix(aligned_handle_matrix)[3:]
-    # Seat the authored target handle-hole center on the authored branch
-    # support point after aligning the opening axis.
-    target_handle_world[:3] = target_branch_world[:3]
+    # Seat the authored target handle-hole center at the middle of the detected
+    # branch segment after aligning the opening axis.  The extraction frame is
+    # intentionally near the tip for branch identification and approach, but
+    # a long branch with a narrow handle can slide free from that shallow
+    # location after release.  The segment midpoint is a geometry-only support
+    # location with branch material on both sides; it uses no asset ID or
+    # sampled candidate.
+    target_support_local = target_branch.frame.copy()
+    target_support_local[:3] = 0.5 * (
+        target_branch.inner_point + target_branch.tip_point
+    )
+    target_support_world = compose_pose(target_tree_pose, target_support_local)
+    target_handle_world[:3] = target_support_world[:3]
     return (
         compose_pose(target_handle_world, inverse_pose(target_parts.handle_hole_frame)),
         source_branch,

@@ -86,7 +86,11 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     assert matched_target is target_branch
     assert np.all(np.isfinite(final))
     target_handle_world = compose_pose(final, target_parts.handle_hole_frame)
-    target_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), target_branch.frame)
+    target_support = target_branch.frame.copy()
+    target_support[:3] = 0.5 * (
+        target_branch.inner_point + target_branch.tip_point
+    )
+    target_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), target_support)
     assert target_handle_world[:3] == pytest.approx(target_branch_world[:3])
     handle_hole_axis = quaternion_rotate(
         target_handle_world[3:], [0.0, 1.0, 0.0]
