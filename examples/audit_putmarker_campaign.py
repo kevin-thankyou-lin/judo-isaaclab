@@ -98,7 +98,7 @@ def audit_pair(key: str, record: dict[str, Any]) -> dict[str, Any]:
         in {
             "none",
             "task_config:right=friction",
-            "task_config:right=fixed_joint(link_2)",
+            "task_config:right=fixed_joint(link_2,joint_type=spherical)",
         }
     ):
         errors.append("deterministic continuous-rollout protocol failed")

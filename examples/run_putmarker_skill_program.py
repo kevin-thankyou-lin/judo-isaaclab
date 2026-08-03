@@ -1002,6 +1002,13 @@ def main() -> None:
                 float(target_geometry.handle_point_local[2]),
             )
         )
+        # A six-axis fixed constraint between two independently controlled
+        # articulations over-constrains the wrist and stalls this pull.  The
+        # established assist supports a spherical joint, which preserves the
+        # engage-time contact point while leaving wrist orientation unconstrained.
+        right_handle_assist_joint_type = (
+            "spherical" if right_handle_assist_mechanism == "fixed_joint" else None
+        )
         right_handle_assist = None
         right_handle_assist_ever = False
         if right_handle_assist_reason is not None:
@@ -1017,7 +1024,7 @@ def main() -> None:
                 assist_spec["friction"] = {"high": 100.0, "low": 0.5}
             elif right_handle_assist_mechanism == "fixed_joint":
                 assist_spec["fixed_joint"] = {
-                    "joint_type": "fixed",
+                    "joint_type": right_handle_assist_joint_type,
                     "disable_pair_collision": True,
                 }
             right_handle_assist = build_grasp_assists(
@@ -1319,7 +1326,9 @@ def main() -> None:
                 "grasp_assistance": (
                     {
                         "friction": "task_config:right=friction",
-                        "fixed_joint": "task_config:right=fixed_joint(link_2)",
+                        "fixed_joint": (
+                            "task_config:right=fixed_joint(link_2,joint_type=spherical)"
+                        ),
                     }.get(right_handle_assist_mechanism, "none")
                 ),
                 "right_handle_friction_assist_engaged": (
@@ -1331,6 +1340,7 @@ def main() -> None:
                     and right_handle_assist_mechanism == "fixed_joint"
                 ),
                 "right_handle_assist_mechanism": right_handle_assist_mechanism,
+                "right_handle_assist_joint_type": right_handle_assist_joint_type,
                 "right_handle_assist_reason": right_handle_assist_reason,
                 "right_handle_friction_assist_reason": (
                     right_handle_assist_reason
