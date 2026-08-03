@@ -1149,6 +1149,7 @@ def main() -> None:
         peer_contact_latch_jaw_residual_m = None
         peer_contact_jaw_twist_rad = None
         peer_contact_jaw_twist_fraction = None
+        peer_contact_gripper_retime = None
         peer_contact_recovery_residuals_m = []
         peer_contact_pad_reseat_m = 0.0
         peer_contact_pad_reseat_residuals_m = []
@@ -1423,6 +1424,8 @@ def main() -> None:
                     reanchor_missing_finger_pad_depth,
                     reanchor_single_contact_pad_fraction,
                     geometry_conditioned_loaded_jaw_rotation_fraction,
+                    retime_loaded_gripper_close_for_pad_reseat,
+                    single_contact_pad_base_residual_m,
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
@@ -1470,6 +1473,30 @@ def main() -> None:
                             rotation_fraction=peer_contact_jaw_twist_fraction,
                         )
                     )
+                    initial_pad_reseat_residual_m = (
+                        single_contact_pad_base_residual_m(
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                        )
+                    )
+                    trajectory, gripper_hold_steps = (
+                        retime_loaded_gripper_close_for_pad_reseat(
+                            trajectory,
+                            step,
+                            initial_pad_reseat_residual_m,
+                        )
+                    )
+                    peer_contact_gripper_retime = {
+                        "step": step,
+                        "retained_command": float(
+                            trajectory.grippers[step, 0]
+                        ),
+                        "pad_reseat_residual_m": (
+                            initial_pad_reseat_residual_m
+                        ),
+                        "hold_steps": gripper_hold_steps,
+                        "close_end_step": grasp_complete_step,
+                    }
                     left_handle_contact = compose_pose(
                         inverse_pose(sample["pot_pose"]),
                         loaded_left_world,
@@ -2428,6 +2455,7 @@ def main() -> None:
                 "peer_contact_jaw_twist_fraction": (
                     peer_contact_jaw_twist_fraction
                 ),
+                "peer_contact_gripper_retime": peer_contact_gripper_retime,
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
                 ),

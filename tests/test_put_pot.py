@@ -46,6 +46,7 @@ from judo_isaaclab.put_pot import (
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
     reanchor_single_contact_pad_fraction,
+    retime_loaded_gripper_close_for_pad_reseat,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_handle_jaw_center_step,
@@ -55,6 +56,7 @@ from judo_isaaclab.put_pot import (
     reanchor_supported_center_slide,
     seat_handle_inside_finger_pads,
     single_finger_contact_observed,
+    single_contact_pad_base_residual_m,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     support_boundary_staging_pose,
@@ -419,6 +421,32 @@ def test_loaded_jaw_twist_scales_only_from_retained_pad_base_residual():
     assert geometry_conditioned_loaded_jaw_rotation_fraction(
         [8.0, 8.0], [0.2, 0.8]
     ) == pytest.approx(LOADED_JAW_REACH_AVOIDANCE_FRACTION)
+
+
+def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=8,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["left_handle_grasp"] - 2
+    residual = single_contact_pad_base_residual_m(
+        [0.0, 8.0], [np.nan, 0.734]
+    )
+    retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, residual, reseat_step_m=0.02
+    )
+    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    assert hold_steps == 2
+    assert retimed.grippers[step + 1 : step + 3, 0] == pytest.approx(
+        trajectory.grippers[step, 0]
+    )
+    assert np.all(np.diff(retimed.grippers[step + 2 : grasp_end + 1, 0]) >= 0.0)
+    assert retimed.grippers[grasp_end, 0] == pytest.approx(0.0)
+    assert retimed.grippers[:, 1] == pytest.approx(trajectory.grippers[:, 1])
+    assert retimed.left_poses == pytest.approx(trajectory.left_poses)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

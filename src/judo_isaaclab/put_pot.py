@@ -654,6 +654,74 @@ def geometry_conditioned_loaded_jaw_rotation_fraction(
     return float(np.clip(base_fraction + baseward_residual, 0.0, 1.0))
 
 
+def single_contact_pad_base_residual_m(
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    *,
+    target_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
+    contact_threshold_n: float = 0.1,
+) -> float:
+    """Measure the retained contact's signed baseward pad residual."""
+
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return 0.0
+    fraction = float(fractions[int(np.flatnonzero(contacting)[0])])
+    if not np.isfinite(fraction):
+        return 0.0
+    return float(
+        max(0.0, fraction - target_fraction) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    )
+
+
+def retime_loaded_gripper_close_for_pad_reseat(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    reseat_distance_m: float,
+    *,
+    reseat_step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
+) -> tuple[SkillTrajectory, int]:
+    """Hold a loaded jaw open for reseating, then close it monotonically."""
+
+    step = int(current_step)
+    grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
+    if grasp_end is None or step < 0 or step >= grasp_end:
+        raise ValueError("loaded gripper retime step is outside contact hold")
+    if not np.isfinite(reseat_distance_m) or reseat_distance_m < 0.0:
+        raise ValueError("reseat_distance_m must be finite and nonnegative")
+    if not np.isfinite(reseat_step_m) or reseat_step_m <= 0.0:
+        raise ValueError("reseat_step_m must be finite and positive")
+    remaining = grasp_end - step
+    hold_steps = min(int(np.ceil(reseat_distance_m / reseat_step_m)), remaining - 1)
+    grippers = trajectory.grippers.copy()
+    retained_command = float(grippers[step, 0])
+    hold_end = step + hold_steps
+    if hold_steps:
+        grippers[step + 1 : hold_end + 1, 0] = retained_command
+    close_steps = grasp_end - hold_end
+    grippers[hold_end + 1 : grasp_end + 1, 0] = np.linspace(
+        retained_command,
+        0.0,
+        close_steps + 1,
+    )[1:]
+    return (
+        SkillTrajectory(
+            left_poses=trajectory.left_poses.copy(),
+            right_poses=trajectory.right_poses.copy(),
+            grippers=grippers,
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        hold_steps,
+    )
+
+
 def reanchor_handle_jaw_center_step(
     contact_local: Any,
     pot_root_pose: Any,
