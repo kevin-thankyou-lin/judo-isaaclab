@@ -317,6 +317,12 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
     assert geometry_conditioned_handle_balance_limit(
         source, [0.0666, 0.0657, 0.030], 0, 0.030
     ) == pytest.approx(0.003)
+    assert geometry_conditioned_handle_balance_limit(
+        [0.059453, 0.085784, 0.040560],
+        [0.069219, 0.061195, 0.020012],
+        0,
+        0.0375,
+    ) == pytest.approx(0.005)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

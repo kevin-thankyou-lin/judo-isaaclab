@@ -47,7 +47,11 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 )
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
-THIN_HANDLE_BALANCE_RATIO = 0.45
+# Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
+# missing finger near -0.04 along the pad axis.  Its authored positive depth
+# imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
+# same bounded 2 mm positive pivot extension as the thinner Pot019 handle.
+THIN_HANDLE_BALANCE_RATIO = 0.50
 # Pot020 attempts 002-003 showed that position symmetry at 49.4% retained
 # transverse thickness changed a sustained one-finger contact into a complete
 # close-window miss.  Keep the position mirror restricted to the 42.1%-retained
@@ -565,11 +569,11 @@ def geometry_conditioned_handle_balance_limit(
 ) -> float:
     """Add measured finger-0 pivot authority only for severely thinned handles.
 
-    Pot019 attempt_004 held the opposite arm for 210 strict frames, while this
-    arm's finger 0 remained only 0.021 pad-fraction tip-side.  Its target's
-    minimum transverse/source ratio is 0.421.  Preserve the proven negative
-    pivot cap and add 2 mm only when that measured thinning coincides with a
-    positive authored finger-0-minus-finger-1 depth residual.
+    Pot019 attempt_004 and Pot020 attempt_005 both held the opposite arm while
+    this arm's finger 0 remained tip-side.  Their target minimum
+    transverse/source ratios are 0.421 and 0.494.  Preserve the proven negative
+    pivot cap and add 2 mm only when measured thinning coincides with a positive
+    authored finger-0-minus-finger-1 depth residual.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
