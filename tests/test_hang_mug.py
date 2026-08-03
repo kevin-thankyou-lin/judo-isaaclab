@@ -12,7 +12,6 @@ from judo_isaaclab.hang_mug import (
     RigidAssetGeometry,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
-    inset_pose_toward,
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
@@ -39,20 +38,6 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
     target = RigidAssetGeometry(_pose(4.0, 5.0, 6.0), [0.4, 0.15, 0.24])
     transferred = target.transfer_pose_from(source, _pose(1.05, 2.04, 3.1))
     assert transferred[:3] == pytest.approx([4.1, 5.06, 6.08])
-
-
-def test_contact_inset_uses_exact_authored_direction_and_distance():
-    contact = _pose(-0.05277942, -0.02890474, 0.14122032)
-    body = _pose(-0.02007394, -0.00029933, -0.00004495)
-    thickness = 0.012015256
-    inset = inset_pose_toward(contact, body, thickness)
-    direction = body[:3] - contact[:3]
-    expected = contact[:3] + thickness * direction / np.linalg.norm(direction)
-    assert inset[:3] == pytest.approx(expected)
-    assert np.linalg.norm(inset[:3] - contact[:3]) == pytest.approx(thickness)
-    assert inset[3:] == pytest.approx(contact[3:])
-    with pytest.raises(ValueError, match="nonnegative"):
-        inset_pose_toward(contact, body, -0.001)
 
 
 def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
@@ -444,4 +429,37 @@ def test_handover_pregrasp_reanchors_close_to_observed_mug():
     assert adjusted.right_poses[grasp_end] == pytest.approx(corrected)
     assert adjusted.right_poses[grasp_end + 1 : release_end + 1] == pytest.approx(
         np.repeat(corrected[None], release_end - grasp_end, axis=0)
+    )
+
+
+def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
+    program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    program.semantic_left_grasp(
+        _pose(z=1), _pose(z=1), _pose(z=1),
+        approach_steps=1, close_steps=1, lift_steps=1,
+    )
+    grasp = _pose(0.3, -0.2, 1)
+    program.physical_handover(
+        _pose(z=1), _pose(0.3, -0.1, 1), grasp, _pose(0.2, z=1),
+        approach_steps=2, contact_settle_steps=3, close_steps=2,
+        release_steps=2,
+    )
+    trajectory = program.build()
+    settle_end = trajectory.waypoint_steps["right_grasp_settle"]
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    assert trajectory.right_poses[settle_end] == pytest.approx(grasp)
+    assert trajectory.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
+        np.repeat(grasp[None], grasp_end - settle_end, axis=0)
+    )
+    assert trajectory.grippers[settle_end, 1] == pytest.approx(-0.0475)
+    assert trajectory.grippers[grasp_end, 1] == pytest.approx(0.0)
+
+    observed_mug = _pose(0.4, 0.2, 0.8)
+    corrected = compose_pose(observed_mug, _pose(0.05, -0.02, 0.03))
+    adjusted = reanchor_right_grasp_from_observed_mug(
+        trajectory, _pose(0.05, -0.02, 0.03), observed_mug, _pose(0.4, 0.0, 1)
+    )
+    assert adjusted.right_poses[settle_end] == pytest.approx(corrected)
+    assert adjusted.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
+        np.repeat(corrected[None], grasp_end - settle_end, axis=0)
     )

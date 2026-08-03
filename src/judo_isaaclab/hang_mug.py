@@ -216,36 +216,6 @@ def ensure_pick_latch_clearance(
     return handover
 
 
-def inset_pose_toward(
-    pose: Any,
-    target_pose: Any,
-    distance_m: float,
-) -> np.ndarray:
-    """Move a contact pose toward an authored target by an exact distance.
-
-    This is used to compensate for a thick handle preventing the receiving
-    gripper from reaching the source-proposed contact.  The direction comes
-    from the authored handle/body geometry and the magnitude is expressed in
-    measured handle thicknesses; no contact threshold or sampled candidate is
-    involved.
-    """
-
-    result = _pose(pose, "pose").copy()
-    target = _pose(target_pose, "target_pose")
-    distance = float(distance_m)
-    if not np.isfinite(distance) or distance < 0.0:
-        raise ValueError("distance_m must be finite and nonnegative")
-    direction = target[:3] - result[:3]
-    norm = float(np.linalg.norm(direction))
-    if distance > 0.0 and norm < 1.0e-8:
-        raise ValueError("cannot inset a pose whose target is coincident")
-    if distance > norm:
-        raise ValueError("distance_m cannot move the pose beyond its target")
-    if distance > 0.0:
-        result[:3] += direction * (distance / norm)
-    return result
-
-
 def reanchor_right_grasp_from_observed_mug(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,
@@ -260,14 +230,16 @@ def reanchor_right_grasp_from_observed_mug(
         raise ValueError(f"handover trajectory is missing waypoints: {missing}")
     steps = trajectory.waypoint_steps
     start = steps["handover_pregrasp"] + 1
+    approach_end = steps.get("right_grasp_settle", steps["right_grasp"])
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
     nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
     corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[start : grasp_end + 1] = interpolate_poses(
-        observed_right_pose, corrected_grasp, grasp_end - start + 1
+    right[start : approach_end + 1] = interpolate_poses(
+        observed_right_pose, corrected_grasp, approach_end - start + 1
     )
+    right[approach_end + 1 : grasp_end + 1] = corrected_grasp
     right[grasp_end + 1 : release_end + 1] = corrected_grasp
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -396,6 +368,7 @@ class HangMugSkillProgram:
         approach_steps: int,
         close_steps: int,
         release_steps: int,
+        contact_settle_steps: int = 0,
         closed: float = 0.0,
         opened: float = -0.0475,
     ) -> None:
@@ -406,6 +379,15 @@ class HangMugSkillProgram:
             left_pose=left_anchor,
             right_pose=right_pregrasp,
         )
+        if contact_settle_steps < 0:
+            raise ValueError("contact_settle_steps must be nonnegative")
+        if contact_settle_steps:
+            self._append(
+                "right_grasp_settle",
+                "physical_handover",
+                contact_settle_steps,
+                right_pose=right_grasp,
+            )
         self._append(
             "right_grasp",
             "physical_handover",
