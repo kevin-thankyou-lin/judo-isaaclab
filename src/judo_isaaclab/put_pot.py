@@ -1121,6 +1121,7 @@ def reanchor_bimanual_transport_from_observation(
     *,
     transport_clearance_m: float,
     collision_clearance_m: float,
+    current_step: int | None = None,
 ) -> tuple[SkillTrajectory, SmoothBimanualTransport]:
     """Rebuild the transport tail from measured contacts after both closes."""
 
@@ -1146,8 +1147,11 @@ def reanchor_bimanual_transport_from_observation(
         max(float(transport_clearance_m), float(collision_clearance_m))
         + TRANSPORT_PLANNING_MARGIN_M
     )
-    start = max(steps["left_handle_grasp"], steps["right_handle_grasp"]) + 1
+    grasp_end = max(steps["left_handle_grasp"], steps["right_handle_grasp"])
+    start = grasp_end + 1 if current_step is None else int(current_step) + 1
     transport_end = steps["smooth_transport"]
+    if start <= grasp_end or start > transport_end:
+        raise ValueError("current transport reanchor step is outside the transport window")
     transport = smooth_collision_aware_bimanual_transport(
         pot_pose,
         transport_target,

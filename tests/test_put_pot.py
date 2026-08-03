@@ -818,6 +818,24 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         compose_pose(final, left_contact)
     )
 
+    late_step = start + 2
+    late, late_transport = reanchor_bimanual_transport_from_observation(
+        trajectory,
+        observed,
+        observed_left,
+        observed_right,
+        final,
+        pot_size,
+        cooktop,
+        transport_clearance_m=0.025,
+        collision_clearance_m=0.025,
+        current_step=late_step,
+    )
+    assert compose_pose(
+        inverse_pose(late_transport.pot_poses[0]),
+        late.left_poses[late_step + 1],
+    ) == pytest.approx(left_contact)
+
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():
     source = RigidSupportGeometry(_pose(1.0, 2.0, 3.0), [0.4, 0.2, 0.1])
