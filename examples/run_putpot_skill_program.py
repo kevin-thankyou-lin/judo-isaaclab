@@ -393,13 +393,11 @@ def _build_skill(
         if frame_name == f"{arm}_handle_grasp":
             from judo_isaaclab.put_pot import (
                 HANDLE_PAD_DEPTH_MARGIN_M,
-                deepen_handle_contact_along_approach,
+                seat_handle_inside_finger_pads,
             )
 
-            surface_pose = deepen_handle_contact_along_approach(
-                transfer_surface(f"{arm}_pregrasp", arm),
-                surface_pose,
-                HANDLE_PAD_DEPTH_MARGIN_M,
+            surface_pose = seat_handle_inside_finger_pads(
+                surface_pose, HANDLE_PAD_DEPTH_MARGIN_M
             )
         return surface_pose
 

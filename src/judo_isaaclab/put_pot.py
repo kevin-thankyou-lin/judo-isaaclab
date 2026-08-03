@@ -102,21 +102,16 @@ def transfer_handle_pose_preserving_surface_clearance(
     return compose_pose(target_frame, local)
 
 
-def deepen_handle_contact_along_approach(
-    pregrasp_pose: Any, grasp_pose: Any, depth_m: float
-) -> np.ndarray:
-    """Advance a grasp through the handle along its measured approach line."""
+def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
+    """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 
-    pregrasp = _pose(pregrasp_pose, "pregrasp_pose")
     grasp = _pose(grasp_pose, "grasp_pose")
     if not np.isfinite(depth_m) or depth_m < 0.0:
         raise ValueError("depth_m must be finite and nonnegative")
-    direction = grasp[:3] - pregrasp[:3]
-    distance = float(np.linalg.norm(direction))
-    if distance < 1.0e-8:
-        raise ValueError("pregrasp and grasp positions must differ")
     result = grasp.copy()
-    result[:3] += float(depth_m) * direction / distance
+    result[:3] += float(depth_m) * quaternion_rotate(
+        result[3:], np.asarray([0.0, 0.0, 1.0])
+    )
     return result
 
 
