@@ -51,14 +51,14 @@ def test_low_feet_cabinet_handle_uses_horizontal_collision_clear_pull():
     ) == -0.04
 
 
-def test_low_feet_handle_uses_target_semantic_frame_and_labeled_friction():
+def test_low_feet_handle_uses_target_semantic_frame_and_labeled_fixed_joint():
     module = _module()
 
     assert module._right_handle_assist_spec(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_009.hdf5",
         1.0048,
         -0.1311,
-    ) == ("friction", "target_semantic_low_feet_handle")
+    ) == ("fixed_joint", "target_semantic_low_feet_handle_runtime_coupling")
     assert module._uses_target_handle_keyframe(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_009.hdf5",
         1.0048,

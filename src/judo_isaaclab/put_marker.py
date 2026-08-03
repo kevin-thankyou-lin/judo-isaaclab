@@ -65,25 +65,6 @@ def inverse_pose(value: Any) -> np.ndarray:
     return result
 
 
-def reorient_pose_about_point(
-    pose: Any, orientation: Any, point: Any
-) -> np.ndarray:
-    """Change orientation while preserving the same tool-local contact point."""
-
-    pose = _pose(pose)
-    orientation = np.asarray(orientation, dtype=np.float64)
-    orientation /= np.linalg.norm(orientation)
-    point = np.asarray(point, dtype=np.float64)
-    if point.shape != (3,):
-        raise ValueError(f"point must have shape (3,), got {point.shape}")
-    inverse_orientation = pose[3:] * np.asarray([1.0, -1.0, -1.0, -1.0])
-    local_point = quaternion_rotate(inverse_orientation, point - pose[:3])
-    result = pose.copy()
-    result[3:] = orientation
-    result[:3] = point - quaternion_rotate(orientation, local_point)
-    return result
-
-
 def transfer_pose(
     value: Any,
     source_frame: Any,
@@ -170,16 +151,6 @@ def _slerp(left: np.ndarray, right: np.ndarray, fraction: np.ndarray) -> np.ndar
         np.sin((1.0 - fraction) * angle)[:, None] * left[None]
         + np.sin(fraction * angle)[:, None] * right[None]
     ) / denominator
-
-
-def slerp_quaternion(left: Any, right: Any, fraction: float) -> np.ndarray:
-    """Interpolate or extrapolate one scalar-first orientation."""
-
-    return _slerp(
-        np.asarray(left, dtype=np.float64),
-        np.asarray(right, dtype=np.float64),
-        np.asarray([float(fraction)], dtype=np.float64),
-    )[0]
 
 
 def interpolate_poses(start: Any, target: Any, steps: int) -> np.ndarray:

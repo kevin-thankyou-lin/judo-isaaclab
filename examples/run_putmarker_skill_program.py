@@ -317,8 +317,6 @@ def _build_skill(
         inverse_pose,
         offset_handle_pull_pose,
         quaternion_rotate,
-        reorient_pose_about_point,
-        slerp_quaternion,
         transfer_pose,
     )
 
@@ -399,24 +397,15 @@ def _build_skill(
     target_handle_grasp_index = (
         _target_drawer_grasp_index(target) if use_target_handle_keyframe else None
     )
-    handle_pregrasp = right_handle("handle_pregrasp")
-    handle_grasp = right_handle("handle_grasp")
-    if target_handle_grasp_index is not None:
-        handle_point = target_geometry.handle_frame(0.0)[:3]
-        target_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
-        target_grasp = target_right_attach(target_handle_grasp_index)
-        target_pregrasp[3:] = slerp_quaternion(
-            handle_pregrasp[3:], target_pregrasp[3:], 3.0
-        )
-        target_grasp[3:] = slerp_quaternion(
-            handle_grasp[3:], target_grasp[3:], 3.0
-        )
-        handle_pregrasp = reorient_pose_about_point(
-            handle_pregrasp, target_pregrasp[3:], handle_point
-        )
-        handle_grasp = reorient_pose_about_point(
-            handle_grasp, target_grasp[3:], handle_point
-        )
+    if target_handle_grasp_index is None:
+        handle_pregrasp = right_handle("handle_pregrasp")
+        handle_grasp = right_handle("handle_grasp")
+    else:
+        # This low handle puts the source-transferred tool frame below the
+        # robot's collision-free workspace. Use the official matched demo's
+        # semantic approach/grasp boundary, not its complete joint trajectory.
+        handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
+        handle_grasp = target_right_attach(target_handle_grasp_index)
     inward = -quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * float(handle_engagement_depth_m)
@@ -895,7 +884,7 @@ def _right_handle_assist_spec(
         and cabinet_root_z_m + handle_point_local_z_m < 0.89
     )
     if low_feet_handle:
-        return "friction", "target_semantic_low_feet_handle"
+        return "fixed_joint", "target_semantic_low_feet_handle_runtime_coupling"
     reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
     return ("friction", reason) if reason is not None else (None, None)
 
@@ -1019,12 +1008,18 @@ def main() -> None:
             from dc_study.utils.grasp import build_grasp_assists
 
             assist_spec = {
-                "mechanism": "friction",
+                "mechanism": right_handle_assist_mechanism,
                 "arm": "right_arm",
                 "target": {"object": "obj_1", "link": "link_2"},
                 "grasp_delay_s": 0.0,
-                "friction": {"high": 100.0, "low": 0.5},
             }
+            if right_handle_assist_mechanism == "friction":
+                assist_spec["friction"] = {"high": 100.0, "low": 0.5}
+            elif right_handle_assist_mechanism == "fixed_joint":
+                assist_spec["fixed_joint"] = {
+                    "joint_type": "fixed",
+                    "disable_pair_collision": True,
+                }
             right_handle_assist = build_grasp_assists(
                 env,
                 {"right": assist_spec},
@@ -1324,11 +1319,16 @@ def main() -> None:
                 "grasp_assistance": (
                     {
                         "friction": "task_config:right=friction",
+                        "fixed_joint": "task_config:right=fixed_joint(link_2)",
                     }.get(right_handle_assist_mechanism, "none")
                 ),
                 "right_handle_friction_assist_engaged": (
                     right_handle_assist_ever
                     and right_handle_assist_mechanism == "friction"
+                ),
+                "right_handle_fixed_joint_assist_engaged": (
+                    right_handle_assist_ever
+                    and right_handle_assist_mechanism == "fixed_joint"
                 ),
                 "right_handle_assist_mechanism": right_handle_assist_mechanism,
                 "right_handle_assist_reason": right_handle_assist_reason,
@@ -1358,14 +1358,11 @@ def main() -> None:
                     ),
                     "handle_engagement_depth_m": handle_engagement_depth_m,
                     "handle_grasp_frame_source": (
-                        "source_contact_point_target_semantic_orientation"
+                        "target_matched_semantic_drawer_motion_boundary"
                         if target_handle_grasp_index is not None
                         else "source_semantic_handle_frame"
                     ),
                     "target_handle_grasp_index": target_handle_grasp_index,
-                    "target_handle_orientation_extrapolation": (
-                        3.0 if target_handle_grasp_index is not None else None
-                    ),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
