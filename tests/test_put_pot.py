@@ -6,6 +6,7 @@ from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
     HANDLE_PAD_DEPTH_MARGIN_M,
+    LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
     MISSING_FINGER_CONTACT_LIMIT_M,
     SINGLE_FINGER_CONTACT_LATCH_STEPS,
@@ -479,6 +480,24 @@ def test_jaw_twist_removes_limited_axis_without_changing_pad_tangent():
     assert quaternion_rotate(result[3:], [0.0, 1.0, 0.0]) == pytest.approx(
         [0.0, 1.0, 0.0], abs=1e-9
     )
+
+
+def test_loaded_jaw_twist_uses_measured_partial_reach_avoidance():
+    pose = _pose()
+    pads = np.asarray([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+    full, full_angle = twist_jaw_away_from_limited_axis(pose, pads)
+    partial, partial_angle = twist_jaw_away_from_limited_axis(
+        pose,
+        pads,
+        rotation_fraction=LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+    )
+
+    assert partial_angle == pytest.approx(
+        LOADED_JAW_REACH_AVOIDANCE_FRACTION * full_angle
+    )
+    assert partial[3:] != pytest.approx(full[3:])
+    with pytest.raises(ValueError, match="rotation_fraction"):
+        twist_jaw_away_from_limited_axis(pose, pads, rotation_fraction=1.01)
 
 
 def test_contact_recovery_remeasures_authored_jaw_residual_each_step():

@@ -73,6 +73,13 @@ MISSING_FINGER_PAD_DEPTH_LIMIT_M = 0.010
 MISSING_FINGER_PAD_TARGET_FRACTION = 0.02
 SINGLE_FINGER_CONTACT_LATCH_FRACTION = 0.20
 SINGLE_FINGER_CONTACT_LATCH_STEPS = CONTACT_FEEDBACK_HORIZON_STEPS
+# Pot021 attempt_019 left the missing pad just before the authored pad interval
+# (fraction -0.04), while attempt_020's complete -26.9 degree reach-avoidance
+# twist carried it beyond the opposite end (fraction 1.03).  The other pad
+# remained supported at fractions 0.22-0.31.  Interpolating those measured,
+# signed contact residuals puts the missing pad at 0.44 without sacrificing the
+# acquired pad.  This is a fixed geometry-conditioned correction, not a search.
+LOADED_JAW_REACH_AVOIDANCE_FRACTION = 0.45
 MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     MISSING_FINGER_CONTACT_DELAY_STEPS
     + int(np.ceil(MISSING_FINGER_CONTACT_LIMIT_M / MISSING_FINGER_CONTACT_STEP_M))
@@ -517,8 +524,9 @@ def twist_jaw_away_from_limited_axis(
     pad_axes_world: Any,
     *,
     limited_axis_world: Any = (1.0, 0.0, 0.0),
+    rotation_fraction: float = 1.0,
 ) -> tuple[np.ndarray, float]:
-    """Twist about the acquired pad tangent to remove jaw motion on one axis."""
+    """Twist about the acquired pad tangent toward a reach-neutral jaw axis."""
 
     value = _pose(pose, "pose")
     pads = np.asarray(pad_axes_world, dtype=np.float64)
@@ -527,6 +535,8 @@ def twist_jaw_away_from_limited_axis(
         raise ValueError("pad_axes_world must contain two finite 3D axes")
     if limited.shape != (3,) or not np.all(np.isfinite(limited)):
         raise ValueError("limited_axis_world must contain three finite values")
+    if not np.isfinite(rotation_fraction) or not (0.0 <= rotation_fraction <= 1.0):
+        raise ValueError("rotation_fraction must be in [0, 1]")
     pad_axis = np.mean(pads, axis=0)
     pad_axis /= np.linalg.norm(pad_axis)
     limited /= np.linalg.norm(limited)
@@ -543,12 +553,13 @@ def twist_jaw_away_from_limited_axis(
     target /= target_norm
     if np.dot(target, jaw_world) < 0.0:
         target *= -1.0
-    angle = float(
+    neutral_angle = float(
         np.arctan2(
             np.dot(pad_axis, np.cross(jaw_world, target)),
             np.dot(jaw_world, target),
         )
     )
+    angle = rotation_fraction * neutral_angle
     delta = np.concatenate(
         ([np.cos(0.5 * angle)], pad_axis * np.sin(0.5 * angle))
     )
