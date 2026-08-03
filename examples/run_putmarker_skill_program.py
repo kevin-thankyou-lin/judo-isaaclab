@@ -41,7 +41,7 @@ SEMANTIC_INDICES = {
 # The official target semantic wrist frame is collision-free for the low drawer,
 # but the current runtime's fingertips sit above its handle.  This measured
 # correction restores contact without importing the target joint trajectory.
-TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.020
+TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
 
 
 def _parser() -> argparse.Namespace:
