@@ -504,6 +504,45 @@ def geometry_conditioned_right_first_close(
     )
 
 
+def reanchor_authored_handle_in_observed_jaw(
+    observed_root_pose: Any,
+    observed_eef_pose: Any,
+    finger_pad_centers_world: Any,
+    handle_points_local: Any,
+) -> tuple[np.ndarray, float]:
+    """Center authored handle points in the observed open jaw at a milestone.
+
+    The result is a new object-local contact frame, not a world-space teleport.
+    It is intended for the next controller segment after the peer grasp has
+    physically stabilized the object.
+    """
+
+    root = _pose(observed_root_pose, "observed_root_pose")
+    eef = _pose(observed_eef_pose, "observed_eef_pose")
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
+    points = np.asarray(handle_points_local, dtype=np.float64)
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
+        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("handle_points_local must be finite")
+    jaw_axis = centers[1] - centers[0]
+    jaw_norm = float(np.linalg.norm(jaw_axis))
+    if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
+        raise ValueError("observed jaw must be open for authored centering")
+    jaw_axis /= jaw_norm
+    jaw_midpoint = np.mean(centers, axis=0)
+    points_world = np.stack(
+        [root[:3] + quaternion_rotate(root[3:], point) for point in points]
+    )
+    projection = (points_world - jaw_midpoint) @ jaw_axis
+    signed_residual = 0.5 * (float(np.min(projection)) + float(np.max(projection)))
+    target = eef.copy()
+    target[:3] += signed_residual * jaw_axis
+    return compose_pose(inverse_pose(root), target), signed_residual
+
+
 def reanchor_missing_finger_pad_depth(
     contact_local: Any,
     observed_root_pose: Any,

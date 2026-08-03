@@ -28,6 +28,7 @@ from judo_isaaclab.put_pot import (
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     mirror_handle_position_in_receiving_jaw_frame,
+    reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
@@ -455,6 +456,25 @@ def test_positive_imbalance_half_thickness_handle_closes_proven_right_first():
     assert geometry_conditioned_right_first_close(source, pot020, 0, 0.0375)
     assert not geometry_conditioned_right_first_close(source, pot020, 0, -0.0375)
     assert not geometry_conditioned_right_first_close(source, pot019, 0, 0.0375)
+
+
+def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():
+    points = np.asarray(
+        [
+            [0.020, -0.010, 0.0],
+            [0.020, 0.010, 0.0],
+            [0.040, -0.010, 0.0],
+            [0.040, 0.010, 0.0],
+        ]
+    )
+    local, residual = reanchor_authored_handle_in_observed_jaw(
+        _pose(),
+        _pose(y=0.2),
+        [[-0.050, 0.0, 0.0], [0.050, 0.0, 0.0]],
+        points,
+    )
+    assert residual == pytest.approx(0.030)
+    assert local[:3] == pytest.approx([0.030, 0.2, 0.0])
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():
