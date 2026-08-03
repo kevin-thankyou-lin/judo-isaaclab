@@ -16,6 +16,7 @@ from .put_marker import (
     SkillTrajectory,
     SkillWaypoint,
     _pose,
+    _slerp,
     compose_pose,
     inverse_pose,
     interpolate_poses,
@@ -26,6 +27,29 @@ from .put_marker import (
 
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
+
+
+def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
+    """Close a measured contact residual uniformly over the remaining steps.
+
+    Contact feedback is recomputed every controller step.  A quintic profile
+    would restart at zero velocity on every update and defer almost the entire
+    correction to the last frame; linear residual closure remains continuous
+    under this receding-horizon update and reaches the measured handle frame.
+    """
+
+    if steps < 1:
+        raise ValueError("contact feedback steps must be positive")
+    start_pose = _pose(start, "start")
+    target_pose = _pose(target, "target")
+    fraction = np.linspace(1.0 / steps, 1.0, steps)
+    result = np.empty((steps, 7), dtype=np.float64)
+    result[:, :3] = (
+        start_pose[:3]
+        + fraction[:, None] * (target_pose[:3] - start_pose[:3])
+    )
+    result[:, 3:] = _slerp(start_pose[3:], target_pose[3:], fraction)
+    return result
 
 
 def handle_axial_contact_scale(
@@ -283,12 +307,16 @@ def track_bimanual_handle_targets(
         left[start : right_end + 1] = (
             _pose(observed_left_pose, "observed_left_pose")
             if left_contact_latched
-            else interpolate_poses(observed_left_pose, left_target, remaining)
+            else _linear_contact_feedback_poses(
+                observed_left_pose, left_target, remaining
+            )
         )
         right[start : right_end + 1] = (
             _pose(observed_right_pose, "observed_right_pose")
             if right_contact_latched
-            else interpolate_poses(observed_right_pose, right_target, remaining)
+            else _linear_contact_feedback_poses(
+                observed_right_pose, right_target, remaining
+            )
         )
     return SkillTrajectory(
         left_poses=left,

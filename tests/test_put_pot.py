@@ -302,6 +302,10 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     )
     assert right_first.left_poses[left_end + 1, 0] > displaced_left[0]
     assert right_first.left_poses[left_end + 1, 0] < observed_left[0]
+    assert right_first.left_poses[left_end + 1, 0] == pytest.approx(
+        displaced_left[0]
+        + (observed_left[0] - displaced_left[0]) / (right_end - left_end)
+    )
     assert right_first.left_poses[right_end] == pytest.approx(observed_left)
 
     corrected, transport = reanchor_bimanual_transport_from_observation(
