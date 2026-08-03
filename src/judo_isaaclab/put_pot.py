@@ -59,6 +59,7 @@ THIN_HANDLE_BALANCE_RATIO = 0.50
 # Pot019 geometry where it produced a hash-verified bimanual success.
 THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
+HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.015
 MISSING_FINGER_CONTACT_STEP_M = 0.001
 # Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
 # contact at -0.043 of the authored 68.1 mm YAM pad axis: 2.93 mm tip-side.
@@ -638,11 +639,11 @@ def geometry_conditioned_handle_balance_limit(
 ) -> float:
     """Add measured finger-0 pivot authority only for severely thinned handles.
 
-    Pot019 attempt_004 and Pot020 attempt_005 both held the opposite arm while
-    this arm's finger 0 remained tip-side.  Their target minimum
-    transverse/source ratios are 0.421 and 0.494.  Preserve the proven negative
-    pivot cap and add 2 mm only when measured thinning coincides with a positive
-    authored finger-0-minus-finger-1 depth residual.
+    Pot019 attempt_004 and Pot020 attempts 005-009 held the opposite arm while
+    this arm's finger 0 remained tip-side.  Preserve Pot019's proven 5 mm cap.
+    In the separate 45-50% retained-thickness band, bound the +37.5 mm authored
+    imbalance at 15 mm after translation and duration corrections left the
+    signed pad residual unchanged.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
@@ -657,9 +658,18 @@ def geometry_conditioned_handle_balance_limit(
         raise ValueError("base_limit_m must be finite and nonnegative")
     transverse = [axis for axis in range(3) if axis != handle_axis]
     retained_ratio = min(float(target[axis] / source[axis]) for axis in transverse)
+    if (
+        THIN_HANDLE_SYMMETRY_RATIO
+        <= retained_ratio
+        < THIN_HANDLE_BALANCE_RATIO
+        and predicted_imbalance_m > 0.0
+    ):
+        return float(
+            max(base_limit_m, HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M)
+        )
     extra = (
         THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M
-        if retained_ratio < THIN_HANDLE_BALANCE_RATIO
+        if retained_ratio < THIN_HANDLE_SYMMETRY_RATIO
         and predicted_imbalance_m > 0.0
         else 0.0
     )

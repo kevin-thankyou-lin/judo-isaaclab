@@ -329,7 +329,7 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
         [0.069219, 0.061195, 0.020012],
         0,
         0.0375,
-    ) == pytest.approx(0.005)
+    ) == pytest.approx(0.015)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
