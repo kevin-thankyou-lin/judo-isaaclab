@@ -755,6 +755,10 @@ def _build_skill(
     grasp_geometry["left"]["transport_vertical_rise_fraction"] = (
         transport_vertical_rise_fraction
     )
+    transport_frontload_horizontal_axis = 0 if peer_contact_hold_steps else None
+    grasp_geometry["left"]["transport_frontload_horizontal_axis"] = (
+        transport_frontload_horizontal_axis
+    )
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
@@ -779,6 +783,7 @@ def _build_skill(
         steps=transport_steps,
         collision_clearance_m=args.collision_clearance_m,
         vertical_rise_fraction=transport_vertical_rise_fraction,
+        frontload_horizontal_axis=transport_frontload_horizontal_axis,
     )
     if supported_center_slide:
         program.supported_center_slide_and_settle(
@@ -1652,6 +1657,9 @@ def main() -> None:
                                 vertical_rise_fraction=handle_grasp_geometry[
                                     "left"
                                 ]["transport_vertical_rise_fraction"],
+                                frontload_horizontal_axis=handle_grasp_geometry[
+                                    "left"
+                                ]["transport_frontload_horizontal_axis"],
                             )
                         )
                         transport_reference_left_contact_local = (
@@ -1828,6 +1836,9 @@ def main() -> None:
                             vertical_rise_fraction=handle_grasp_geometry[
                                 "left"
                             ]["transport_vertical_rise_fraction"],
+                            frontload_horizontal_axis=handle_grasp_geometry[
+                                "left"
+                            ]["transport_frontload_horizontal_axis"],
                         )
                     )
                     start = step + 1

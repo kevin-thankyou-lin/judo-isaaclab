@@ -76,10 +76,10 @@ SINGLE_FINGER_CONTACT_LATCH_STEPS = CONTACT_FEEDBACK_HORIZON_STEPS
 # Pot021 attempt_019 left the missing pad just before the authored pad interval
 # (fraction -0.04), while attempt_020's complete -26.9 degree reach-avoidance
 # twist carried it beyond the opposite end (fraction 1.03).  Attempt_026's 45%
-# twist latched at fraction 0.618 but crossed the far edge as lift began.
-# Interpolating those measured signed residuals centers the pad near 0.40 at a
-# 30% twist.  This is a fixed geometry-conditioned correction, not a search.
-LOADED_JAW_REACH_AVOIDANCE_FRACTION = 0.30
+# twist formed the required second-pad force; attempt_027's 30% twist did not.
+# Keep the minimum measured contact-forming twist and relieve its world-x reach
+# residual through the geometry-conditioned transport path instead.
+LOADED_JAW_REACH_AVOIDANCE_FRACTION = 0.45
 MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     MISSING_FINGER_CONTACT_DELAY_STEPS
     + int(np.ceil(MISSING_FINGER_CONTACT_LIMIT_M / MISSING_FINGER_CONTACT_STEP_M))
@@ -1140,6 +1140,7 @@ def smooth_collision_aware_bimanual_transport(
     steps: int,
     collision_clearance_m: float,
     vertical_rise_fraction: float = 1.0,
+    frontload_horizontal_axis: int | None = None,
 ) -> SmoothBimanualTransport:
     """Build one minimum-jerk bimanual sweep that clears the cooktop.
 
@@ -1156,6 +1157,8 @@ def smooth_collision_aware_bimanual_transport(
         0.0 < vertical_rise_fraction <= 1.0
     ):
         raise ValueError("vertical_rise_fraction must be in (0, 1]")
+    if frontload_horizontal_axis not in (None, 0, 1):
+        raise ValueError("frontload_horizontal_axis must be 0, 1, or None")
     start = _pose(start_pot_pose, "start_pot_pose")
     target = _pose(target_pot_pose, "target_pot_pose")
     left_contact = _pose(left_contact_local, "left_contact_local")
@@ -1171,6 +1174,12 @@ def smooth_collision_aware_bimanual_transport(
         pot_poses[:, 2] = (
             start[2] + (target[2] - start[2]) * vertical_profile
         )
+        if frontload_horizontal_axis is not None:
+            axis = frontload_horizontal_axis
+            pot_poses[:, axis] = (
+                start[axis]
+                + (target[axis] - start[axis]) * vertical_profile
+            )
     overlap = _cooktop_overlap_mask(pot_poses[:, :3], size, cooktop)
     required_bottom_z = cooktop.top_frame[2] + float(collision_clearance_m)
     base_bottom_z = pot_poses[:, 2] - 0.5 * size[2]
@@ -1493,6 +1502,7 @@ def reanchor_bimanual_transport_from_observation(
     left_contact_local: Any | None = None,
     right_contact_local: Any | None = None,
     vertical_rise_fraction: float = 1.0,
+    frontload_horizontal_axis: int | None = None,
 ) -> tuple[SkillTrajectory, SmoothBimanualTransport]:
     """Rebuild transport from measured or explicitly retained local contacts."""
 
@@ -1541,6 +1551,7 @@ def reanchor_bimanual_transport_from_observation(
         steps=transport_end - start + 1,
         collision_clearance_m=collision_clearance_m,
         vertical_rise_fraction=vertical_rise_fraction,
+        frontload_horizontal_axis=frontload_horizontal_axis,
     )
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
@@ -2302,6 +2313,7 @@ class PutPotSkillProgram:
         steps: int,
         collision_clearance_m: float,
         vertical_rise_fraction: float = 1.0,
+        frontload_horizontal_axis: int | None = None,
     ) -> SmoothBimanualTransport:
         """Append one collision-checked bimanual sweep to the centered target."""
         transport = smooth_collision_aware_bimanual_transport(
@@ -2314,6 +2326,7 @@ class PutPotSkillProgram:
             steps=steps,
             collision_clearance_m=collision_clearance_m,
             vertical_rise_fraction=vertical_rise_fraction,
+            frontload_horizontal_axis=frontload_horizontal_axis,
         )
         self._append_sampled(
             "smooth_transport",

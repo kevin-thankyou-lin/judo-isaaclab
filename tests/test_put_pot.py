@@ -846,10 +846,24 @@ def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
         steps=180,
         collision_clearance_m=0.025,
         vertical_rise_fraction=0.20,
+        frontload_horizontal_axis=0,
     )
     assert fast_rise.vertical_rise_steps == 36
     assert fast_rise.pot_poses[35, 2] == pytest.approx(target[2])
+    assert fast_rise.pot_poses[35, 0] == pytest.approx(target[0])
     assert fast_rise.minimum_cooktop_clearance_m >= 0.025 - 1.0e-9
+    with pytest.raises(ValueError, match="frontload_horizontal_axis"):
+        smooth_collision_aware_bimanual_transport(
+            start,
+            target,
+            left_contact,
+            right_contact,
+            pot_size,
+            cooktop,
+            steps=180,
+            collision_clearance_m=0.025,
+            frontload_horizontal_axis=2,
+        )
     assert maximum_bimanual_position_step_m(
         transport.left_poses, transport.right_poses
     ) <= metrics["maximum_step_m"]
