@@ -167,28 +167,6 @@ def ensure_pick_latch_clearance(
     return handover
 
 
-def geometry_conditioned_right_contact(
-    nominal_contact: Any,
-    body_frame: Any,
-    body_size: Any,
-    handle_axis: int,
-) -> np.ndarray:
-    """Move the handover close stroke into the measured mug-body support band."""
-
-    size = np.asarray(body_size, dtype=np.float64)
-    if size.shape != (3,) or np.any(size <= 0.0):
-        raise ValueError("body_size must contain three positive values")
-    if handle_axis not in (0, 1):
-        raise ValueError("handle_axis must be a horizontal axis")
-    contact_body = compose_pose(inverse_pose(body_frame), nominal_contact)
-    sign = 1.0 if contact_body[handle_axis] >= 0.0 else -1.0
-    contact_body[handle_axis] = sign * min(
-        abs(contact_body[handle_axis]), 0.25 * size[handle_axis]
-    )
-    contact_body[2] += 0.25 * size[2]
-    return compose_pose(body_frame, contact_body)
-
-
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,
@@ -208,37 +186,6 @@ def reanchor_branch_transport_contact(
     for index in range(start, len(right)):
         intended_mug = compose_pose(right[index], inverse_pose(nominal_contact))
         right[index] = compose_pose(intended_mug, observed_contact)
-    return SkillTrajectory(
-        left_poses=trajectory.left_poses.copy(),
-        right_poses=right,
-        grippers=trajectory.grippers.copy(),
-        stage_names=trajectory.stage_names,
-        waypoint_steps=dict(trajectory.waypoint_steps),
-    )
-
-
-def reanchor_right_grasp_after_pregrasp(
-    trajectory: SkillTrajectory,
-    nominal_right_contact: Any,
-    observed_mug_pose: Any,
-    observed_right_pose: Any,
-) -> SkillTrajectory:
-    """Retarget the closing stroke after the pregrasp contacts a changed mug."""
-
-    required = ("handover_pregrasp", "right_grasp", "left_release")
-    missing = [name for name in required if name not in trajectory.waypoint_steps]
-    if missing:
-        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
-    steps = trajectory.waypoint_steps
-    start = steps["handover_pregrasp"] + 1
-    grasp_end = steps["right_grasp"]
-    release_end = steps["left_release"]
-    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    corrected_grasp = compose_pose(observed_mug_pose, nominal_right_contact)
-    right[start : grasp_end + 1] = interpolate_poses(
-        observed_right_pose, corrected_grasp, grasp_end - start + 1
-    )
-    right[grasp_end + 1 : release_end + 1] = corrected_grasp
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
