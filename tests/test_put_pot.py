@@ -21,7 +21,7 @@ from judo_isaaclab.put_pot import (
     track_bimanual_handle_targets,
 )
 
-from run_putpot_skill_program import _build_center_repair
+from run_putpot_skill_program import _build_center_repair, _parser
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
@@ -44,6 +44,24 @@ def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
         np.asarray(sample["cooktop_pose"])[:2] - np.asarray(sample["pot_pose"])[:2],
         atol=1e-9,
     )
+
+
+def test_putpot_program_reserves_measured_contact_acquisition_window(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_putpot_skill_program.py",
+            "--gear-repo", "/gear",
+            "--source-dataset", "/source.hdf5",
+            "--target-dataset", "/target.hdf5",
+            "--objects-root", "/objects",
+            "--mode", "skill",
+            "--source-keyframes", "/keyframes.json",
+            "--trace-npz", "/trace.npz",
+            "--result-json", "/result.json",
+        ],
+    )
+    assert _parser().bimanual_contact_hold_steps == 90
 from judo_isaaclab.put_marker import compose_pose, interpolate_poses, inverse_pose
 
 
