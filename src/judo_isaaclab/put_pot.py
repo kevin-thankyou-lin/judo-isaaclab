@@ -1229,7 +1229,7 @@ def transport_contact_reanchor_required(
     if minimum_interval_steps < 1:
         raise ValueError("minimum_interval_steps must be positive")
     transport_end = trajectory.waypoint_steps.get("smooth_transport")
-    if transport_end is None or step < 0 or step >= transport_end:
+    if transport_end is None or step < 0 or transport_end - step < 8:
         return False
     if last_reanchor_step is None:
         return True

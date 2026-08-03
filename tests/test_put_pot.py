@@ -891,6 +891,15 @@ def test_transport_reanchor_repeats_only_after_measured_contact_drift():
         trajectory, step, trajectory.left_poses[step], drifted_right,
         last_reanchor_step=step - 10, tracking_tolerance_m=0.01,
     )
+    transport_end = trajectory.waypoint_steps["smooth_transport"]
+    assert not transport_contact_reanchor_required(
+        trajectory,
+        transport_end - 7,
+        trajectory.left_poses[transport_end - 7],
+        trajectory.right_poses[transport_end - 7],
+        last_reanchor_step=step,
+        tracking_tolerance_m=0.01,
+    )
 
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():
