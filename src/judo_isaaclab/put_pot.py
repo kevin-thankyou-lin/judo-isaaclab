@@ -48,13 +48,15 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
 THIN_HANDLE_BALANCE_RATIO = 0.45
-# Pot020 attempt_001 reached the left command but first touched 30.2 mm past
-# the pad boundary while its mirrored right contact held for 353 frames.  The
-# authored target handles agree within 7 microns and retain 49.4% of the source
-# transverse thickness.  Position symmetry is therefore useful over a wider
-# measured range than the stronger positive-pivot balance correction above.
-THIN_HANDLE_SYMMETRY_RATIO = 0.50
+# Pot020 attempts 002-003 showed that position symmetry at 49.4% retained
+# transverse thickness changed a sustained one-finger contact into a complete
+# close-window miss.  Keep the position mirror restricted to the 42.1%-retained
+# Pot019 geometry where it produced a hash-verified bimanual success.
+THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
+MISSING_FINGER_CONTACT_STEP_M = 0.001
+MISSING_FINGER_CONTACT_LIMIT_M = 0.040
+MISSING_FINGER_CONTACT_DELAY_STEPS = 10
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -387,6 +389,52 @@ def mirror_handle_position_in_receiving_jaw_frame(
         result, pot_root_pose, receiving_handle_points_local
     )
     return center_handle_between_finger_pads(result, offset), offset
+
+
+def reanchor_missing_finger_contact(
+    contact_local: Any,
+    observed_root_pose: Any,
+    finger_forces_n: Any,
+    signed_correction_m: float,
+    *,
+    contact_threshold_n: float = 0.1,
+    step_m: float = MISSING_FINGER_CONTACT_STEP_M,
+    limit_m: float = MISSING_FINGER_CONTACT_LIMIT_M,
+) -> tuple[np.ndarray, float]:
+    """Move a fixed contact frame toward the finger missing target contact.
+
+    This is deterministic contact feedback, not candidate search: one
+    contacting finger fixes the signed direction along the authored YAM jaw
+    axis, while two or zero contacts leave the object-to-gripper frame intact.
+    """
+
+    local = _pose(contact_local, "contact_local")
+    root = _pose(observed_root_pose, "observed_root_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if not np.isfinite(signed_correction_m):
+        raise ValueError("signed_correction_m must be finite")
+    if not np.isfinite(contact_threshold_n) or contact_threshold_n < 0.0:
+        raise ValueError("contact_threshold_n must be finite and nonnegative")
+    if not np.isfinite(step_m) or step_m <= 0.0:
+        raise ValueError("step_m must be finite and positive")
+    if not np.isfinite(limit_m) or limit_m < step_m:
+        raise ValueError("limit_m must be finite and at least step_m")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return local.copy(), float(signed_correction_m)
+    direction = 1.0 if contacting[1] else -1.0
+    updated = float(
+        np.clip(signed_correction_m + direction * step_m, -limit_m, limit_m)
+    )
+    delta = updated - float(signed_correction_m)
+    world = compose_pose(root, local)
+    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_axis[2] = 0.0
+    jaw_axis /= np.linalg.norm(jaw_axis)
+    world[:3] += delta * quaternion_rotate(world[3:], jaw_axis)
+    return compose_pose(inverse_pose(root), world), updated
 
 
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:

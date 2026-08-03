@@ -6,6 +6,7 @@ from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
     HANDLE_PAD_DEPTH_MARGIN_M,
+    MISSING_FINGER_CONTACT_LIMIT_M,
     PutPotSkillProgram,
     RigidSupportGeometry,
     YAM_FINGER_SEPARATION_LOCAL_M,
@@ -27,6 +28,7 @@ from judo_isaaclab.put_pot import (
     handle_axial_contact_scale,
     mirror_handle_position_in_receiving_jaw_frame,
     reanchor_bimanual_transport_from_observation,
+    reanchor_missing_finger_contact,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_centered_release,
@@ -329,9 +331,9 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
         target_positive,
         0,
     )
-    # Pot020 attempt_001: 20.01 mm / 40.56 mm = 0.4934 retained
-    # transverse thickness, with target sides symmetric to microns.
-    assert geometry_conditioned_target_handle_symmetry(
+    # Pot020 attempts 002-003 showed that mirroring at 0.4934 retained
+    # thickness moves the receiving jaw away from sustained contact.
+    assert not geometry_conditioned_target_handle_symmetry(
         [0.059453, 0.085784, 0.040560],
         [0.059405, 0.085782, 0.040535],
         [0.069219, 0.061195, 0.020012],
@@ -386,6 +388,34 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
     assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
         0.0, abs=1.0e-9
     )
+
+
+def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
+    contact = _pose()
+    root = _pose()
+    toward_finger_zero, signed = reanchor_missing_finger_contact(
+        contact, root, [0.0, 2.0], 0.0
+    )
+    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_axis[2] = 0.0
+    jaw_axis /= np.linalg.norm(jaw_axis)
+    assert toward_finger_zero[:3] == pytest.approx(0.001 * jaw_axis)
+    assert signed == pytest.approx(0.001)
+
+    toward_finger_one, signed = reanchor_missing_finger_contact(
+        contact, root, [2.0, 0.0], 0.0
+    )
+    assert toward_finger_one[:3] == pytest.approx(-0.001 * jaw_axis)
+    assert signed == pytest.approx(-0.001)
+
+    unchanged, signed = reanchor_missing_finger_contact(
+        contact,
+        root,
+        [0.0, 2.0],
+        MISSING_FINGER_CONTACT_LIMIT_M,
+    )
+    assert unchanged == pytest.approx(contact)
+    assert signed == pytest.approx(MISSING_FINGER_CONTACT_LIMIT_M)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
