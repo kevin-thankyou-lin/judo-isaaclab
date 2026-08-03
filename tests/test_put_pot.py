@@ -12,6 +12,7 @@ from judo_isaaclab.put_pot import (
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     balance_handle_contact_across_finger_pads,
+    bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
@@ -220,6 +221,12 @@ def test_handle_pad_depth_imbalance_uses_nearest_authored_points():
     assert handle_finger_pad_depth_imbalance(_pose(), _pose(), points) == pytest.approx(
         -0.03
     )
+
+
+def test_handle_pad_balance_preserves_measured_imbalance_sign_and_cap():
+    assert bounded_handle_pad_balance(0.053) == pytest.approx(0.003)
+    assert bounded_handle_pad_balance(-0.026) == pytest.approx(-0.003)
+    assert bounded_handle_pad_balance(0.001) == pytest.approx(0.001)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

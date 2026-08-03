@@ -316,6 +316,26 @@ def handle_finger_pad_depth_imbalance(
     )
 
 
+def bounded_handle_pad_balance(
+    predicted_imbalance_m: float,
+    maximum_balance_m: float = HANDLE_PAD_RELATIVE_DEPTH_M,
+) -> float:
+    """Convert authored pad imbalance to the bounded pivot direction.
+
+    PutPot016 attempt_008 applied the opposite sign and pushed the right
+    second-pad fraction beyond 1.02.  Preserve the authored imbalance sign so
+    the pivot moves contact away from that measured pad-base failure.
+    """
+
+    if not np.isfinite(predicted_imbalance_m):
+        raise ValueError("predicted_imbalance_m must be finite")
+    if not np.isfinite(maximum_balance_m) or maximum_balance_m < 0.0:
+        raise ValueError("maximum_balance_m must be finite and nonnegative")
+    return float(
+        np.clip(predicted_imbalance_m, -maximum_balance_m, maximum_balance_m)
+    )
+
+
 @dataclass(frozen=True)
 class SmoothBimanualTransport:
     """One sampled pot path and the two rigidly attached handle paths."""

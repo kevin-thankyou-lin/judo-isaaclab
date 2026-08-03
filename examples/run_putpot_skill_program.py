@@ -412,6 +412,7 @@ def _build_skill(
             from judo_isaaclab.put_pot import (
                 HANDLE_PAD_RELATIVE_DEPTH_M,
                 balance_handle_contact_across_finger_pads,
+                bounded_handle_pad_balance,
                 geometry_conditioned_handle_pad_depth,
                 handle_finger_pad_depth_imbalance,
                 seat_handle_inside_finger_pads,
@@ -458,12 +459,9 @@ def _build_skill(
             predicted_imbalance = handle_finger_pad_depth_imbalance(
                 surface_pose, target_initial.root_pose, handle_points
             )
-            relative_balance = float(
-                np.clip(
-                    -predicted_imbalance,
-                    -HANDLE_PAD_RELATIVE_DEPTH_M,
-                    HANDLE_PAD_RELATIVE_DEPTH_M,
-                )
+            relative_balance = bounded_handle_pad_balance(
+                predicted_imbalance,
+                HANDLE_PAD_RELATIVE_DEPTH_M,
             )
             surface_pose = balance_handle_contact_across_finger_pads(
                 surface_pose, relative_balance
