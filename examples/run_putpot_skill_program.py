@@ -1140,6 +1140,8 @@ def main() -> None:
         milestone_reanchor_accepted = None
         milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
+        milestone_gripper_hold_steps = None
+        milestone_gripper_close_start_step = None
         peer_contact_transfer = False
         peer_supported_contact_streak = 0
         peer_single_contact_latch_step = None
@@ -1307,6 +1309,7 @@ def main() -> None:
                     geometry_conditioned_peer_contact_transfer,
                     mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
+                    retime_loaded_gripper_close_for_pad_reseat,
                     select_geometry_conditioned_milestone_reanchor,
                 )
 
@@ -1411,6 +1414,18 @@ def main() -> None:
                         )
                     ),
                 )
+                if peer_contact_transfer:
+                    trajectory, milestone_gripper_hold_steps = (
+                        retime_loaded_gripper_close_for_pad_reseat(
+                            trajectory,
+                            step,
+                            milestone_applied_translation_m,
+                            reseat_step_m=0.002,
+                        )
+                    )
+                    milestone_gripper_close_start_step = (
+                        step + milestone_gripper_hold_steps
+                    )
                 missing_finger_corrections["left"] = 0.0
                 missing_finger_depth_corrections["left"] = 0.0
                 missing_finger_streaks["left"] = 0
@@ -1438,6 +1453,10 @@ def main() -> None:
 
                 supported_peer_contact = bool(
                     peer_contact_transfer
+                    and (
+                        milestone_gripper_close_start_step is None
+                        or step >= milestone_gripper_close_start_step
+                    )
                     and single_finger_contact_observed(
                         sample["left_finger_forces_n"],
                         sample["left_pad_fractions"],
@@ -2530,6 +2549,10 @@ def main() -> None:
                 "milestone_translation_limit_m": milestone_translation_limit_m,
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "milestone_reanchor_source": milestone_reanchor_source,
+                "milestone_gripper_hold_steps": milestone_gripper_hold_steps,
+                "milestone_gripper_close_start_step": (
+                    milestone_gripper_close_start_step
+                ),
                 "peer_single_contact_latch_step": peer_single_contact_latch_step,
                 "peer_single_contact_latch_support_frames": (
                     peer_single_contact_latch_support_frames
