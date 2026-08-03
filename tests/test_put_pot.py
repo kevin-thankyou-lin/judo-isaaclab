@@ -366,6 +366,17 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
     assert geometry_conditioned_handle_balance_limit(
         source, target, 0, -0.038
     ) == pytest.approx(0.003)
+
+
+def test_high_positive_imbalance_deepens_only_the_missing_pad():
+    source = [0.059453, 0.085784, 0.040560]
+    target = [0.070727, 0.085979, 0.025874]
+    assert geometry_conditioned_handle_balance_limit(
+        source, target, 0, 0.057418
+    ) == pytest.approx(0.006)
+    assert geometry_conditioned_handle_balance_limit(
+        source, target, 0, 0.048826
+    ) == pytest.approx(0.003)
     assert geometry_conditioned_handle_balance_limit(
         source, [0.0666, 0.0657, 0.030], 0, 0.030
     ) == pytest.approx(0.003)

@@ -62,6 +62,13 @@ THIN_HANDLE_BALANCE_RATIO = 0.50
 THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.005
+# Pot023 attempt_001 retained finger 1 at pad fraction 0.85 throughout the
+# grasp window, but its +57.42 mm authored depth imbalance left finger 0 clear.
+# PutPot021 succeeds with the common 3 mm pivot at +48.83 mm.  Give geometry
+# beyond 50 mm one additional common-pivot increment; the already-contacting
+# finger remains fixed by ``balance_handle_contact_across_finger_pads``.
+HIGH_POSITIVE_HANDLE_IMBALANCE_M = 0.050
+HIGH_POSITIVE_HANDLE_BALANCE_EXTRA_M = 0.003
 MISSING_FINGER_CONTACT_STEP_M = 0.001
 MISSING_FINGER_JAW_AXIS_MIN_M = 0.050
 # Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
@@ -1060,6 +1067,8 @@ def geometry_conditioned_handle_balance_limit(
         and predicted_imbalance_m > 0.0
         else 0.0
     )
+    if predicted_imbalance_m > HIGH_POSITIVE_HANDLE_IMBALANCE_M:
+        extra = max(extra, HIGH_POSITIVE_HANDLE_BALANCE_EXTRA_M)
     return float(base_limit_m + extra)
 
 
