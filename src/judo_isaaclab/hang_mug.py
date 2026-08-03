@@ -83,6 +83,15 @@ def geometry_conditioned_hang_pose(
             / source_parts.handle_outer_size[2],
         ),
     )
+    # The source demonstration proposes the supported branch and the handle's
+    # rotation around it, but its branch-relative translation is not a valid
+    # target clearance contract.  In particular, scaling that translation for
+    # a shallow target handle can put the branch against the handle rim even
+    # though the nominal root pose looks plausible.  Seat the authored target
+    # handle-hole center on the authored target branch support point.  This is
+    # deterministic object-local geometry; the transferred rotation above
+    # still resolves the handle/branch orientation from the semantic source.
+    target_handle_world[:3] = target_branch_world[:3]
     return (
         compose_pose(target_handle_world, inverse_pose(target_parts.handle_hole_frame)),
         source_branch,
