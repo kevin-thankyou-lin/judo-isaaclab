@@ -504,11 +504,11 @@ def _build_skill(
         handle_close,
         handle_release,
         push_steps=26,
-        release_steps=40,
+        release_steps=60,
     )
     trajectory = program.build()
-    if trajectory.steps != 607:
-        raise AssertionError(f"expected 607 programmed steps, got {trajectory.steps}")
+    if trajectory.steps != 627:
+        raise AssertionError(f"expected 627 programmed steps, got {trajectory.steps}")
     return (
         trajectory,
         marker_in_drawer("marker_collision_clear"),
@@ -542,6 +542,18 @@ def _sparse_joint_nominal(source, handle_pull_joint_extension: float) -> np.ndar
     if nominal.shape != (607, 14):
         raise AssertionError(f"unexpected sparse joint nominal shape {nominal.shape}")
     return nominal
+
+
+def _extend_joint_nominal(nominal: np.ndarray, steps: int) -> np.ndarray:
+    """Hold the final sparse nominal through deterministic terminal closing."""
+
+    if steps < len(nominal):
+        raise ValueError("cannot shorten sparse joint nominal")
+    if steps == len(nominal):
+        return nominal
+    return np.concatenate(
+        (nominal, np.repeat(nominal[-1:], steps - len(nominal), axis=0)), axis=0
+    )
 
 
 def _clamp_norm(value, maximum: float):
@@ -1125,7 +1137,10 @@ def main() -> None:
             if args.mode == "skill" else (None, None, None, None, None)
         )
         joint_nominal = (
-            _sparse_joint_nominal(source, args.handle_pull_joint_extension)
+            _extend_joint_nominal(
+                _sparse_joint_nominal(source, args.handle_pull_joint_extension),
+                trajectory.steps,
+            )
             if trajectory is not None else None
         )
         replay_data = source if args.replay_actions_from == "source" else target
@@ -1440,6 +1455,7 @@ def main() -> None:
                         if target_handle_grasp_index is not None
                         else 0.0
                     ),
+                    "terminal_close_extension_steps": 20,
                     "cabinet_spawn_collision_clearance": {
                         "adjustment_m": cabinet_spawn_lift_m,
                         "link": "link_2" if low_handle_target else None,

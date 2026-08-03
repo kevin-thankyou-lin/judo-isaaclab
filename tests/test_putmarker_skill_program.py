@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 
@@ -90,3 +91,15 @@ def test_spawn_lift_repairs_only_actual_table_penetration():
         1.0048369169, -0.2557240054, 0.7517
     ) == pytest.approx(0.0035870885)
     assert module._collision_clear_spawn_lift_m(1.015924, -0.2557240054, 0.7517) == 0.0
+
+
+def test_terminal_close_extension_holds_final_sparse_nominal():
+    module = _module()
+    nominal = np.asarray([[1.0, 2.0], [3.0, 4.0]])
+
+    assert module._extend_joint_nominal(nominal, 4).tolist() == [
+        [1.0, 2.0],
+        [3.0, 4.0],
+        [3.0, 4.0],
+        [3.0, 4.0],
+    ]
