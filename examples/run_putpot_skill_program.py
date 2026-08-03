@@ -635,6 +635,7 @@ def _build_skill(
         geometry_conditioned_peer_contact_transfer,
         geometry_conditioned_right_first_close,
         geometry_conditioned_transport_steps,
+        geometry_conditioned_vertical_rise_fraction,
     )
 
     right_first_close = geometry_conditioned_right_first_close(
@@ -746,6 +747,14 @@ def _build_skill(
         for side in (left_side, right_side)
     )
     grasp_geometry["left"]["center_slide_steps"] = center_slide_steps
+    transport_vertical_rise_fraction = (
+        geometry_conditioned_vertical_rise_fraction(
+            transport_steps, peer_contact_hold_steps
+        )
+    )
+    grasp_geometry["left"]["transport_vertical_rise_fraction"] = (
+        transport_vertical_rise_fraction
+    )
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
@@ -769,6 +778,7 @@ def _build_skill(
         target_cooktop,
         steps=transport_steps,
         collision_clearance_m=args.collision_clearance_m,
+        vertical_rise_fraction=transport_vertical_rise_fraction,
     )
     if supported_center_slide:
         program.supported_center_slide_and_settle(
@@ -813,6 +823,7 @@ def _build_skill(
             "end_step": transport_end,
             "minimum_cooktop_clearance_m": transport.minimum_cooktop_clearance_m,
             "cooktop_overlap_samples": transport.cooktop_overlap_samples,
+            "vertical_rise_steps": transport.vertical_rise_steps,
         }
     )
     return (
@@ -1638,6 +1649,9 @@ def main() -> None:
                                 right_contact_local=(
                                     reference_hold_right_contact_local
                                 ),
+                                vertical_rise_fraction=handle_grasp_geometry[
+                                    "left"
+                                ]["transport_vertical_rise_fraction"],
                             )
                         )
                         transport_reference_left_contact_local = (
@@ -1686,6 +1700,9 @@ def main() -> None:
                                 ),
                                 "initial_clearance_recovery_m": (
                                     retained_transport.initial_clearance_recovery_m
+                                ),
+                                "vertical_rise_steps": (
+                                    retained_transport.vertical_rise_steps
                                 ),
                             }
                         )
@@ -1808,6 +1825,9 @@ def main() -> None:
                             current_step=step,
                             left_contact_local=retained_left_contact_local,
                             right_contact_local=retained_right_contact_local,
+                            vertical_rise_fraction=handle_grasp_geometry[
+                                "left"
+                            ]["transport_vertical_rise_fraction"],
                         )
                     )
                     start = step + 1
@@ -1853,6 +1873,9 @@ def main() -> None:
                                 ),
                                 "initial_clearance_recovery_m": (
                                     observed_transport.initial_clearance_recovery_m
+                                ),
+                                "vertical_rise_steps": (
+                                    observed_transport.vertical_rise_steps
                                 ),
                             }
                         )

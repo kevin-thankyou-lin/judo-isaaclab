@@ -28,6 +28,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_right_first_close,
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
+    geometry_conditioned_vertical_rise_fraction,
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
@@ -631,6 +632,14 @@ def test_positive_imbalance_half_thickness_handle_closes_proven_right_first():
     )
 
 
+def test_vertical_rise_finishes_inside_measured_contact_window():
+    fraction = geometry_conditioned_vertical_rise_fraction(425, 80)
+    assert fraction == pytest.approx(80 / 425)
+    assert geometry_conditioned_vertical_rise_fraction(180, 0) == 1.0
+    assert geometry_conditioned_vertical_rise_fraction(1000, 80) == 0.15
+    assert geometry_conditioned_vertical_rise_fraction(100, 80) == 0.30
+
+
 def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():
     left = [0.057326, 0.083289, 0.021211]
     right = [0.057321, 0.083291, 0.021211]
@@ -826,6 +835,21 @@ def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
         transport.left_poses, transport.right_poses
     )
     assert metrics["internal_stop_count"] == 0
+
+    fast_rise = smooth_collision_aware_bimanual_transport(
+        start,
+        target,
+        left_contact,
+        right_contact,
+        pot_size,
+        cooktop,
+        steps=180,
+        collision_clearance_m=0.025,
+        vertical_rise_fraction=0.20,
+    )
+    assert fast_rise.vertical_rise_steps == 36
+    assert fast_rise.pot_poses[35, 2] == pytest.approx(target[2])
+    assert fast_rise.minimum_cooktop_clearance_m >= 0.025 - 1.0e-9
     assert maximum_bimanual_position_step_m(
         transport.left_poses, transport.right_poses
     ) <= metrics["maximum_step_m"]

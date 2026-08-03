@@ -315,6 +315,22 @@ def geometry_conditioned_transport_steps(
     return int(np.ceil(base_steps / retained_ratio))
 
 
+def geometry_conditioned_vertical_rise_fraction(
+    transport_steps: int, retained_contact_steps: int
+) -> float:
+    """Finish vertical clearance within the measured contact-retention window."""
+
+    if transport_steps < 8:
+        raise ValueError("transport_steps must be at least eight")
+    if retained_contact_steps < 0:
+        raise ValueError("retained_contact_steps must be nonnegative")
+    if retained_contact_steps == 0:
+        return 1.0
+    return float(
+        np.clip(retained_contact_steps / transport_steps, 0.15, 0.30)
+    )
+
+
 def support_boundary_staging_pose(
     initial_pot_pose: Any,
     centered_pot_pose: Any,
@@ -1067,6 +1083,7 @@ class SmoothBimanualTransport:
     minimum_cooktop_clearance_m: float
     cooktop_overlap_samples: int
     initial_clearance_recovery_m: float
+    vertical_rise_steps: int
 
 
 def _minimum_jerk_fraction(steps: int) -> np.ndarray:
@@ -1122,6 +1139,7 @@ def smooth_collision_aware_bimanual_transport(
     *,
     steps: int,
     collision_clearance_m: float,
+    vertical_rise_fraction: float = 1.0,
 ) -> SmoothBimanualTransport:
     """Build one minimum-jerk bimanual sweep that clears the cooktop.
 
@@ -1134,12 +1152,25 @@ def smooth_collision_aware_bimanual_transport(
         raise ValueError("smooth transport requires at least eight steps")
     if collision_clearance_m < 0.0:
         raise ValueError("collision_clearance_m must be nonnegative")
+    if not np.isfinite(vertical_rise_fraction) or not (
+        0.0 < vertical_rise_fraction <= 1.0
+    ):
+        raise ValueError("vertical_rise_fraction must be in (0, 1]")
     start = _pose(start_pot_pose, "start_pot_pose")
     target = _pose(target_pot_pose, "target_pot_pose")
     left_contact = _pose(left_contact_local, "left_contact_local")
     right_contact = _pose(right_contact_local, "right_contact_local")
     size = np.asarray(pot_size, dtype=np.float64)
     pot_poses = interpolate_poses(start, target, steps)
+    vertical_rise_steps = max(1, int(np.ceil(steps * vertical_rise_fraction)))
+    if target[2] > start[2] and vertical_rise_steps < steps:
+        vertical_profile = np.ones(steps, dtype=np.float64)
+        vertical_profile[:vertical_rise_steps] = _minimum_jerk_fraction(
+            vertical_rise_steps
+        )
+        pot_poses[:, 2] = (
+            start[2] + (target[2] - start[2]) * vertical_profile
+        )
     overlap = _cooktop_overlap_mask(pot_poses[:, :3], size, cooktop)
     required_bottom_z = cooktop.top_frame[2] + float(collision_clearance_m)
     base_bottom_z = pot_poses[:, 2] - 0.5 * size[2]
@@ -1185,6 +1216,7 @@ def smooth_collision_aware_bimanual_transport(
         minimum_cooktop_clearance_m=minimum_clearance,
         cooktop_overlap_samples=int(np.count_nonzero(overlap)),
         initial_clearance_recovery_m=initial_clearance_recovery_m,
+        vertical_rise_steps=vertical_rise_steps,
     )
 
 
@@ -1460,6 +1492,7 @@ def reanchor_bimanual_transport_from_observation(
     current_step: int | None = None,
     left_contact_local: Any | None = None,
     right_contact_local: Any | None = None,
+    vertical_rise_fraction: float = 1.0,
 ) -> tuple[SkillTrajectory, SmoothBimanualTransport]:
     """Rebuild transport from measured or explicitly retained local contacts."""
 
@@ -1507,6 +1540,7 @@ def reanchor_bimanual_transport_from_observation(
         cooktop,
         steps=transport_end - start + 1,
         collision_clearance_m=collision_clearance_m,
+        vertical_rise_fraction=vertical_rise_fraction,
     )
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
@@ -2267,6 +2301,7 @@ class PutPotSkillProgram:
         *,
         steps: int,
         collision_clearance_m: float,
+        vertical_rise_fraction: float = 1.0,
     ) -> SmoothBimanualTransport:
         """Append one collision-checked bimanual sweep to the centered target."""
         transport = smooth_collision_aware_bimanual_transport(
@@ -2278,6 +2313,7 @@ class PutPotSkillProgram:
             cooktop,
             steps=steps,
             collision_clearance_m=collision_clearance_m,
+            vertical_rise_fraction=vertical_rise_fraction,
         )
         self._append_sampled(
             "smooth_transport",
