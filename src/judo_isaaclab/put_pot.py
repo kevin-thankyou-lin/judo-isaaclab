@@ -71,6 +71,7 @@ MISSING_FINGER_CONTACT_DELAY_STEPS = 10
 MISSING_FINGER_PAD_DEPTH_STEP_M = 0.001
 MISSING_FINGER_PAD_DEPTH_LIMIT_M = 0.010
 MISSING_FINGER_PAD_TARGET_FRACTION = 0.02
+SINGLE_FINGER_CONTACT_LATCH_FRACTION = 0.20
 MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     MISSING_FINGER_CONTACT_DELAY_STEPS
     + int(np.ceil(MISSING_FINGER_CONTACT_LIMIT_M / MISSING_FINGER_CONTACT_STEP_M))
@@ -457,16 +458,32 @@ def mirror_handle_position_in_receiving_jaw_frame(
 
 
 def single_finger_contact_observed(
-    finger_forces_n: Any, *, contact_threshold_n: float = 0.1
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    *,
+    contact_threshold_n: float = 0.1,
+    minimum_pad_fraction: float = SINGLE_FINGER_CONTACT_LATCH_FRACTION,
 ) -> bool:
-    """Return whether exactly one pad has measured target contact."""
+    """Return whether one measured contact lies inside the pad support region."""
 
     forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
     if forces.shape != (2,) or not np.all(np.isfinite(forces)):
         raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
     if not np.isfinite(contact_threshold_n) or contact_threshold_n < 0.0:
         raise ValueError("contact_threshold_n must be finite and nonnegative")
-    return bool(np.sum(forces >= contact_threshold_n) == 1)
+    if not np.isfinite(minimum_pad_fraction) or not 0.0 <= minimum_pad_fraction < 0.5:
+        raise ValueError("minimum_pad_fraction must be finite and in [0, 0.5)")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return False
+    fraction = float(fractions[int(np.flatnonzero(contacting)[0])])
+    return bool(
+        np.isfinite(fraction)
+        and minimum_pad_fraction <= fraction <= 1.0 - minimum_pad_fraction
+    )
 
 
 def reanchor_missing_finger_contact(

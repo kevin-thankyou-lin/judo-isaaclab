@@ -1394,7 +1394,8 @@ def main() -> None:
                     peer_contact_transfer
                     and peer_single_contact_latch_step is None
                     and single_finger_contact_observed(
-                        sample["left_finger_forces_n"]
+                        sample["left_finger_forces_n"],
+                        sample["left_pad_fractions"],
                     )
                 ):
                     left_handle_contact = compose_pose(

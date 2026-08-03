@@ -441,10 +441,12 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
 
 
 def test_single_finger_contact_detection_is_exact_and_thresholded():
-    assert single_finger_contact_observed([0.0, 0.1])
-    assert single_finger_contact_observed([1.0, 0.0])
-    assert not single_finger_contact_observed([0.0, 0.0])
-    assert not single_finger_contact_observed([0.1, 0.1])
+    assert single_finger_contact_observed([0.0, 0.1], [np.nan, 0.2])
+    assert single_finger_contact_observed([1.0, 0.0], [0.5, np.nan])
+    assert not single_finger_contact_observed([0.0, 0.0], [np.nan, np.nan])
+    assert not single_finger_contact_observed([0.1, 0.1], [0.5, 0.5])
+    assert not single_finger_contact_observed([0.0, 2.0], [np.nan, -0.005])
+    assert not single_finger_contact_observed([0.0, 2.0], [np.nan, 0.81])
 
 
 def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
