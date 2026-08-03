@@ -1427,11 +1427,10 @@ def main() -> None:
                     geometry_conditioned_loaded_jaw_rotation_fraction,
                     retime_loaded_gripper_close_for_pad_reseat,
                     single_contact_pad_base_residual_m,
-                    lock_loaded_contact_position_for_reach_avoidance,
+                    twist_loaded_jaw_about_observed_contact,
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
-                    twist_jaw_away_from_limited_axis,
                     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
                 )
 
@@ -1468,19 +1467,16 @@ def main() -> None:
                             sample["left_pad_fractions"],
                         )
                     )
-                    loaded_left_world, peer_contact_jaw_twist_rad = (
-                        twist_jaw_away_from_limited_axis(
-                            loaded_left_world,
-                            sample["left_pad_axes_world"],
-                            rotation_fraction=peer_contact_jaw_twist_fraction,
-                        )
-                    )
                     (
                         loaded_left_world,
+                        peer_contact_jaw_twist_rad,
                         peer_contact_position_locked,
-                    ) = lock_loaded_contact_position_for_reach_avoidance(
+                    ) = twist_loaded_jaw_about_observed_contact(
                         sample["left_eef_pose"],
                         loaded_left_world,
+                        sample["left_finger_forces_n"],
+                        sample["left_pad_centers_world"],
+                        sample["left_pad_axes_world"],
                         peer_contact_jaw_twist_fraction,
                     )
                     retained_residual = (

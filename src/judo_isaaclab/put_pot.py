@@ -680,25 +680,47 @@ def single_contact_pad_base_residual_m(
     )
 
 
-def lock_loaded_contact_position_for_reach_avoidance(
+def twist_loaded_jaw_about_observed_contact(
     observed_pose: Any,
     loaded_target_pose: Any,
+    finger_forces_n: Any,
+    finger_pad_centers_world: Any,
+    pad_axes_world: Any,
     rotation_fraction: float,
     *,
     base_fraction: float = LOADED_JAW_REACH_AVOIDANCE_FRACTION,
-) -> tuple[np.ndarray, bool]:
-    """Keep a high-residual loaded contact at its observed world position."""
+) -> tuple[np.ndarray, float, bool]:
+    """Twist a high-residual jaw about its measured loaded pad center."""
 
     observed = _pose(observed_pose, "observed_pose")
     target = _pose(loaded_target_pose, "loaded_target_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
     if not np.isfinite(rotation_fraction) or not 0.0 <= rotation_fraction <= 1.0:
         raise ValueError("rotation_fraction must be in [0, 1]")
     if not np.isfinite(base_fraction) or not 0.0 <= base_fraction <= 1.0:
         raise ValueError("base_fraction must be in [0, 1]")
-    locked = bool(rotation_fraction > base_fraction + 1.0e-9)
-    if locked:
-        target[:3] = observed[:3]
-    return target, locked
+    twisted, angle = twist_jaw_away_from_limited_axis(
+        target,
+        pad_axes_world,
+        rotation_fraction=rotation_fraction,
+    )
+    pivoted = bool(rotation_fraction > base_fraction + 1.0e-9)
+    if not pivoted:
+        return twisted, angle, False
+    contacting = forces >= 0.1
+    if int(np.sum(contacting)) != 1:
+        raise ValueError("contact-pivoted jaw twist requires one loaded finger")
+    center = centers[int(np.flatnonzero(contacting)[0])]
+    pivot_local = quaternion_rotate(
+        inverse_pose(observed)[3:], center - observed[:3]
+    )
+    twisted[:3] = center - quaternion_rotate(twisted[3:], pivot_local)
+    return twisted, angle, True
 
 
 def retime_loaded_gripper_close_for_pad_reseat(

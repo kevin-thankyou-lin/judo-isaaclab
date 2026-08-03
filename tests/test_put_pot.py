@@ -35,7 +35,6 @@ from judo_isaaclab.put_pot import (
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     maximum_bimanual_position_step_m,
-    lock_loaded_contact_position_for_reach_avoidance,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     preserve_loaded_contact_target,
@@ -64,6 +63,7 @@ from judo_isaaclab.put_pot import (
     track_bimanual_handle_targets,
     track_retained_contact_from_observed_object,
     twist_jaw_away_from_limited_axis,
+    twist_loaded_jaw_about_observed_contact,
     transfer_handle_approach_orientation,
     transfer_handle_pose_through_contact_frames,
     transfer_handle_pose_preserving_surface_clearance,
@@ -450,21 +450,44 @@ def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():
     assert retimed.left_poses == pytest.approx(trajectory.left_poses)
 
 
-def test_high_reach_avoidance_twist_locks_observed_contact_position():
+def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     observed = _pose(0.1, 0.2, 0.3)
     loaded = _pose(0.2, 0.4, 0.6)
     loaded[3:] = [0.5, 0.5, 0.5, 0.5]
-    locked, did_lock = lock_loaded_contact_position_for_reach_avoidance(
-        observed, loaded, 0.934
+    pad_centers = [[0.12, 0.21, 0.34], [0.08, 0.19, 0.34]]
+    twisted, angle, did_pivot = twist_loaded_jaw_about_observed_contact(
+        observed,
+        loaded,
+        [0.0, 8.0],
+        pad_centers,
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        0.934,
     )
-    assert did_lock
-    assert locked[:3] == pytest.approx(observed[:3])
-    assert locked[3:] == pytest.approx(loaded[3:])
-    retained, did_lock = lock_loaded_contact_position_for_reach_avoidance(
-        observed, loaded, LOADED_JAW_REACH_AVOIDANCE_FRACTION
+    assert did_pivot
+    assert np.isfinite(angle)
+    pivot_local = quaternion_rotate(
+        inverse_pose(observed)[3:],
+        np.asarray(pad_centers[1]) - observed[:3],
     )
-    assert not did_lock
-    assert retained == pytest.approx(loaded)
+    preserved_center = twisted[:3] + quaternion_rotate(
+        twisted[3:], pivot_local
+    )
+    assert preserved_center == pytest.approx(pad_centers[1])
+    wrist_twisted, _, did_pivot = twist_loaded_jaw_about_observed_contact(
+        observed,
+        loaded,
+        [0.0, 8.0],
+        pad_centers,
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+    )
+    expected, _ = twist_jaw_away_from_limited_axis(
+        loaded,
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        rotation_fraction=LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+    )
+    assert not did_pivot
+    assert wrist_twisted == pytest.approx(expected)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
