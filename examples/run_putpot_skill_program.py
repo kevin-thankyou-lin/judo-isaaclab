@@ -1142,6 +1142,8 @@ def main() -> None:
         milestone_feedback_horizon_steps = None
         milestone_gripper_hold_steps = None
         milestone_gripper_close_start_step = None
+        milestone_open_pad_reseat_m = 0.0
+        milestone_open_pad_reseat_residuals_m = []
         peer_contact_transfer = False
         peer_supported_contact_streak = 0
         peer_single_contact_latch_step = None
@@ -1450,6 +1452,34 @@ def main() -> None:
                     track_loaded_pad_center_from_observation,
                     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
                 )
+
+                if (
+                    peer_contact_transfer
+                    and peer_single_contact_latch_step is None
+                    and milestone_gripper_close_start_step is not None
+                    and step < milestone_gripper_close_start_step
+                ):
+                    (
+                        left_handle_contact,
+                        milestone_open_pad_reseat_m,
+                        open_pad_reseat_residual_m,
+                    ) = reanchor_single_contact_pad_fraction(
+                        left_handle_contact,
+                        sample["pot_pose"],
+                        sample["left_finger_forces_n"],
+                        sample["left_pad_fractions"],
+                        sample["left_pad_axes_world"],
+                        milestone_open_pad_reseat_m,
+                    )
+                    milestone_open_pad_reseat_residuals_m.append(
+                        {
+                            "step": step,
+                            "signed_residual_m": open_pad_reseat_residual_m,
+                            "cumulative_applied_m": (
+                                milestone_open_pad_reseat_m
+                            ),
+                        }
+                    )
 
                 supported_peer_contact = bool(
                     peer_contact_transfer
@@ -2552,6 +2582,10 @@ def main() -> None:
                 "milestone_gripper_hold_steps": milestone_gripper_hold_steps,
                 "milestone_gripper_close_start_step": (
                     milestone_gripper_close_start_step
+                ),
+                "milestone_open_pad_reseat_m": milestone_open_pad_reseat_m,
+                "milestone_open_pad_reseat_residuals_m": (
+                    milestone_open_pad_reseat_residuals_m
                 ),
                 "peer_single_contact_latch_step": peer_single_contact_latch_step,
                 "peer_single_contact_latch_support_frames": (
