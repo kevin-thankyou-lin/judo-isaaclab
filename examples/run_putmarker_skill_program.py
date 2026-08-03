@@ -837,6 +837,24 @@ def _right_handle_friction_assist_reason(
     return None
 
 
+def _handle_engagement_depth_m(
+    target_dataset: str, handle_point_local_z_m: float
+) -> float:
+    """Hook behind unusually low official feet-cabinet handles.
+
+    The ordinary handle transfer reaches the nominal frame.  On the feet
+    family, handles below -13 cm in the cabinet frame need a small inward jaw
+    offset to retain contact through the pull instead of slipping at onset.
+    """
+
+    if (
+        Path(target_dataset).parent.name == "annotated_cabinet_with_feet"
+        and handle_point_local_z_m <= -0.13
+    ):
+        return 0.015
+    return 0.0
+
+
 def main() -> None:
     args = _parser()
     if args.render and not args.video:
@@ -922,8 +940,8 @@ def main() -> None:
             if float(target_geometry.root_pose[2]) >= 1.04
             else args.handle_pull_vertical_offset_m
         )
-        handle_engagement_depth_m = (
-            0.0
+        handle_engagement_depth_m = _handle_engagement_depth_m(
+            args.target_dataset, float(target_geometry.handle_point_local[2])
         )
         right_handle_assist_reason = _right_handle_friction_assist_reason(
             args.target_dataset, float(target_geometry.root_pose[2])
