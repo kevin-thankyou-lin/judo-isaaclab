@@ -160,7 +160,7 @@ def test_infer_mug_parts_separates_body_footprint_and_handle_hole():
     assert parts.handle_axis == 0
     assert parts.handle_sign == 1
     np.testing.assert_allclose(parts.body_frame[:2], [-0.0125, 0.0], atol=1.0e-8)
-    np.testing.assert_allclose(parts.handle_hole_frame[:3], [0.0415, 0.0, 0.0025])
+    np.testing.assert_allclose(parts.handle_hole_frame[:3], [0.035, 0.0, 0.003])
     assert 0.009 < parts.handle_thickness_m < 0.014
 
 

@@ -352,6 +352,50 @@ def infer_mug_parts(values: Iterable[object]) -> MugParts:
     outward = np.zeros(3, dtype=np.float64)
     outward[axis] = sign
     hole_center = 0.5 * (handle_min + handle_max)
+    # The center of the handle material bounds is not generally the center of
+    # its opening.  Convex-decomposed handles contain an outer rail plus upper
+    # and lower connectors; averaging all their vertices can put the inferred
+    # point inside the outer rail (notably on shallow HangMug handles).  Infer
+    # the authored empty cavity from the body boundary, the inner face of the
+    # outer rail, and the facing surfaces of the two connectors.
+    selected_bounds = tuple(_bounds(points) for points in selected)
+    selected_centers = tuple(
+        0.5 * (minimum + maximum) for minimum, maximum in selected_bounds
+    )
+    body_boundary = body_max[axis] if sign > 0 else body_min[axis]
+    outer_extent = handle_max[axis] if sign > 0 else handle_min[axis]
+    outer_cut = body_boundary + 0.55 * (outer_extent - body_boundary)
+    rail_indices = tuple(
+        index
+        for index, center in enumerate(selected_centers)
+        if sign * center[axis] >= sign * outer_cut
+    )
+    connector_indices = tuple(
+        index for index in range(len(selected_bounds)) if index not in rail_indices
+    )
+    if rail_indices:
+        rail_inner_faces = [
+            selected_bounds[index][0 if sign > 0 else 1][axis]
+            for index in rail_indices
+        ]
+        rail_inner = float(np.median(rail_inner_faces))
+        if sign * (rail_inner - body_boundary) > 1.0e-6:
+            hole_center[axis] = 0.5 * (body_boundary + rail_inner)
+    lower_faces = [
+        selected_bounds[index][1][2]
+        for index in connector_indices
+        if selected_centers[index][2] < hole_center[2]
+    ]
+    upper_faces = [
+        selected_bounds[index][0][2]
+        for index in connector_indices
+        if selected_centers[index][2] > hole_center[2]
+    ]
+    if lower_faces and upper_faces:
+        cavity_lower = max(lower_faces)
+        cavity_upper = min(upper_faces)
+        if cavity_upper > cavity_lower:
+            hole_center[2] = 0.5 * (cavity_lower + cavity_upper)
     hole_frame = _frame(hole_center, outward)
     handle_size = _projected_size(handle_points, hole_frame)
     component_thicknesses = []
