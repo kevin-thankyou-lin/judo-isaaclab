@@ -168,9 +168,10 @@ def test_handle_pad_depth_adds_measured_transverse_cross_section_loss():
         [0.0594, 0.0858, 0.0405],
         [0.0687, 0.0589, 0.0272],
         0,
-        [0.0, 0.8, 0.6],
+        [0.0, 0.6, 0.8],
     )
-    assert depth == pytest.approx(0.016 + 0.8 * 0.0269 + 0.6 * 0.0133)
+    projected = 0.6 * 0.0269 + 0.8 * 0.0133
+    assert depth == pytest.approx(0.016 + 0.5 * (projected + 0.0269))
     assert geometry_conditioned_handle_pad_depth(
         [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0, [0.0, 0.8, 0.6]
     ) == pytest.approx(HANDLE_PAD_DEPTH_MARGIN_M)

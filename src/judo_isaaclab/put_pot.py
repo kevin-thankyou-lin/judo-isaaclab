@@ -187,8 +187,10 @@ def geometry_conditioned_handle_pad_depth(
     Surface-clearance transfer preserves the wrist-to-handle boundary, but a
     thinner curved handle meets the finger closer to the pad tip.  Add the
     measured transverse shrink projected onto that wrist's pad axis to the
-    already calibrated base depth; larger target handles retain the common
-    program unchanged.
+    already calibrated base depth.  The midpoint to the conservative maximum
+    shrink bound keeps narrow curved handles between the two observed failure
+    modes: missing the second pad and seating against the pad base.  Larger
+    target handles retain the common program unchanged.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
@@ -207,11 +209,15 @@ def geometry_conditioned_handle_pad_depth(
     if not np.isfinite(base_depth_m) or base_depth_m < 0.0:
         raise ValueError("base_depth_m must be finite and nonnegative")
     transverse = [axis for axis in range(3) if axis != handle_axis]
-    cross_section_loss = sum(
+    projected_loss = sum(
         abs(float(pad_axis[axis]))
         * max(0.0, float(source[axis] - target[axis]))
         for axis in transverse
     )
+    maximum_loss = max(
+        0.0, max(float(source[axis] - target[axis]) for axis in transverse)
+    )
+    cross_section_loss = 0.5 * (min(projected_loss, maximum_loss) + maximum_loss)
     return float(base_depth_m + cross_section_loss)
 
 
