@@ -698,7 +698,7 @@ def main() -> None:
 
                 trajectory = reanchor_right_grasp_after_pregrasp(
                     trajectory,
-                    nominal_handover_mug,
+                    nominal_right_contact,
                     sample["mug_pose"],
                     sample["right_eef_pose"],
                 )

@@ -197,7 +197,7 @@ def reanchor_branch_transport_contact(
 
 def reanchor_right_grasp_after_pregrasp(
     trajectory: SkillTrajectory,
-    nominal_mug_pose: Any,
+    nominal_right_contact: Any,
     observed_mug_pose: Any,
     observed_right_pose: Any,
 ) -> SkillTrajectory:
@@ -212,9 +212,7 @@ def reanchor_right_grasp_after_pregrasp(
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    corrected_grasp = transfer_pose(
-        right[grasp_end], nominal_mug_pose, observed_mug_pose
-    )
+    corrected_grasp = compose_pose(observed_mug_pose, nominal_right_contact)
     right[start : grasp_end + 1] = interpolate_poses(
         observed_right_pose, corrected_grasp, grasp_end - start + 1
     )

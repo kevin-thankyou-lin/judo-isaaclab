@@ -274,15 +274,16 @@ def test_right_grasp_reanchors_after_pregrasp_contact():
     )
     trajectory = program.build()
     original = trajectory.right_poses.copy()
+    nominal_contact = _pose(0.4, -0.1)
     observed_mug = _pose(0.0, 0.06, -0.02)
     pregrasp_end = trajectory.waypoint_steps["handover_pregrasp"]
     adjusted = reanchor_right_grasp_after_pregrasp(
-        trajectory, _pose(), observed_mug, original[pregrasp_end]
+        trajectory, nominal_contact, observed_mug, original[pregrasp_end]
     )
     grasp_end = trajectory.waypoint_steps["right_grasp"]
     assert adjusted.right_poses[: pregrasp_end + 1] == pytest.approx(
         original[: pregrasp_end + 1]
     )
     assert adjusted.right_poses[grasp_end, :3] == pytest.approx(
-        original[grasp_end, :3] + [0.0, 0.06, -0.02]
+        [0.4, -0.04, -0.02]
     )
