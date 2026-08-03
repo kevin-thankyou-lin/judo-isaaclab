@@ -1271,7 +1271,7 @@ def track_bimanual_handle_targets(
     right_end = steps.get("right_handle_grasp")
     if pregrasp_end is None or left_end is None or right_end is None:
         raise ValueError("handle trajectory is missing grasp waypoints")
-    grasp_end = max(left_end, right_end)
+    grasp_end = steps.get("bimanual_contact_hold", max(left_end, right_end))
     if current_step < pregrasp_end or current_step >= grasp_end:
         raise ValueError("current_step is outside the contact-closing window")
     start = current_step + 1

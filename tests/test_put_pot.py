@@ -572,6 +572,18 @@ def test_right_first_peer_grasp_holds_closed_contact_before_transport():
     assert trajectory.grippers[left_end + 1 : hold_end + 1] == pytest.approx(
         np.zeros((3, 2))
     )
+    tracked = track_bimanual_handle_targets(
+        trajectory,
+        left_end + 1,
+        _pose(),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        right_first_close=True,
+        feedback_horizon_steps=1,
+    )
+    assert tracked.left_poses[left_end + 2] == pytest.approx(_pose(0.2))
     observed_pot = _pose()
     observed_left = _pose(0.21, 0.01)
     observed_right = _pose(0.21, 1.01)
