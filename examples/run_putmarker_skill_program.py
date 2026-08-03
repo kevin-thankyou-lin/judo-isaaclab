@@ -42,6 +42,7 @@ SEMANTIC_INDICES = {
 # but the current runtime's fingertips sit above its handle.  This measured
 # correction restores contact without importing the target joint trajectory.
 TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
+TARGET_HANDLE_PULL_LIFT_M = 0.050
 
 
 def _parser() -> argparse.Namespace:
@@ -424,6 +425,8 @@ def _build_skill(
     handle_open = offset_handle_pull_pose(
         handle_open, target_geometry.root_pose, handle_pull_vertical_offset_m
     )
+    if target_handle_grasp_index is not None:
+        handle_open[2] += TARGET_HANDLE_PULL_LIFT_M
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -1361,6 +1364,11 @@ def main() -> None:
                     "target_handle_grasp_index": target_handle_grasp_index,
                     "target_handle_runtime_z_correction_m": (
                         TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
+                        if target_handle_grasp_index is not None
+                        else 0.0
+                    ),
+                    "target_handle_pull_lift_m": (
+                        TARGET_HANDLE_PULL_LIFT_M
                         if target_handle_grasp_index is not None
                         else 0.0
                     ),
