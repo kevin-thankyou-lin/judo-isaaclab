@@ -208,22 +208,26 @@ def ensure_pick_latch_clearance(
 
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
-    nominal_right_contact: Any,
+    planned_right_contact: Any,
     observed_mug_pose: Any,
     observed_right_pose: Any,
+    *,
+    completed_waypoint: str = "left_release",
 ) -> SkillTrajectory:
-    """Use the right-hand contact actually measured after physical handover."""
+    """Reanchor future transport to the currently observed right contact."""
 
-    if "left_release" not in trajectory.waypoint_steps:
-        raise ValueError("trajectory is missing left_release waypoint")
-    nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    if completed_waypoint not in trajectory.waypoint_steps:
+        raise ValueError(
+            f"trajectory is missing {completed_waypoint} waypoint"
+        )
+    planned_contact = _pose(planned_right_contact, "planned_right_contact")
     observed_contact = compose_pose(
         inverse_pose(observed_mug_pose), observed_right_pose
     )
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    start = trajectory.waypoint_steps["left_release"] + 1
+    start = trajectory.waypoint_steps[completed_waypoint] + 1
     for index in range(start, len(right)):
-        intended_mug = compose_pose(right[index], inverse_pose(nominal_contact))
+        intended_mug = compose_pose(right[index], inverse_pose(planned_contact))
         right[index] = compose_pose(intended_mug, observed_contact)
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),

@@ -270,3 +270,29 @@ def test_branch_transport_reanchors_observed_right_contact():
     assert adjusted.right_poses[:start] == pytest.approx(
         trajectory.right_poses[:start]
     )
+
+    second_mug = _pose(0.55, -0.05, 0.95)
+    second_right = _pose(0.64, -0.06, 1.01)
+    second_planned_contact = compose_pose(
+        inverse_pose(observed_mug), observed_right
+    )
+    readjusted = reanchor_branch_transport_contact(
+        adjusted,
+        second_planned_contact,
+        second_mug,
+        second_right,
+        completed_waypoint="tree_transport",
+    )
+    second_start = trajectory.waypoint_steps["tree_transport"] + 1
+    intended_mug = compose_pose(
+        adjusted.right_poses[second_start], inverse_pose(second_planned_contact)
+    )
+    second_observed_contact = compose_pose(
+        inverse_pose(second_mug), second_right
+    )
+    assert readjusted.right_poses[second_start] == pytest.approx(
+        compose_pose(intended_mug, second_observed_contact)
+    )
+    assert readjusted.right_poses[:second_start] == pytest.approx(
+        adjusted.right_poses[:second_start]
+    )

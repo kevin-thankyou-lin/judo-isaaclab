@@ -734,13 +734,32 @@ def main() -> None:
             )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
-            if trajectory is not None and step == trajectory.waypoint_steps["left_release"]:
+            reanchor_waypoints = (
+                "left_release",
+                "tree_transport",
+                "branch_approach",
+            )
+            if trajectory is not None and any(
+                step == trajectory.waypoint_steps[name]
+                for name in reanchor_waypoints
+            ):
                 from judo_isaaclab.hang_mug import reanchor_branch_transport_contact
+                from judo_isaaclab.put_marker import compose_pose, inverse_pose
 
+                completed_waypoint = next(
+                    name
+                    for name in reanchor_waypoints
+                    if step == trajectory.waypoint_steps[name]
+                )
                 trajectory = reanchor_branch_transport_contact(
                     trajectory,
                     nominal_right_contact,
                     sample["mug_pose"],
+                    sample["right_eef_pose"],
+                    completed_waypoint=completed_waypoint,
+                )
+                nominal_right_contact = compose_pose(
+                    inverse_pose(sample["mug_pose"]),
                     sample["right_eef_pose"],
                 )
             if encoder is not None:
