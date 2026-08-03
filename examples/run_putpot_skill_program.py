@@ -368,6 +368,7 @@ def _build_skill(
 
     contact_frames: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     grasp_poses: dict[str, np.ndarray] = {}
+    grasp_depths: dict[str, float] = {}
 
     def grasp_contact_frames(arm: str, side: int) -> tuple[np.ndarray, np.ndarray]:
         if arm in contact_frames:
@@ -412,15 +413,28 @@ def _build_skill(
                 geometry_conditioned_handle_pad_depth,
                 seat_handle_inside_finger_pads,
             )
+            from judo_isaaclab.put_marker import quaternion_rotate
+
+            target_handle_world = compose_pose(
+                target_initial.root_pose, handle(target_parts, side)
+            )
+            pad_axis_world = quaternion_rotate(
+                surface_pose[3:], np.asarray([0.0, 0.0, 1.0])
+            )
+            pad_axis_in_handle_frame = quaternion_rotate(
+                inverse_pose(target_handle_world)[3:], pad_axis_world
+            )
 
             pad_depth = geometry_conditioned_handle_pad_depth(
                 handle_size(source_parts, side),
                 handle_size(target_parts, side),
                 target_parts.handle_axis,
+                pad_axis_in_handle_frame,
             )
             surface_pose = seat_handle_inside_finger_pads(
                 surface_pose, pad_depth
             )
+            grasp_depths[arm] = pad_depth
             grasp_poses[arm] = surface_pose.copy()
         else:
             from judo_isaaclab.put_pot import expand_handle_pregrasp_clearance
@@ -521,7 +535,7 @@ def _build_skill(
             "cooktop_overlap_samples": transport.cooktop_overlap_samples,
         }
     )
-    return trajectory, final_pot_pose, plan_metrics
+    return trajectory, final_pot_pose, plan_metrics, grasp_depths
 
 
 def _build_center_repair(sample, args):
@@ -724,7 +738,7 @@ def main() -> None:
             target_assets["cooktop"], target["cooktop_pose"][0]
         )
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
-        trajectory, intended_final_pot, transport_plan = (
+        trajectory, intended_final_pot, transport_plan, handle_pad_depths = (
             _build_skill(
                 keyframes,
                 source,
@@ -739,7 +753,7 @@ def main() -> None:
                 _eef_pose(env, "right_arm"),
                 args,
             )
-            if args.mode == "skill" else (None, None, None)
+            if args.mode == "skill" else (None, None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
@@ -1066,37 +1080,7 @@ def main() -> None:
         from judo_isaaclab.put_pot import (
             CENTERED_ON_COOKTOP_TOLERANCE_M,
             HANDLE_PAD_DEPTH_MARGIN_M,
-            geometry_conditioned_handle_pad_depth,
         )
-
-        grasp_frame = keyframes["frames"]["right_handle_grasp"] if keyframes else None
-        if grasp_frame is not None:
-            from judo_isaaclab.semantic_parts import bimanual_handle_sides
-
-            left_side, right_side = bimanual_handle_sides(
-                grasp_frame["pot_pose"],
-                source_parts,
-                grasp_frame["left_eef_pose"][:3],
-                grasp_frame["right_eef_pose"][:3],
-            )
-            handle_pad_depths = {
-                arm: geometry_conditioned_handle_pad_depth(
-                    (
-                        source_parts.negative_handle_size
-                        if side < 0
-                        else source_parts.positive_handle_size
-                    ),
-                    (
-                        target_parts.negative_handle_size
-                        if side < 0
-                        else target_parts.positive_handle_size
-                    ),
-                    target_parts.handle_axis,
-                )
-                for arm, side in (("left", left_side), ("right", right_side))
-            }
-        else:
-            handle_pad_depths = None
 
         centered_on_cooktop = bool(
             final["center_error_m"] <= CENTERED_ON_COOKTOP_TOLERANCE_M

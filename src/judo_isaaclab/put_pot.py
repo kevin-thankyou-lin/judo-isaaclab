@@ -178,6 +178,7 @@ def geometry_conditioned_handle_pad_depth(
     source_handle_size: Any,
     target_handle_size: Any,
     handle_axis: int,
+    pad_axis_in_handle_frame: Any,
     *,
     base_depth_m: float = HANDLE_PAD_DEPTH_MARGIN_M,
 ) -> float:
@@ -185,8 +186,9 @@ def geometry_conditioned_handle_pad_depth(
 
     Surface-clearance transfer preserves the wrist-to-handle boundary, but a
     thinner curved handle meets the finger closer to the pad tip.  Add the
-    largest measured transverse shrink to the already calibrated base depth;
-    larger target handles retain the common program unchanged.
+    measured transverse shrink projected onto that wrist's pad axis to the
+    already calibrated base depth; larger target handles retain the common
+    program unchanged.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
@@ -195,11 +197,20 @@ def geometry_conditioned_handle_pad_depth(
         raise ValueError("handle sizes must contain three positive values")
     if handle_axis not in (0, 1):
         raise ValueError("handle_axis must be horizontal")
+    pad_axis = np.asarray(pad_axis_in_handle_frame, dtype=np.float64)
+    if pad_axis.shape != (3,) or not np.all(np.isfinite(pad_axis)):
+        raise ValueError("pad_axis_in_handle_frame must contain three finite values")
+    norm = float(np.linalg.norm(pad_axis))
+    if norm <= 1.0e-9:
+        raise ValueError("pad_axis_in_handle_frame must be nonzero")
+    pad_axis /= norm
     if not np.isfinite(base_depth_m) or base_depth_m < 0.0:
         raise ValueError("base_depth_m must be finite and nonnegative")
     transverse = [axis for axis in range(3) if axis != handle_axis]
-    cross_section_loss = max(
-        0.0, max(float(source[axis] - target[axis]) for axis in transverse)
+    cross_section_loss = sum(
+        abs(float(pad_axis[axis]))
+        * max(0.0, float(source[axis] - target[axis]))
+        for axis in transverse
     )
     return float(base_depth_m + cross_section_loss)
 
