@@ -19,6 +19,35 @@ from judo_isaaclab.put_marker import pose_from_matrix
 LOCAL_HANDLE_TANGENT_NEIGHBORS = 32
 
 
+def geometry_conditioned_handle_tangent_neighbors(
+    source_handle_size: object,
+    target_handle_size: object,
+    handle_axis: int,
+    *,
+    base_neighbors: int = LOCAL_HANDLE_TANGENT_NEIGHBORS,
+) -> int:
+    """Scale a local tangent patch with measured handle cross-section size."""
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if base_neighbors < 5:
+        raise ValueError("base_neighbors must be at least five")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    ratio = min(
+        1.0, max(float(target[axis] / source[axis]) for axis in transverse)
+    )
+    count = max(5, int(np.ceil(base_neighbors * ratio)))
+    # Avoid an exactly paired surface sample on symmetric convex meshes: its
+    # two leading PCA modes can be nearly degenerate and flip the tangent.
+    if count < base_neighbors and count % 2 == 0:
+        count += 1
+    return min(base_neighbors, count)
+
+
 def _points(value: object) -> np.ndarray:
     result = np.asarray(value, dtype=np.float64)
     if result.ndim != 2 or result.shape[1] != 3 or len(result) < 4:
@@ -235,6 +264,8 @@ def infer_pot_handle_contact_frame(
     parts: PotParts,
     side: int,
     reference_point: object,
+    *,
+    neighbor_count: int = LOCAL_HANDLE_TANGENT_NEIGHBORS,
 ) -> np.ndarray:
     """Infer the nearest authored handle-segment frame and principal tangent."""
 
@@ -244,6 +275,8 @@ def infer_pot_handle_contact_frame(
     reference = np.asarray(reference_point, dtype=np.float64)
     if reference.shape != (3,) or not np.all(np.isfinite(reference)):
         raise ValueError("reference_point must contain three finite values")
+    if neighbor_count < 5:
+        raise ValueError("neighbor_count must be at least five")
     axis = parts.handle_axis
     boundary = parts.body_xy_min[axis] if side < 0 else parts.body_xy_max[axis]
     candidates = []
@@ -267,7 +300,7 @@ def infer_pot_handle_contact_frame(
     # transferred wrist.  Use the nearest authored surface neighborhood so the
     # frame remains local to the actual contact region.
     distances = np.linalg.norm(component - reference, axis=1)
-    count = min(LOCAL_HANDLE_TANGENT_NEIGHBORS, len(component))
+    count = min(neighbor_count, len(component))
     neighborhood = component[np.argsort(distances)[:count]]
     covariance = np.cov(
         neighborhood - neighborhood.mean(axis=0), rowvar=False
