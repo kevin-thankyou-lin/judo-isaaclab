@@ -45,6 +45,7 @@ from judo_isaaclab.put_pot import (
     transfer_handle_approach_orientation,
     transfer_handle_pose_through_contact_frames,
     transfer_handle_pose_preserving_surface_clearance,
+    transport_contact_reanchor_required,
     _linear_contact_feedback_poses,
 )
 
@@ -846,6 +847,36 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         inverse_pose(late_transport.pot_poses[0]),
         late.left_poses[late_step + 1],
     ) == pytest.approx(left_contact)
+
+
+def test_transport_reanchor_repeats_only_after_measured_contact_drift():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1), _pose(0.1, 1.0), _pose(0.2), _pose(0.2, 1.0),
+        approach_steps=2, left_close_steps=2, right_close_steps=2,
+    )
+    program.smooth_bimanual_transport_to_center(
+        _pose(0.0, 0.0, 0.8), _pose(0.5, 0.0, 1.0),
+        _pose(0.0, 0.1), _pose(0.0, -0.1), [0.2, 0.2, 0.2],
+        RigidSupportGeometry(_pose(0.5, 0.0, 0.8), [0.4, 0.4, 0.1]),
+        steps=20, collision_clearance_m=0.025,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["right_handle_grasp"] + 2
+    assert transport_contact_reanchor_required(
+        trajectory, step, trajectory.left_poses[step], trajectory.right_poses[step],
+        last_reanchor_step=None, tracking_tolerance_m=0.01,
+    )
+    drifted_right = trajectory.right_poses[step].copy()
+    drifted_right[1] += 0.012
+    assert not transport_contact_reanchor_required(
+        trajectory, step, trajectory.left_poses[step], drifted_right,
+        last_reanchor_step=step - 5, tracking_tolerance_m=0.01,
+    )
+    assert transport_contact_reanchor_required(
+        trajectory, step, trajectory.left_poses[step], drifted_right,
+        last_reanchor_step=step - 10, tracking_tolerance_m=0.01,
+    )
 
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():

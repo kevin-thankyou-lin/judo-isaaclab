@@ -29,6 +29,7 @@ from .put_marker import (
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
 CONTACT_FEEDBACK_HORIZON_STEPS = 10
+TRANSPORT_CONTACT_REANCHOR_MIN_STEPS = 10
 HANDLE_PAD_GEOMETRIC_MARGIN_M = 0.003
 # PutPot012 attempt_011 finished its simultaneous close 7 mm shallow along
 # the commanded local pad axis.  After switching to the local authored handle
@@ -1201,6 +1202,40 @@ def reanchor_bimanual_transport_from_observation(
         ),
         transport,
     )
+
+
+def transport_contact_reanchor_required(
+    trajectory: SkillTrajectory,
+    step: int,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+    *,
+    last_reanchor_step: int | None,
+    tracking_tolerance_m: float,
+    minimum_interval_steps: int = TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
+) -> bool:
+    """Return whether grasped transport has drifted beyond handle retention."""
+
+    if not np.isfinite(tracking_tolerance_m) or tracking_tolerance_m <= 0.0:
+        raise ValueError("tracking_tolerance_m must be positive and finite")
+    if minimum_interval_steps < 1:
+        raise ValueError("minimum_interval_steps must be positive")
+    transport_end = trajectory.waypoint_steps.get("smooth_transport")
+    if transport_end is None or step < 0 or step >= transport_end:
+        return False
+    if last_reanchor_step is None:
+        return True
+    if step - last_reanchor_step < minimum_interval_steps:
+        return False
+    left_error = np.linalg.norm(
+        _pose(observed_left_pose, "observed_left_pose")[:3]
+        - trajectory.left_poses[step, :3]
+    )
+    right_error = np.linalg.norm(
+        _pose(observed_right_pose, "observed_right_pose")[:3]
+        - trajectory.right_poses[step, :3]
+    )
+    return bool(max(left_error, right_error) > tracking_tolerance_m)
 
 
 def reanchor_centered_lowering(
