@@ -119,6 +119,31 @@ def transfer_handle_pose_preserving_surface_clearance(
     return compose_pose(target_frame, local)
 
 
+def transfer_handle_approach_orientation(
+    pose: Any,
+    source_root: Any,
+    target_root: Any,
+    source_contact_frame: Any,
+    target_contact_frame: Any,
+) -> np.ndarray:
+    """Orient an approach through the same local frame as its grasp.
+
+    A curved handle can place a pregrasp wrist nearest to a different authored
+    segment than the eventual contact.  Reusing the grasp contact frame keeps
+    the source approach-to-grasp rotation continuous after asset transfer.
+    """
+
+    value = _pose(pose, "pose")
+    oriented = transfer_pose(
+        value,
+        compose_pose(source_root, source_contact_frame),
+        compose_pose(target_root, target_contact_frame),
+    )
+    result = value.copy()
+    result[3:] = oriented[3:]
+    return result
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 

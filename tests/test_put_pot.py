@@ -26,6 +26,7 @@ from judo_isaaclab.put_pot import (
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     track_bimanual_handle_targets,
+    transfer_handle_approach_orientation,
     transfer_handle_pose_preserving_surface_clearance,
     _linear_contact_feedback_poses,
 )
@@ -59,6 +60,7 @@ from judo_isaaclab.put_marker import (
     compose_pose,
     interpolate_poses,
     inverse_pose,
+    quaternion_multiply,
     quaternion_rotate,
 )
 
@@ -112,6 +114,29 @@ def test_handle_transfer_preserves_measured_transverse_surface_clearance():
         [0.4 + 0.048, -0.2 + 0.088, 0.1 + 0.0625]
     )
     assert transferred[3:] == pytest.approx(wrist[3:])
+
+
+def test_handle_approach_and_grasp_share_one_contact_frame_rotation():
+    source_root = _pose()
+    target_root = np.asarray([0.3, -0.2, 0.1, 0.92387953, 0.0, 0.0, 0.38268343])
+    source_contact = _pose(x=0.15)
+    target_contact = _pose(x=0.18)
+    pregrasp = np.asarray([0.20, 0.04, 0.08, 1.0, 0.0, 0.0, 0.0])
+    grasp = np.asarray([0.18, 0.02, 0.06, 0.99904822, 0.0, 0.0, 0.04361939])
+
+    transferred_pregrasp = transfer_handle_approach_orientation(
+        pregrasp, source_root, target_root, source_contact, target_contact
+    )
+    transferred_grasp = transfer_handle_approach_orientation(
+        grasp, source_root, target_root, source_contact, target_contact
+    )
+    source_relative = quaternion_multiply(
+        inverse_pose(pregrasp)[3:], grasp[3:]
+    )
+    target_relative = quaternion_multiply(
+        inverse_pose(transferred_pregrasp)[3:], transferred_grasp[3:]
+    )
+    assert target_relative == pytest.approx(source_relative, abs=1.0e-7)
 
 
 def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():

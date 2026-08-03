@@ -366,30 +366,46 @@ def _build_skill(
             target_parts.handle_axis,
         )
 
-    def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
+    contact_frames: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    def grasp_contact_frames(arm: str, side: int) -> tuple[np.ndarray, np.ndarray]:
+        if arm in contact_frames:
+            return contact_frames[arm]
+        frame_name = f"{arm}_handle_grasp"
         frame = frames[frame_name]
-        side = left_side if arm == "left" else right_side
-        surface_pose = transfer_surface(frame_name, arm)
+        grasp_surface = transfer_surface(frame_name, arm)
         from judo_isaaclab.semantic_parts import infer_pot_handle_contact_frame
 
         source_reference = compose_pose(
             inverse_pose(frame["pot_pose"]), frame[f"{arm}_eef_pose"]
         )
         target_reference = compose_pose(
-            inverse_pose(target_initial.root_pose), surface_pose
+            inverse_pose(target_initial.root_pose), grasp_surface
         )
-        source_contact = infer_pot_handle_contact_frame(
-            source_components, source_parts, side, source_reference[:3]
+        contact_frames[arm] = (
+            infer_pot_handle_contact_frame(
+                source_components, source_parts, side, source_reference[:3]
+            ),
+            infer_pot_handle_contact_frame(
+                target_components, target_parts, side, target_reference[:3]
+            ),
         )
-        target_contact = infer_pot_handle_contact_frame(
-            target_components, target_parts, side, target_reference[:3]
-        )
-        oriented_pose = transfer_pose(
+        return contact_frames[arm]
+
+    def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
+        frame = frames[frame_name]
+        side = left_side if arm == "left" else right_side
+        surface_pose = transfer_surface(frame_name, arm)
+        source_contact, target_contact = grasp_contact_frames(arm, side)
+        from judo_isaaclab.put_pot import transfer_handle_approach_orientation
+
+        surface_pose[3:] = transfer_handle_approach_orientation(
             frame[f"{arm}_eef_pose"],
-            compose_pose(frame["pot_pose"], source_contact),
-            compose_pose(target_initial.root_pose, target_contact),
-        )
-        surface_pose[3:] = oriented_pose[3:]
+            frames[f"{arm}_handle_grasp"]["pot_pose"],
+            target_initial.root_pose,
+            source_contact,
+            target_contact,
+        )[3:]
         if frame_name == f"{arm}_handle_grasp":
             from judo_isaaclab.put_pot import (
                 HANDLE_PAD_DEPTH_MARGIN_M,
