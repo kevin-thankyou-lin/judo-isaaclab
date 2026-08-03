@@ -1287,29 +1287,28 @@ def reanchor_bimanual_contact_hold(
     )
 
 
-def retained_contact_frame_after_acquisition(
+def compensate_retained_contact_tracking(
+    reference_contact_local: Any,
     observed_pot_pose: Any,
-    previous_eef_pose: Any,
     observed_eef_pose: Any,
     *,
-    retention_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
+    correction_limit_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Continue a measured contact-acquisition tangent by a geometry margin."""
+    """Oppose measured object-local hold drift within a geometry margin."""
 
+    reference = _pose(reference_contact_local, "reference_contact_local")
     root = _pose(observed_pot_pose, "observed_pot_pose")
-    previous = _pose(previous_eef_pose, "previous_eef_pose")
     observed = _pose(observed_eef_pose, "observed_eef_pose")
-    if not np.isfinite(retention_m) or retention_m < 0.0:
-        raise ValueError("retention_m must be finite and nonnegative")
-    acquisition = observed[:3] - previous[:3]
-    norm = float(np.linalg.norm(acquisition))
-    if norm <= 1.0e-9:
-        raise ValueError("contact acquisition must include measured translation")
-    retained = observed.copy()
-    retained[:3] += retention_m * acquisition / norm
-    retained_local = compose_pose(inverse_pose(root), retained)
     observed_local = compose_pose(inverse_pose(root), observed)
-    return retained_local, retained_local[:3] - observed_local[:3]
+    correction = reference[:3] - observed_local[:3]
+    norm = float(np.linalg.norm(correction))
+    if not np.isfinite(correction_limit_m) or correction_limit_m < 0.0:
+        raise ValueError("correction_limit_m must be finite and nonnegative")
+    if norm > correction_limit_m and norm > 0.0:
+        correction *= correction_limit_m / norm
+    target = reference.copy()
+    target[:3] += correction
+    return target, correction
 
 
 def reanchor_bimanual_transport_from_observation(

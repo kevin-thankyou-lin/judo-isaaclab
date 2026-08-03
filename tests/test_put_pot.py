@@ -35,7 +35,7 @@ from judo_isaaclab.put_pot import (
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
     reanchor_bimanual_contact_hold,
-    retained_contact_frame_after_acquisition,
+    compensate_retained_contact_tracking,
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
     reanchor_centered_support,
@@ -532,23 +532,26 @@ def test_right_first_peer_grasp_holds_closed_contact_before_transport():
     assert trajectory.grippers[left_end + 1 : hold_end + 1] == pytest.approx(
         np.zeros((3, 2))
     )
-    observed_pot = _pose(0.1, 0.2)
+    observed_pot = _pose()
     observed_left = _pose(0.21, 0.01)
     observed_right = _pose(0.21, 1.01)
-    retained_left, signed_retention = retained_contact_frame_after_acquisition(
-        observed_pot, _pose(0.20, 0.01), observed_left, retention_m=0.003
+    reference_left = compose_pose(inverse_pose(observed_pot), observed_left)
+    retained_left, signed_retention = compensate_retained_contact_tracking(
+        reference_left,
+        observed_pot,
+        _pose(0.209, 0.009),
     )
     retained_right = compose_pose(inverse_pose(observed_pot), observed_right)
     latched = reanchor_bimanual_contact_hold(
         trajectory, left_end, observed_pot, retained_left, retained_right
     )
     assert latched.left_poses[left_end + 1 : hold_end + 1] == pytest.approx(
-        np.broadcast_to(_pose(0.213, 0.01), (3, 7))
+        np.broadcast_to(_pose(0.211, 0.011), (3, 7))
     )
     assert latched.right_poses[left_end + 1 : hold_end + 1] == pytest.approx(
         np.broadcast_to(observed_right, (3, 7))
     )
-    assert signed_retention == pytest.approx([0.003, 0.0, 0.0])
+    assert signed_retention == pytest.approx([0.001, 0.001, 0.0])
 
     class Actions:
         def __init__(self, value):
