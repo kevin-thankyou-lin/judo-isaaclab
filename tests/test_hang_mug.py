@@ -127,7 +127,7 @@ def test_datagen_grasp_assist_mechanism_override():
     assert config["left"]["mechanism"] == "fixed_joint"
 
 
-def test_right_handover_assist_mirrors_supported_friction_config():
+def test_right_handover_assist_uses_zero_delay_contact_backed_joint():
     config = {
         "left": {
             "mechanism": "friction",
@@ -140,6 +140,8 @@ def test_right_handover_assist_mirrors_supported_friction_config():
     assert selected["right"] == {
         **config["left"],
         "arm": "right_arm",
+        "mechanism": "fixed_joint",
+        "grasp_delay_s": 0.0,
     }
     assert config.keys() == {"left"}
 
