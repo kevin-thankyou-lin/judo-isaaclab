@@ -843,6 +843,10 @@ def main() -> None:
             trajectory.waypoint_steps["right_handle_grasp"]
             if trajectory is not None else None
         )
+        pregrasp_complete_step = (
+            trajectory.waypoint_steps["bimanual_pregrasp"]
+            if trajectory is not None else None
+        )
         left_grasp_step = (
             trajectory.waypoint_steps["left_handle_grasp"]
             if trajectory is not None else None
@@ -934,7 +938,10 @@ def main() -> None:
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
-            if trajectory is not None and left_grasp_step <= step < grasp_complete_step:
+            if (
+                trajectory is not None
+                and pregrasp_complete_step <= step < grasp_complete_step
+            ):
                 from judo_isaaclab.put_pot import track_bimanual_handle_targets
 
                 trajectory = track_bimanual_handle_targets(

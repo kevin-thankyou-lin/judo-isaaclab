@@ -495,6 +495,19 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     assert tracked.left_poses[left_end + 1] == pytest.approx(observed_left)
     assert tracked.right_poses[right_end] == pytest.approx(observed_right)
 
+    pregrasp_end = trajectory.waypoint_steps["bimanual_pregrasp"]
+    early = track_bimanual_handle_targets(
+        trajectory,
+        pregrasp_end,
+        observed,
+        trajectory.left_poses[pregrasp_end],
+        trajectory.right_poses[pregrasp_end],
+        left_contact,
+        right_contact,
+    )
+    assert early.left_poses[right_end] == pytest.approx(observed_left)
+    assert early.right_poses[right_end] == pytest.approx(observed_right)
+
     latched = track_bimanual_handle_targets(
         trajectory,
         left_end,

@@ -638,7 +638,11 @@ def reanchor_second_handle_grasp(
     """Track the second handle after the first physical grasp moves the pot."""
 
     steps = trajectory.waypoint_steps
-    required = ("left_handle_grasp", "right_handle_grasp")
+    required = (
+        "bimanual_pregrasp",
+        "left_handle_grasp",
+        "right_handle_grasp",
+    )
     missing = [name for name in required if name not in steps]
     if missing:
         raise ValueError(f"handle trajectory is missing waypoints: {missing}")
@@ -682,12 +686,13 @@ def track_bimanual_handle_targets(
     """
 
     steps = trajectory.waypoint_steps
+    pregrasp_end = steps.get("bimanual_pregrasp")
     left_end = steps.get("left_handle_grasp")
     right_end = steps.get("right_handle_grasp")
-    if left_end is None or right_end is None:
+    if pregrasp_end is None or left_end is None or right_end is None:
         raise ValueError("handle trajectory is missing grasp waypoints")
-    if current_step < left_end or current_step >= right_end:
-        raise ValueError("current_step is outside the second-handle approach")
+    if current_step < pregrasp_end or current_step >= right_end:
+        raise ValueError("current_step is outside the contact-closing window")
     start = current_step + 1
     remaining = right_end - current_step
     left = trajectory.left_poses.copy()
