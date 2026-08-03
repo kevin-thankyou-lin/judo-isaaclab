@@ -554,6 +554,36 @@ def geometry_conditioned_right_first_close(
     return bool(half_thickness_positive_imbalance or beyond_centering_reach)
 
 
+def geometry_conditioned_peer_contact_transfer(
+    left_handle_size: Any,
+    right_handle_size: Any,
+    predicted_imbalance_m: float,
+    *,
+    relative_size_tolerance: float = 0.05,
+) -> bool:
+    """Use a proven peer contact for matching handles beyond jaw reach."""
+
+    left = np.asarray(left_handle_size, dtype=np.float64)
+    right = np.asarray(right_handle_size, dtype=np.float64)
+    if left.shape != (3,) or right.shape != (3,):
+        raise ValueError("handle sizes must contain three values")
+    if np.any(left <= 0.0) or np.any(right <= 0.0):
+        raise ValueError("handle sizes must be positive")
+    if not np.isfinite(predicted_imbalance_m):
+        raise ValueError("predicted_imbalance_m must be finite")
+    if not np.isfinite(relative_size_tolerance) or not (
+        0.0 <= relative_size_tolerance < 1.0
+    ):
+        raise ValueError("relative_size_tolerance must be in [0, 1)")
+    relative_difference = np.max(
+        np.abs(left - right) / np.maximum(left, right)
+    )
+    return bool(
+        relative_difference <= relative_size_tolerance
+        and predicted_imbalance_m > HANDLE_JAW_CENTERING_LIMIT_M
+    )
+
+
 def reanchor_authored_handle_in_observed_jaw(
     observed_root_pose: Any,
     observed_eef_pose: Any,

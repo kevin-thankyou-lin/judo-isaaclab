@@ -1093,6 +1093,7 @@ def main() -> None:
         milestone_applied_translation_m = None
         milestone_translation_limit_m = None
         milestone_reanchor_accepted = None
+        milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
         transport_reanchor_steps = []
         transport_reanchor_evaluation_steps = []
@@ -1231,34 +1232,91 @@ def main() -> None:
             ):
                 from judo_isaaclab.put_pot import (
                     HANDLE_PAD_DEPTH_MARGIN_M,
+                    geometry_conditioned_peer_contact_transfer,
                     milestone_reanchor_within_authored_clearance,
+                    mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
                 )
 
                 original_left_contact = left_handle_contact.copy()
-                (
-                    candidate_left_contact,
-                    milestone_jaw_center_residual_m,
-                    milestone_translation_m,
-                ) = reanchor_authored_handle_in_observed_jaw(
-                    sample["pot_pose"],
-                    sample["left_eef_pose"],
-                    sample["left_pad_centers_world"],
-                    target_left_handle_points,
-                    handle_grasp_geometry["left"][
-                        "regrasp_approach_local_m"
-                    ],
+                peer_contact_transfer = (
+                    geometry_conditioned_peer_contact_transfer(
+                        target_parts.negative_handle_size,
+                        target_parts.positive_handle_size,
+                        handle_grasp_geometry["left"][
+                            "predicted_pad_imbalance_m"
+                        ],
+                    )
                 )
+                if peer_contact_transfer:
+                    left_side = int(
+                        handle_grasp_geometry["left"]["handle_side"]
+                    )
+                    right_side = int(
+                        handle_grasp_geometry["right"]["handle_side"]
+                    )
+                    left_part_frame = (
+                        target_parts.negative_handle_frame
+                        if left_side < 0
+                        else target_parts.positive_handle_frame
+                    )
+                    right_part_frame = (
+                        target_parts.negative_handle_frame
+                        if right_side < 0
+                        else target_parts.positive_handle_frame
+                    )
+                    candidate_left_world, milestone_jaw_center_residual_m = (
+                        mirror_handle_position_in_receiving_jaw_frame(
+                            sample["right_eef_pose"],
+                            compose_pose(sample["pot_pose"], right_part_frame),
+                            sample["left_eef_pose"],
+                            compose_pose(sample["pot_pose"], left_part_frame),
+                            sample["pot_pose"],
+                            target_left_handle_points,
+                        )
+                    )
+                    candidate_left_contact = compose_pose(
+                        inverse_pose(sample["pot_pose"]),
+                        candidate_left_world,
+                    )
+                    milestone_translation_m = float(
+                        np.linalg.norm(
+                            candidate_left_world[:3]
+                            - np.asarray(sample["left_eef_pose"])[:3]
+                        )
+                    )
+                    milestone_reanchor_accepted = True
+                    milestone_reanchor_source = "observed_peer_contact"
+                else:
+                    (
+                        candidate_left_contact,
+                        milestone_jaw_center_residual_m,
+                        milestone_translation_m,
+                    ) = reanchor_authored_handle_in_observed_jaw(
+                        sample["pot_pose"],
+                        sample["left_eef_pose"],
+                        sample["left_pad_centers_world"],
+                        target_left_handle_points,
+                        handle_grasp_geometry["left"][
+                            "regrasp_approach_local_m"
+                        ],
+                    )
                 milestone_translation_limit_m = (
                     handle_grasp_geometry["left"]["regrasp_clearance_m"]
                     + HANDLE_PAD_DEPTH_MARGIN_M
                 )
-                milestone_reanchor_accepted = (
-                    milestone_reanchor_within_authored_clearance(
-                        milestone_translation_m,
-                        handle_grasp_geometry["left"]["regrasp_clearance_m"],
+                if not peer_contact_transfer:
+                    milestone_reanchor_accepted = (
+                        milestone_reanchor_within_authored_clearance(
+                            milestone_translation_m,
+                            handle_grasp_geometry["left"]["regrasp_clearance_m"],
+                        )
                     )
-                )
+                    milestone_reanchor_source = (
+                        "authored_open_jaw"
+                        if milestone_reanchor_accepted
+                        else "original_object_local_contact"
+                    )
                 left_handle_contact = (
                     candidate_left_contact
                     if milestone_reanchor_accepted
@@ -1904,6 +1962,7 @@ def main() -> None:
                 ),
                 "milestone_translation_limit_m": milestone_translation_limit_m,
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
+                "milestone_reanchor_source": milestone_reanchor_source,
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None
                 ),
