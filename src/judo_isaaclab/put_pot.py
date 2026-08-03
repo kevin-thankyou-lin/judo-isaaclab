@@ -45,6 +45,7 @@ YAM_FINGER_SEPARATION_LOCAL_M = np.asarray([0.090120, -0.048000, 0.0])
 YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
     YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_FINGER_SEPARATION_LOCAL_M
 )
+YAM_FINGER_PAD_AXIS_LENGTH_M = float(np.linalg.norm([0.068, 0.0, -0.003]))
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
@@ -64,6 +65,9 @@ MISSING_FINGER_CONTACT_STEP_M = 0.001
 # Add the measured residual plus a 2 mm on-pad margin.
 MISSING_FINGER_CONTACT_LIMIT_M = 0.045
 MISSING_FINGER_CONTACT_DELAY_STEPS = 10
+MISSING_FINGER_PAD_DEPTH_STEP_M = 0.001
+MISSING_FINGER_PAD_DEPTH_LIMIT_M = 0.010
+MISSING_FINGER_PAD_TARGET_FRACTION = 0.02
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -442,6 +446,52 @@ def reanchor_missing_finger_contact(
     jaw_axis /= np.linalg.norm(jaw_axis)
     world[:3] += delta * quaternion_rotate(world[3:], jaw_axis)
     return compose_pose(inverse_pose(root), world), updated
+
+
+def reanchor_missing_finger_pad_depth(
+    contact_local: Any,
+    observed_root_pose: Any,
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    depth_correction_m: float,
+    *,
+    contact_threshold_n: float = 0.1,
+    step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
+    limit_m: float = MISSING_FINGER_PAD_DEPTH_LIMIT_M,
+    target_fraction: float = MISSING_FINGER_PAD_TARGET_FRACTION,
+) -> tuple[np.ndarray, float]:
+    """Seat a near-contact missing finger by its signed authored pad residual."""
+
+    local = _pose(contact_local, "contact_local")
+    root = _pose(observed_root_pose, "observed_root_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
+    if not np.isfinite(depth_correction_m) or depth_correction_m < 0.0:
+        raise ValueError("depth_correction_m must be finite and nonnegative")
+    if not np.isfinite(step_m) or step_m <= 0.0:
+        raise ValueError("step_m must be finite and positive")
+    if not np.isfinite(limit_m) or limit_m < step_m:
+        raise ValueError("limit_m must be finite and at least step_m")
+    if not np.isfinite(target_fraction) or target_fraction < 0.0:
+        raise ValueError("target_fraction must be finite and nonnegative")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return local.copy(), float(depth_correction_m)
+    missing = int(np.flatnonzero(~contacting)[0])
+    fraction = float(fractions[missing])
+    if not np.isfinite(fraction) or fraction >= target_fraction:
+        return local.copy(), float(depth_correction_m)
+    measured_residual = (target_fraction - fraction) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    delta = min(step_m, measured_residual, limit_m - depth_correction_m)
+    if delta <= 0.0:
+        return local.copy(), float(depth_correction_m)
+    world = compose_pose(root, local)
+    world = seat_handle_inside_finger_pads(world, delta)
+    return compose_pose(inverse_pose(root), world), float(depth_correction_m + delta)
 
 
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:

@@ -29,6 +29,7 @@ from judo_isaaclab.put_pot import (
     mirror_handle_position_in_receiving_jaw_frame,
     reanchor_bimanual_transport_from_observation,
     reanchor_missing_finger_contact,
+    reanchor_missing_finger_pad_depth,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_centered_release,
@@ -422,6 +423,29 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     )
     assert unchanged == pytest.approx(contact)
     assert signed == pytest.approx(MISSING_FINGER_CONTACT_LIMIT_M)
+
+
+def test_missing_finger_pad_residual_scales_deterministic_seating():
+    contact = _pose()
+    seated, depth = reanchor_missing_finger_pad_depth(
+        contact,
+        _pose(),
+        [0.0, 3.0],
+        [-0.043, 0.10],
+        0.0,
+    )
+    assert seated[:3] == pytest.approx([0.0, 0.0, 0.001])
+    assert depth == pytest.approx(0.001)
+
+    unchanged, depth = reanchor_missing_finger_pad_depth(
+        contact,
+        _pose(),
+        [0.0, 3.0],
+        [np.nan, 0.10],
+        0.0,
+    )
+    assert unchanged == pytest.approx(contact)
+    assert depth == pytest.approx(0.0)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

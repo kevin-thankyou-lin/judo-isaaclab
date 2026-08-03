@@ -929,6 +929,7 @@ def main() -> None:
         else:
             left_handle_contact = right_handle_contact = None
         missing_finger_corrections = {"left": 0.0, "right": 0.0}
+        missing_finger_depth_corrections = {"left": 0.0, "right": 0.0}
         missing_finger_streaks = {"left": 0, "right": 0}
         repair_prefix_steps = (
             int(keyframes["frames"]["support_align"]["action_index"]) + 1
@@ -1011,6 +1012,7 @@ def main() -> None:
                 from judo_isaaclab.put_pot import (
                     MISSING_FINGER_CONTACT_DELAY_STEPS,
                     reanchor_missing_finger_contact,
+                    reanchor_missing_finger_pad_depth,
                     track_bimanual_handle_targets,
                 )
 
@@ -1038,6 +1040,15 @@ def main() -> None:
                             sample["pot_pose"],
                             sample[f"{arm}_finger_forces_n"],
                             missing_finger_corrections[arm],
+                        )
+                    )
+                    contact, missing_finger_depth_corrections[arm] = (
+                        reanchor_missing_finger_pad_depth(
+                            contact,
+                            sample["pot_pose"],
+                            sample[f"{arm}_finger_forces_n"],
+                            sample[f"{arm}_pad_fractions"],
+                            missing_finger_depth_corrections[arm],
                         )
                     )
                     if arm == "left":
@@ -1269,6 +1280,9 @@ def main() -> None:
             MISSING_FINGER_CONTACT_LIMIT_M,
             MISSING_FINGER_CONTACT_DELAY_STEPS,
             MISSING_FINGER_CONTACT_STEP_M,
+            MISSING_FINGER_PAD_DEPTH_LIMIT_M,
+            MISSING_FINGER_PAD_DEPTH_STEP_M,
+            MISSING_FINGER_PAD_TARGET_FRACTION,
         )
 
         centered_on_cooktop = bool(
@@ -1389,7 +1403,7 @@ def main() -> None:
                 "steps": len(actions),
                 "seed": args.seed,
                 "grasp_assistance": "none",
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
