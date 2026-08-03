@@ -61,6 +61,7 @@ THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.005
 MISSING_FINGER_CONTACT_STEP_M = 0.001
+MISSING_FINGER_JAW_AXIS_MIN_M = 0.050
 # Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
 # contact at -0.043 of the authored 68.1 mm YAM pad axis: 2.93 mm tip-side.
 # Add the measured residual plus a 2 mm on-pad margin.
@@ -457,10 +458,48 @@ def reanchor_missing_finger_contact(
     world = compose_pose(root, local)
     jaw_axis = centers[1] - centers[0]
     jaw_norm = float(np.linalg.norm(jaw_axis))
-    if jaw_norm <= 1.0e-9:
-        raise ValueError("observed finger pad centers must be distinct")
+    if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
+        # Pot020 attempt 011 showed that the two pad centers converge to only
+        # 3.4 mm while the fingers close.  Their normalized difference is no
+        # longer a physical jaw direction then and drove the fixed contact
+        # target away from the handle.  Keep the last valid object-to-gripper
+        # frame once the measured jaw aperture falls below 50 mm.
+        return local.copy(), float(signed_correction_m)
     world[:3] += delta * jaw_axis / jaw_norm
     return compose_pose(inverse_pose(root), world), updated
+
+
+def geometry_conditioned_left_first_close(
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+    predicted_imbalance_m: float,
+) -> bool:
+    """Stage the positive-imbalance half-thickness handle before its peer.
+
+    Pot020 attempts 001-011 consistently latched the right handle first.  Its
+    pull rotated the pot by more than 20 degrees while the positive-imbalance
+    left jaw still had only one pad in contact.  The signed failure is confined
+    to the 45-50% retained transverse-thickness band; thinner Pot019 has a
+    hash-verified simultaneous grasp and remains unchanged.
+    """
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if not np.isfinite(predicted_imbalance_m):
+        raise ValueError("predicted_imbalance_m must be finite")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    retained_ratio = min(float(target[axis] / source[axis]) for axis in transverse)
+    return bool(
+        THIN_HANDLE_SYMMETRY_RATIO
+        <= retained_ratio
+        < THIN_HANDLE_BALANCE_RATIO
+        and predicted_imbalance_m > 0.0
+    )
 
 
 def reanchor_missing_finger_pad_depth(
@@ -937,6 +976,7 @@ def track_bimanual_handle_targets(
     *,
     left_contact_latched: bool = False,
     right_contact_latched: bool = False,
+    left_first_close: bool = False,
 ) -> SkillTrajectory:
     """Track both fixed local handle contacts during simultaneous closing.
 
@@ -957,7 +997,17 @@ def track_bimanual_handle_targets(
     remaining = right_end - current_step
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
-    if left_contact_latched and right_contact_latched:
+    if left_first_close and current_step < left_end:
+        left_target = compose_pose(observed_pot_pose, left_contact_local)
+        left_remaining = left_end - current_step
+        left[start : left_end + 1] = _linear_contact_feedback_poses(
+            observed_left_pose, left_target, left_remaining
+        )
+        left[left_end + 1 : right_end + 1] = left_target
+        # Keep the right arm at its authored pregrasp until the left contact
+        # milestone.  This prevents the proven right jaw from rotating the pot
+        # out from under a still-seating left jaw.
+    elif left_contact_latched and right_contact_latched:
         left[start : right_end + 1] = _pose(
             observed_left_pose, "observed_left_pose"
         )

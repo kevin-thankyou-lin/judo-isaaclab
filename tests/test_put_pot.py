@@ -21,6 +21,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
+    geometry_conditioned_left_first_close,
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
@@ -436,6 +437,25 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     assert unchanged == pytest.approx(contact)
     assert signed == pytest.approx(MISSING_FINGER_CONTACT_LIMIT_M)
 
+    collapsed, signed = reanchor_missing_finger_contact(
+        contact,
+        root,
+        [0.0, 2.0],
+        [[0.0, 0.0, 0.0], [0.0034, 0.0, 0.0]],
+        0.012,
+    )
+    assert collapsed == pytest.approx(contact)
+    assert signed == pytest.approx(0.012)
+
+
+def test_positive_imbalance_half_thickness_handle_closes_left_first():
+    source = [0.059453, 0.085784, 0.040560]
+    pot020 = [0.069219, 0.061195, 0.020012]
+    pot019 = [0.0687, 0.0589, 0.0171]
+    assert geometry_conditioned_left_first_close(source, pot020, 0, 0.0375)
+    assert not geometry_conditioned_left_first_close(source, pot020, 0, -0.0375)
+    assert not geometry_conditioned_left_first_close(source, pot019, 0, 0.0375)
+
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():
     contact = _pose()
@@ -670,6 +690,21 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     )
     assert early.left_poses[right_end] == pytest.approx(observed_left)
     assert early.right_poses[right_end] == pytest.approx(observed_right)
+
+    left_first = track_bimanual_handle_targets(
+        trajectory,
+        pregrasp_end,
+        observed,
+        trajectory.left_poses[pregrasp_end],
+        trajectory.right_poses[pregrasp_end],
+        left_contact,
+        right_contact,
+        left_first_close=True,
+    )
+    assert left_first.right_poses[pregrasp_end + 1 : left_end + 1] == pytest.approx(
+        trajectory.right_poses[pregrasp_end + 1 : left_end + 1]
+    )
+    assert left_first.left_poses[left_end] == pytest.approx(observed_left)
 
     latched = track_bimanual_handle_targets(
         trajectory,
