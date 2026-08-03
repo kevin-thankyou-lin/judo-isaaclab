@@ -12,6 +12,7 @@ from judo_isaaclab.put_marker import (
     offset_handle_pull_pose,
     pose_from_matrix,
     reanchor_marker_placement,
+    retarget_drawer_local_pose,
     transfer_pose,
 )
 
@@ -57,6 +58,21 @@ def test_marker_pose_is_centered_in_measured_cavity_frame():
     marker = _pose(0.7, 0.05, 0.86)
     centered = center_marker_over_cavity(marker, cavity)
     assert centered[:3] == pytest.approx([0.8, -0.1, 0.86])
+
+
+def test_drawer_local_pose_retargets_to_observed_joint_frame():
+    geometry = DrawerGeometry(
+        root_pose=_pose(1.0, 2.0, 3.0),
+        slide_axis_local=[1.0, 0.0, 0.0],
+        joint_origin_local=[0.0, 0.0, 0.0],
+        handle_point_local=[0.1, 0.0, 0.0],
+        cavity_center_local=[0.0, 0.0, 0.0],
+        lower_limit_m=0.0,
+        upper_limit_m=0.2,
+        cavity_size=[0.2, 0.3, 0.1],
+    )
+    corrected = retarget_drawer_local_pose(_pose(1.12, 2.02, 3.04), geometry, 0.10, 0.055)
+    assert corrected == pytest.approx(_pose(1.075, 2.02, 3.04))
 
 
 def test_drawer_geometry_preserves_open_fraction_and_semantic_offsets():

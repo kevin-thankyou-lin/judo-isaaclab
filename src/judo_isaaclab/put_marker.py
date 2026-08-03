@@ -305,6 +305,20 @@ def center_marker_over_cavity(marker_pose: Any, cavity_frame: Any) -> np.ndarray
     return compose_pose(cavity_frame, local)
 
 
+def retarget_drawer_local_pose(
+    pose: Any,
+    geometry: DrawerGeometry,
+    nominal_joint_m: float,
+    observed_joint_m: float,
+) -> np.ndarray:
+    """Move a nominal drawer-local pose into the measured open-drawer frame."""
+    return transfer_pose(
+        pose,
+        geometry.drawer_frame(float(nominal_joint_m)),
+        geometry.drawer_frame(float(observed_joint_m)),
+    )
+
+
 def geometry_conditioned_drawer_open_position(
     geometry: DrawerGeometry,
     requested_m: float,

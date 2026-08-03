@@ -440,6 +440,7 @@ def _build_skill(
         trajectory,
         marker_in_drawer("marker_collision_clear"),
         marker_in_drawer("marker_cavity"),
+        working_q,
     )
 
 
@@ -892,7 +893,7 @@ def main() -> None:
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
         integrated_target_handle_ik = True
-        trajectory, intended_marker_clear, intended_marker_cavity = (
+        trajectory, intended_marker_clear, intended_marker_cavity, intended_drawer_q = (
             _build_skill(
                 source,
                 target,
@@ -906,7 +907,7 @@ def main() -> None:
                 args.rigid_handle_pull_m,
                 args.handle_pull_vertical_offset_m,
             )
-            if args.mode == "skill" else (None, None, None)
+            if args.mode == "skill" else (None, None, None, None)
         )
         joint_nominal = (
             _sparse_joint_nominal(source, args.handle_pull_joint_extension)
@@ -978,12 +979,29 @@ def main() -> None:
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
             if trajectory is not None and step == trajectory.waypoint_steps["drawer_open"]:
-                from judo_isaaclab.put_marker import reanchor_marker_placement
+                from judo_isaaclab.put_marker import (
+                    reanchor_marker_placement,
+                    retarget_drawer_local_pose,
+                )
+
+                observed_drawer_q = float(sample["drawer_joint_position"][1])
+                observed_marker_clear = retarget_drawer_local_pose(
+                    intended_marker_clear,
+                    target_geometry,
+                    intended_drawer_q,
+                    observed_drawer_q,
+                )
+                observed_marker_cavity = retarget_drawer_local_pose(
+                    intended_marker_cavity,
+                    target_geometry,
+                    intended_drawer_q,
+                    observed_drawer_q,
+                )
 
                 trajectory = reanchor_marker_placement(
                     trajectory,
-                    intended_marker_clear,
-                    intended_marker_cavity,
+                    observed_marker_clear,
+                    observed_marker_cavity,
                     sample["marker_pose"],
                     sample["left_eef_pose"],
                 )
@@ -1161,6 +1179,7 @@ def main() -> None:
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
+                    "drawer_placement_feedback_joint_reanchor": trajectory is not None,
                     "marker_xy_centered_on_measured_cavity": trajectory is not None,
                     "left_ik_anchor": (
                         "integrated_measured_joint"
