@@ -174,6 +174,36 @@ def expand_handle_pregrasp_clearance(
     return result
 
 
+def geometry_conditioned_handle_pad_depth(
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+    *,
+    base_depth_m: float = HANDLE_PAD_DEPTH_MARGIN_M,
+) -> float:
+    """Compensate pad depth for a target handle's measured cross-section loss.
+
+    Surface-clearance transfer preserves the wrist-to-handle boundary, but a
+    thinner curved handle meets the finger closer to the pad tip.  Add the
+    largest measured transverse shrink to the already calibrated base depth;
+    larger target handles retain the common program unchanged.
+    """
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if not np.isfinite(base_depth_m) or base_depth_m < 0.0:
+        raise ValueError("base_depth_m must be finite and nonnegative")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    cross_section_loss = max(
+        0.0, max(float(source[axis] - target[axis]) for axis in transverse)
+    )
+    return float(base_depth_m + cross_section_loss)
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 

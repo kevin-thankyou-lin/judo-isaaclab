@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from judo_isaaclab.semantic_repair import diagnose_semantic_failure
 
@@ -54,6 +55,30 @@ def test_putpot_task_success_with_clearance_failure_is_transport_failure():
     assert diagnose_semantic_failure("putpot", result).first_failed_stage == (
         "bimanual_transport"
     )
+
+
+def test_putpot_grasp_diagnosis_keeps_signed_first_contact_pad_miss():
+    result = {
+        "checks": {},
+        "terminal": {"stage1": False, "center_error_m": 0.4},
+        "metrics": {"left_grasp_frames": 0, "right_grasp_frames": 0},
+        "protocol": {"steps": 505, "parameters": {"center_tolerance_m": 0.03}},
+    }
+    trace = {
+        "left_finger_forces_n": np.asarray([[0.0, 0.0], [0.0, 11.0]]),
+        "left_pad_fractions": np.asarray([[np.nan, np.nan], [np.nan, -0.041]]),
+        "right_finger_forces_n": np.asarray([[0.0, 0.0], [4.0, 0.0]]),
+        "right_pad_fractions": np.asarray([[np.nan, np.nan], [0.467, np.nan]]),
+    }
+
+    residuals = diagnose_semantic_failure(
+        "putpot", result, trace
+    ).signed_residuals
+
+    assert residuals["left_first_contact_step"] == 1
+    assert residuals["left_peak_contacting_fingers"] == 1
+    assert residuals["left_first_contact_signed_pad_margin"] == pytest.approx(-0.041)
+    assert residuals["right_first_contact_signed_pad_margin"] == pytest.approx(0.467)
 
 
 def test_putmarker_diagnosis_reports_slide_axis_deficit():

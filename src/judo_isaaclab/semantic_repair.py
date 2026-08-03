@@ -49,6 +49,42 @@ def _tracking_residuals(
     return result
 
 
+def _contact_residuals(
+    trace: dict[str, np.ndarray] | None,
+    *,
+    end_step: int,
+) -> dict[str, Any]:
+    """Return signed pad-boundary evidence from the failed grasp window."""
+
+    if not trace:
+        return {}
+    result: dict[str, Any] = {}
+    for arm in ("left", "right"):
+        forces = trace.get(f"{arm}_finger_forces_n")
+        fractions = trace.get(f"{arm}_pad_fractions")
+        if forces is None or fractions is None or not len(forces) or not len(fractions):
+            continue
+        count = min(len(forces), len(fractions), end_step + 1)
+        contact = np.asarray(forces[:count], dtype=np.float64) >= 0.1
+        active_steps = np.flatnonzero(np.any(contact, axis=1))
+        result[f"{arm}_peak_contacting_fingers"] = int(
+            np.max(np.sum(contact, axis=1), initial=0)
+        )
+        if not len(active_steps):
+            continue
+        first = int(active_steps[0])
+        first_fractions = np.asarray(fractions[first], dtype=np.float64)
+        first_contact = contact[first] & np.isfinite(first_fractions)
+        result[f"{arm}_first_contact_step"] = first
+        result[f"{arm}_first_contact_pad_fractions"] = first_fractions.tolist()
+        if np.any(first_contact):
+            values = first_fractions[first_contact]
+            result[f"{arm}_first_contact_signed_pad_margin"] = float(
+                np.min(np.minimum(values, 1.0 - values))
+            )
+    return result
+
+
 def diagnose_semantic_failure(
     task: str,
     result: dict[str, Any],
@@ -114,6 +150,8 @@ def diagnose_semantic_failure(
             residuals["pot_bottom_in_cooktop_support_frame_m"] = _local_offset(
                 cooktop_top, pot_bottom[:3]
             )
+        if trace and stage == "bimanual_handle_grasp":
+            residuals.update(_contact_residuals(trace, end_step=frame))
         if trace and parts and stage == "bimanual_handle_grasp":
             poses = trace.get("pot_poses")
             if poses is not None and len(poses):
