@@ -1670,6 +1670,12 @@ def main() -> None:
                             step,
                             effective_pad_reseat_residual_m,
                             reseat_step_m=gripper_retime_step_m,
+                            close_steps=(
+                                1
+                                if peer_contact_handle_center_rotation_rad
+                                is not None
+                                else None
+                            ),
                         )
                     )
                     peer_contact_gripper_retime = {
@@ -1685,6 +1691,12 @@ def main() -> None:
                         ),
                         "hold_steps": gripper_hold_steps,
                         "hold_step_m": gripper_retime_step_m,
+                        "close_steps": (
+                            1
+                            if peer_contact_handle_center_rotation_rad
+                            is not None
+                            else grasp_complete_step - step - gripper_hold_steps
+                        ),
                         "close_end_step": grasp_complete_step,
                     }
                     left_handle_contact = compose_pose(

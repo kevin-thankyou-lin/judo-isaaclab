@@ -531,6 +531,24 @@ def test_loaded_gripper_hold_covers_measured_jaw_centering_horizon():
     )
 
 
+def test_loaded_gripper_can_close_inside_measured_contact_window():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=100,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["right_handle_grasp"] + 10
+    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, 0.0, close_steps=1
+    )
+    assert hold_steps == 0
+    assert retimed.grippers[step, 0] == trajectory.grippers[step, 0]
+    assert np.all(retimed.grippers[step + 1 : grasp_end + 1, 0] == 0.0)
+
+
 def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     observed = _pose(0.1, 0.2, 0.3)
     loaded = _pose(0.2, 0.4, 0.6)
