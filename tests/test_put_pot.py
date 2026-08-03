@@ -486,6 +486,12 @@ def test_positive_imbalance_half_thickness_handle_closes_proven_right_first():
     assert geometry_conditioned_right_first_close(source, pot020, 0, 0.0375)
     assert not geometry_conditioned_right_first_close(source, pot020, 0, -0.0375)
     assert not geometry_conditioned_right_first_close(source, pot019, 0, 0.0375)
+    assert geometry_conditioned_right_first_close(
+        source, [0.070, 0.065, 0.030], 0, 0.0488
+    )
+    assert not geometry_conditioned_right_first_close(
+        source, [0.070, 0.065, 0.030], 0, -0.0488
+    )
 
 
 def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():

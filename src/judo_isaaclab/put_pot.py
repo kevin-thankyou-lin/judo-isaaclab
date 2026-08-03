@@ -518,15 +518,18 @@ def geometry_conditioned_right_first_close(
     handle_axis: int,
     predicted_imbalance_m: float,
 ) -> bool:
-    """Stabilize a positive-imbalance half-thickness handle from its peer.
+    """Stabilize a positive-imbalance handle from its proven peer.
 
     Pot020 attempts 001-011 consistently latched the right handle while the
     positive-imbalance left jaw still had only one pad in contact.  Attempt 012
     proved that closing the left jaw first merely pushes and rotates the free
     pot.  Close the proven right jaw first so its bimanual contact milestone
-    stabilizes the pot for left seating.  The signed failure is confined to the
-    45-50% retained transverse-thickness band; thinner Pot019 has a hash-
-    verified simultaneous grasp and remains unchanged.
+    stabilizes the pot for left seating.  The 45-50% retained transverse-
+    thickness band captures Pot020.  Pot021 shows the same signed one-pad
+    failure outside that band when its authored +48.8 mm pad imbalance exceeds
+    the 40 mm jaw-centering correction reach.  Thinner Pot019 remains
+    simultaneous because its +37.5 mm imbalance is inside that measured reach
+    and has a hash-verified bimanual success.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
@@ -539,12 +542,16 @@ def geometry_conditioned_right_first_close(
         raise ValueError("predicted_imbalance_m must be finite")
     transverse = [axis for axis in range(3) if axis != handle_axis]
     retained_ratio = min(float(target[axis] / source[axis]) for axis in transverse)
-    return bool(
+    half_thickness_positive_imbalance = (
         THIN_HANDLE_SYMMETRY_RATIO
         <= retained_ratio
         < THIN_HANDLE_BALANCE_RATIO
         and predicted_imbalance_m > 0.0
     )
+    beyond_centering_reach = (
+        predicted_imbalance_m > HANDLE_JAW_CENTERING_LIMIT_M
+    )
+    return bool(half_thickness_positive_imbalance or beyond_centering_reach)
 
 
 def reanchor_authored_handle_in_observed_jaw(
