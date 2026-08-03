@@ -355,6 +355,7 @@ def _build_skill(
         transfer_pose,
     )
     from judo_isaaclab.put_pot import (
+        HANDLE_PAD_GEOMETRIC_MARGIN_M,
         TRANSPORT_PLANNING_MARGIN_M,
         PutPotSkillProgram,
         RigidSupportGeometry,
@@ -679,7 +680,9 @@ def _build_skill(
         )
     grasp_geometry["left"]["supported_center_slide"] = supported_center_slide
     grasp_geometry["left"]["support_unload_m"] = (
-        args.support_clearance_m if supported_center_slide else 0.0
+        args.support_clearance_m + HANDLE_PAD_GEOMETRIC_MARGIN_M
+        if supported_center_slide
+        else 0.0
     )
     grasp_geometry["left"]["support_staging_offset_m"] = float(
         np.linalg.norm(transport_final_pot[:2] - final_pot_pose[:2])
@@ -1110,6 +1113,7 @@ def main() -> None:
             for axis in transverse_handle_axes
         )
         from judo_isaaclab.put_pot import (
+            HANDLE_PAD_GEOMETRIC_MARGIN_M,
             TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
             transport_reanchor_position_step_limit_m,
         )
@@ -1516,7 +1520,10 @@ def main() -> None:
                     sample["pot_pose"],
                     sample["cooktop_pose"],
                     sample["right_eef_pose"],
-                    support_unload_m=args.support_clearance_m,
+                    support_unload_m=(
+                        args.support_clearance_m
+                        + HANDLE_PAD_GEOMETRIC_MARGIN_M
+                    ),
                 )
                 center_slide_reference_right_contact_local = compose_pose(
                     inverse_pose(sample["pot_pose"]), sample["right_eef_pose"]

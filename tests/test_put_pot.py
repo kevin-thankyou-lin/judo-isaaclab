@@ -6,6 +6,7 @@ from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
     HANDLE_PAD_DEPTH_MARGIN_M,
+    HANDLE_PAD_GEOMETRIC_MARGIN_M,
     MISSING_FINGER_CONTACT_LIMIT_M,
     PutPotSkillProgram,
     RigidSupportGeometry,
@@ -290,6 +291,7 @@ def test_support_staging_uses_authored_boundary_and_inset():
     )
     assert staged[:2] == pytest.approx([0.194, 0.0])
     assert staged[2:] == pytest.approx(_pose()[2:])
+    assert 0.006 + HANDLE_PAD_GEOMETRIC_MARGIN_M == pytest.approx(0.009)
 
 
 def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():
