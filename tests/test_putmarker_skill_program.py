@@ -66,10 +66,12 @@ def test_low_feet_handle_uses_workspace_height_clamp_and_labeled_friction():
         1.0048,
         -0.1311,
     )
-    assert module._handle_workspace_lift_m(0.8635, enabled=True) == pytest.approx(
-        0.011
-    )
-    assert module._handle_workspace_lift_m(0.8635, enabled=False) == 0.0
+    assert module._handle_workspace_offset_m(
+        [0.5849, -0.1389, 0.8635], enabled=True
+    ) == pytest.approx([0.0, -0.0088, 0.011])
+    assert module._handle_workspace_offset_m(
+        [0.5849, -0.1389, 0.8635], enabled=False
+    ) == pytest.approx([0.0, 0.0, 0.0])
     assert module._right_handle_assist_spec(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_008.hdf5",
         1.0601,

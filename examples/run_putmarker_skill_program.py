@@ -38,9 +38,10 @@ SEMANTIC_INDICES = {
     "handle_release": 607,
 }
 
-# Lowest accepted source-frame wrist height for this robot/cabinet family.
-# Lower assets retain the same collision-free wrist posture while the pull
-# direction still comes from the target drawer's measured slide axis.
+# Accepted source-frame wrist boundary for this robot/cabinet family. Lower,
+# farther-inboard assets retain the collision-free workspace posture while the
+# pull direction still comes from the target drawer's measured slide axis.
+LOW_HANDLE_MAX_WRIST_Y_M = -0.1477
 LOW_HANDLE_MIN_WRIST_Z_M = 0.8745
 
 
@@ -393,14 +394,14 @@ def _build_skill(
         pose = target_geometry.transfer_handle_pose(
             source_geometry, source_attach("right", index), source_q
         )
-        pose[2] += handle_workspace_lift_m
+        pose[:3] += handle_workspace_offset
         return pose
 
-    handle_workspace_lift_m = 0.0
+    handle_workspace_offset = np.zeros(3, dtype=np.float64)
     if use_low_handle_workspace_clamp:
         source_grasp = right_handle("handle_grasp")
-        handle_workspace_lift_m = _handle_workspace_lift_m(
-            float(source_grasp[2]), enabled=True
+        handle_workspace_offset = _handle_workspace_offset_m(
+            source_grasp[:3], enabled=True
         )
     handle_pregrasp = right_handle("handle_pregrasp")
     handle_grasp = right_handle("handle_grasp")
@@ -465,7 +466,7 @@ def _build_skill(
         marker_in_drawer("marker_collision_clear"),
         marker_in_drawer("marker_cavity"),
         working_q,
-        handle_workspace_lift_m,
+        handle_workspace_offset,
     )
 
 
@@ -896,8 +897,13 @@ def _uses_low_handle_workspace_clamp(
     )
 
 
-def _handle_workspace_lift_m(grasp_z_m: float, *, enabled: bool) -> float:
-    return max(0.0, LOW_HANDLE_MIN_WRIST_Z_M - grasp_z_m) if enabled else 0.0
+def _handle_workspace_offset_m(grasp_xyz_m, *, enabled: bool) -> np.ndarray:
+    offset = np.zeros(3, dtype=np.float64)
+    if enabled:
+        grasp_xyz_m = np.asarray(grasp_xyz_m, dtype=np.float64)
+        offset[1] = min(0.0, LOW_HANDLE_MAX_WRIST_Y_M - float(grasp_xyz_m[1]))
+        offset[2] = max(0.0, LOW_HANDLE_MIN_WRIST_Z_M - float(grasp_xyz_m[2]))
+    return offset
 
 
 def main() -> None:
@@ -1021,7 +1027,7 @@ def main() -> None:
             intended_marker_clear,
             intended_marker_cavity,
             intended_drawer_q,
-            handle_workspace_lift_m,
+            handle_workspace_offset,
         ) = (
             _build_skill(
                 source,
@@ -1341,10 +1347,10 @@ def main() -> None:
                     "handle_engagement_depth_m": handle_engagement_depth_m,
                     "handle_grasp_frame_source": (
                         "source_semantic_handle_frame_with_workspace_height_clamp"
-                        if handle_workspace_lift_m > 0.0
+                        if np.linalg.norm(handle_workspace_offset) > 0.0
                         else "source_semantic_handle_frame"
                     ),
-                    "handle_workspace_lift_m": handle_workspace_lift_m,
+                    "handle_workspace_offset_m": handle_workspace_offset.tolist(),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
