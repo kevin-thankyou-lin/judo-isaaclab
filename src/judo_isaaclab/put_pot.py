@@ -55,7 +55,10 @@ THIN_HANDLE_BALANCE_RATIO = 0.45
 THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 MISSING_FINGER_CONTACT_STEP_M = 0.001
-MISSING_FINGER_CONTACT_LIMIT_M = 0.040
+# Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
+# contact at -0.043 of the authored 68.1 mm YAM pad axis: 2.93 mm tip-side.
+# Add the measured residual plus a 2 mm on-pad margin.
+MISSING_FINGER_CONTACT_LIMIT_M = 0.045
 MISSING_FINGER_CONTACT_DELAY_STEPS = 10
 
 
