@@ -68,7 +68,8 @@ def test_low_feet_handle_uses_workspace_height_clamp_and_labeled_friction():
     )
     assert module._handle_workspace_offset_m(
         [0.5849, -0.1389, 0.8635], enabled=True
-    ) == pytest.approx([0.0, -0.0088, 0.0285])
+    ) == pytest.approx([0.0, -0.0088, 0.0232])
+    assert module.LOW_HANDLE_PULL_LIFT_M == pytest.approx(0.0123)
     assert module._handle_workspace_offset_m(
         [0.5849, -0.1389, 0.8635], enabled=False
     ) == pytest.approx([0.0, 0.0, 0.0])

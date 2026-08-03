@@ -42,7 +42,8 @@ SEMANTIC_INDICES = {
 # farther-inboard assets retain the collision-free workspace posture while the
 # pull direction still comes from the target drawer's measured slide axis.
 LOW_HANDLE_MAX_WRIST_Y_M = -0.1477
-LOW_HANDLE_MIN_WRIST_Z_M = 0.8920
+LOW_HANDLE_MIN_WRIST_Z_M = 0.8867
+LOW_HANDLE_PULL_LIFT_M = 0.0123
 
 
 def _parser() -> argparse.Namespace:
@@ -417,6 +418,8 @@ def _build_skill(
     handle_open = offset_handle_pull_pose(
         handle_open, target_geometry.root_pose, handle_pull_vertical_offset_m
     )
+    if use_low_handle_workspace_clamp:
+        handle_open[2] += LOW_HANDLE_PULL_LIFT_M
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -1351,6 +1354,11 @@ def main() -> None:
                         else "source_semantic_handle_frame"
                     ),
                     "handle_workspace_offset_m": handle_workspace_offset.tolist(),
+                    "low_handle_pull_lift_m": (
+                        LOW_HANDLE_PULL_LIFT_M
+                        if np.linalg.norm(handle_workspace_offset) > 0.0
+                        else 0.0
+                    ),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
