@@ -5,6 +5,7 @@ import pytest
 from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
+    HANDLE_PAD_DEPTH_MARGIN_M,
     PutPotSkillProgram,
     RigidSupportGeometry,
     YAM_FINGER_SEPARATION_LOCAL_M,
@@ -115,8 +116,9 @@ def test_handle_transfer_preserves_measured_transverse_surface_clearance():
 
 def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():
     grasp = _pose(x=0.07, y=0.02, z=0.04)
-    deepened = seat_handle_inside_finger_pads(grasp, 0.003)
-    assert deepened[:3] == pytest.approx([0.07, 0.02, 0.043])
+    deepened = seat_handle_inside_finger_pads(grasp, HANDLE_PAD_DEPTH_MARGIN_M)
+    assert HANDLE_PAD_DEPTH_MARGIN_M == pytest.approx(0.010)
+    assert deepened[:3] == pytest.approx([0.07, 0.02, 0.050])
     assert deepened[3:] == pytest.approx(grasp[3:])
 
 

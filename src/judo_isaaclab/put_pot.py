@@ -29,7 +29,14 @@ from .put_marker import (
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
 CONTACT_FEEDBACK_HORIZON_STEPS = 10
-HANDLE_PAD_DEPTH_MARGIN_M = 0.003
+HANDLE_PAD_GEOMETRIC_MARGIN_M = 0.003
+# PutPot012 attempt_011 finished its simultaneous close 7 mm shallow along
+# the commanded local pad axis.  Compensate that measured controller residual
+# while retaining the original 3 mm geometry clearance inside the 68 mm pad.
+HANDLE_PAD_TRACKING_COMPENSATION_M = 0.007
+HANDLE_PAD_DEPTH_MARGIN_M = (
+    HANDLE_PAD_GEOMETRIC_MARGIN_M + HANDLE_PAD_TRACKING_COMPENSATION_M
+)
 YAM_LEFT_FINGER_PIVOT_LOCAL_M = np.asarray([-0.045060, 0.024000, 0.054560])
 YAM_FINGER_SEPARATION_LOCAL_M = np.asarray([0.090120, -0.048000, 0.0])
 YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
