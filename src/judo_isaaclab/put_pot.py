@@ -1208,8 +1208,10 @@ def reanchor_centered_lowering(
     center_correction_xy: Any,
     observed_left_pose: Any,
     observed_right_pose: Any,
+    *,
+    vertical_correction_m: float | None = None,
 ) -> SkillTrajectory:
-    """Correct tracking residual only during the short centered lowering."""
+    """Translate measured contact poses to center during the short lowering."""
     correction = np.asarray(center_correction_xy, dtype=np.float64)
     if correction.shape != (2,) or not np.all(np.isfinite(correction)):
         raise ValueError("center_correction_xy must contain two finite values")
@@ -1224,10 +1226,19 @@ def reanchor_centered_lowering(
     withdraw_end = steps["bimanual_withdraw"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    left_lower = left[lower_end].copy()
-    right_lower = right[lower_end].copy()
+    left_lower = _pose(observed_left_pose, "observed_left_pose")
+    right_lower = _pose(observed_right_pose, "observed_right_pose")
     left_lower[:2] += correction
     right_lower[:2] += correction
+    if vertical_correction_m is None:
+        vertical_correction_m = float(
+            trajectory.left_poses[lower_end, 2]
+            - trajectory.left_poses[steps["smooth_transport"], 2]
+        )
+    if not np.isfinite(vertical_correction_m):
+        raise ValueError("vertical_correction_m must be finite")
+    left_lower[2] += float(vertical_correction_m)
+    right_lower[2] += float(vertical_correction_m)
     left[start : lower_end + 1] = interpolate_poses(
         observed_left_pose, left_lower, lower_end - start + 1
     )
@@ -1388,8 +1399,8 @@ def reanchor_centered_release(
     withdraw_end = steps["bimanual_withdraw"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    left_release = left[release_end].copy()
-    right_release = right[release_end].copy()
+    left_release = _pose(observed_left_pose, "observed_left_pose")
+    right_release = _pose(observed_right_pose, "observed_right_pose")
     left_release[:2] += correction
     right_release[:2] += correction
     left[start : release_end + 1] = interpolate_poses(

@@ -634,16 +634,27 @@ def test_center_feedback_preserves_completed_smooth_transport():
     trajectory = program.build()
     transport_end = trajectory.waypoint_steps["smooth_transport"]
     original_left = trajectory.left_poses.copy()
+    observed_left = trajectory.left_poses[transport_end].copy()
+    observed_right = trajectory.right_poses[transport_end].copy()
+    observed_left[:2] += [0.03, 0.04]
+    observed_right[:2] += [-0.02, 0.01]
     corrected = reanchor_centered_lowering(
         trajectory, [0.01, -0.02],
-        trajectory.left_poses[transport_end], trajectory.right_poses[transport_end],
+        observed_left, observed_right,
+        vertical_correction_m=-0.007,
     )
     assert corrected.left_poses[: transport_end + 1] == pytest.approx(
         original_left[: transport_end + 1]
     )
     lower_end = trajectory.waypoint_steps["support_lower"]
-    assert corrected.left_poses[lower_end, :2] == pytest.approx(
-        trajectory.left_poses[lower_end, :2] + [0.01, -0.02]
+    assert corrected.left_poses[lower_end, :3] == pytest.approx(
+        observed_left[:3] + [0.01, -0.02, -0.007]
+    )
+    assert corrected.left_poses[lower_end, 3:] == pytest.approx(
+        observed_left[3:]
+    )
+    assert corrected.right_poses[lower_end, :2] == pytest.approx(
+        observed_right[:2] + [0.01, -0.02]
     )
 
 
@@ -958,14 +969,18 @@ def test_center_feedback_reanchors_only_support_lowering_and_release():
         original_left[withdraw_end]
     )
 
+    observed_release_left = corrected.left_poses[unload_end].copy()
+    observed_release_right = corrected.right_poses[unload_end].copy()
+    observed_release_left[:2] += [0.02, 0.01]
+    observed_release_right[:2] += [-0.01, 0.015]
     release_corrected = reanchor_centered_release(
         corrected,
         [0.002, -0.003],
-        corrected.left_poses[unload_end],
-        corrected.right_poses[unload_end],
+        observed_release_left,
+        observed_release_right,
     )
     assert release_corrected.left_poses[release_end, :2] == pytest.approx(
-        corrected.left_poses[release_end, :2] + [0.002, -0.003]
+        observed_release_left[:2] + [0.002, -0.003]
     )
 
 
