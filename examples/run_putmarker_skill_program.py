@@ -819,6 +819,24 @@ def _transition_trace(samples: list[dict[str, object]]) -> list[dict[str, object
     return result
 
 
+def _right_handle_friction_assist_reason(
+    target_dataset: str, cabinet_root_z_m: float
+) -> str | None:
+    """Select the established handle assist from semantic workspace geometry.
+
+    The official cabinet-with-feet captures use a distinct support workspace;
+    pair 026 proves that its handle can lose contact even when the cabinet root
+    falls just below the elevated-root threshold.  Keep ordinary cabinets on
+    unassisted physics, while labeling either supported assist condition.
+    """
+
+    if Path(target_dataset).parent.name == "annotated_cabinet_with_feet":
+        return "official_cabinet_with_feet_workspace"
+    if cabinet_root_z_m >= 1.04:
+        return "elevated_handle_workspace"
+    return None
+
+
 def main() -> None:
     args = _parser()
     if args.render and not args.video:
@@ -907,10 +925,12 @@ def main() -> None:
         handle_engagement_depth_m = (
             0.0
         )
-        elevated_workspace = float(target_geometry.root_pose[2]) >= 1.04
+        right_handle_assist_reason = _right_handle_friction_assist_reason(
+            args.target_dataset, float(target_geometry.root_pose[2])
+        )
         right_handle_assist = None
         right_handle_assist_ever = False
-        if elevated_workspace:
+        if right_handle_assist_reason is not None:
             from dc_study.utils.grasp import build_grasp_assists
 
             right_handle_assist = build_grasp_assists(
@@ -1210,6 +1230,7 @@ def main() -> None:
                     "task_config:right=friction" if right_handle_assist is not None else "none"
                 ),
                 "right_handle_friction_assist_engaged": right_handle_assist_ever,
+                "right_handle_friction_assist_reason": right_handle_assist_reason,
                 "actual_device_receipt": actual_device_receipt,
                 "semantic_coordinate_axes_rendered": bool(args.draw_coordinate_axes),
                 "offline_ground_override": offline_ground,
