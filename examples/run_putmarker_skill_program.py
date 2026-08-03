@@ -317,16 +317,20 @@ def _build_skill(
         )
 
     def marker_in_drawer(name: str) -> np.ndarray:
+        from judo_isaaclab.put_marker import center_marker_over_cavity
+
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
-        return transfer_pose(
+        cavity_frame = target_geometry.drawer_frame(working_q)
+        transferred = transfer_pose(
             np.asarray(source["marker_pose"])[index],
             source_geometry.drawer_frame(source_q),
-            target_geometry.drawer_frame(working_q),
+            cavity_frame,
             local_position_scale=(
                 target_geometry.cavity_size / source_geometry.cavity_size
             ),
         )
+        return center_marker_over_cavity(transferred, cavity_frame)
 
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
@@ -1096,6 +1100,7 @@ def main() -> None:
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
+                    "marker_xy_centered_on_measured_cavity": trajectory is not None,
                 },
             },
             "provenance": {

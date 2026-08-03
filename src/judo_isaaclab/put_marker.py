@@ -297,6 +297,14 @@ def reanchor_marker_placement(
     )
 
 
+def center_marker_over_cavity(marker_pose: Any, cavity_frame: Any) -> np.ndarray:
+    """Center a transferred marker pose on the measured drawer support region."""
+
+    local = compose_pose(inverse_pose(cavity_frame), marker_pose)
+    local[:2] = 0.0
+    return compose_pose(cavity_frame, local)
+
+
 def geometry_conditioned_drawer_open_position(
     geometry: DrawerGeometry,
     requested_m: float,

@@ -5,6 +5,7 @@ from judo_isaaclab.put_marker import (
     DrawerGeometry,
     PutMarkerSkillProgram,
     compose_pose,
+    center_marker_over_cavity,
     geometry_conditioned_drawer_open_position,
     interpolate_poses,
     inverse_pose,
@@ -48,6 +49,13 @@ def test_transfer_pose_uses_corresponding_frame_and_local_scale():
         local_position_scale=(2.0, 0.5, 1.5),
     )
     assert transferred[:3] == pytest.approx([3.2, 4.1, 5.45])
+
+
+def test_marker_pose_is_centered_in_measured_cavity_frame():
+    cavity = _pose(0.8, -0.1, 0.9)
+    marker = _pose(0.7, 0.05, 0.86)
+    centered = center_marker_over_cavity(marker, cavity)
+    assert centered[:3] == pytest.approx([0.8, -0.1, 0.86])
 
 
 def test_drawer_geometry_preserves_open_fraction_and_semantic_offsets():
