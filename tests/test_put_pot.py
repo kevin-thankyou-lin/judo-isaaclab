@@ -35,6 +35,7 @@ from judo_isaaclab.put_pot import (
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     maximum_bimanual_position_step_m,
+    lock_loaded_contact_position_for_reach_avoidance,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     preserve_loaded_contact_target,
@@ -447,6 +448,23 @@ def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():
     assert retimed.grippers[grasp_end, 0] == pytest.approx(0.0)
     assert retimed.grippers[:, 1] == pytest.approx(trajectory.grippers[:, 1])
     assert retimed.left_poses == pytest.approx(trajectory.left_poses)
+
+
+def test_high_reach_avoidance_twist_locks_observed_contact_position():
+    observed = _pose(0.1, 0.2, 0.3)
+    loaded = _pose(0.2, 0.4, 0.6)
+    loaded[3:] = [0.5, 0.5, 0.5, 0.5]
+    locked, did_lock = lock_loaded_contact_position_for_reach_avoidance(
+        observed, loaded, 0.934
+    )
+    assert did_lock
+    assert locked[:3] == pytest.approx(observed[:3])
+    assert locked[3:] == pytest.approx(loaded[3:])
+    retained, did_lock = lock_loaded_contact_position_for_reach_avoidance(
+        observed, loaded, LOADED_JAW_REACH_AVOIDANCE_FRACTION
+    )
+    assert not did_lock
+    assert retained == pytest.approx(loaded)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

@@ -1150,6 +1150,7 @@ def main() -> None:
         peer_contact_jaw_twist_rad = None
         peer_contact_jaw_twist_fraction = None
         peer_contact_gripper_retime = None
+        peer_contact_position_locked = False
         peer_contact_recovery_residuals_m = []
         peer_contact_pad_reseat_m = 0.0
         peer_contact_pad_reseat_residuals_m = []
@@ -1426,6 +1427,7 @@ def main() -> None:
                     geometry_conditioned_loaded_jaw_rotation_fraction,
                     retime_loaded_gripper_close_for_pad_reseat,
                     single_contact_pad_base_residual_m,
+                    lock_loaded_contact_position_for_reach_avoidance,
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
@@ -1472,6 +1474,18 @@ def main() -> None:
                             sample["left_pad_axes_world"],
                             rotation_fraction=peer_contact_jaw_twist_fraction,
                         )
+                    )
+                    (
+                        loaded_left_world,
+                        peer_contact_position_locked,
+                    ) = lock_loaded_contact_position_for_reach_avoidance(
+                        sample["left_eef_pose"],
+                        loaded_left_world,
+                        peer_contact_jaw_twist_fraction,
+                    )
+                    retained_residual = (
+                        loaded_left_world[:3]
+                        - np.asarray(sample["left_eef_pose"])[:3]
                     )
                     initial_pad_reseat_residual_m = (
                         single_contact_pad_base_residual_m(
@@ -1580,18 +1594,26 @@ def main() -> None:
                         reanchor_handle_jaw_center_step,
                     )
 
-                    (
-                        left_handle_contact,
-                        peer_contact_pad_reseat_m,
-                        pad_reseat_residual_m,
-                    ) = reanchor_single_contact_pad_fraction(
-                        left_handle_contact,
-                        sample["pot_pose"],
-                        sample["left_finger_forces_n"],
-                        sample["left_pad_fractions"],
-                        sample["left_pad_axes_world"],
-                        peer_contact_pad_reseat_m,
-                    )
+                    if peer_contact_position_locked:
+                        pad_reseat_residual_m = (
+                            single_contact_pad_base_residual_m(
+                                sample["left_finger_forces_n"],
+                                sample["left_pad_fractions"],
+                            )
+                        )
+                    else:
+                        (
+                            left_handle_contact,
+                            peer_contact_pad_reseat_m,
+                            pad_reseat_residual_m,
+                        ) = reanchor_single_contact_pad_fraction(
+                            left_handle_contact,
+                            sample["pot_pose"],
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                            sample["left_pad_axes_world"],
+                            peer_contact_pad_reseat_m,
+                        )
                     peer_contact_pad_reseat_residuals_m.append(
                         {
                             "step": step,
@@ -1600,15 +1622,27 @@ def main() -> None:
                         }
                     )
 
-                    (
-                        left_handle_contact,
-                        jaw_residual_m,
-                        jaw_applied_m,
-                    ) = reanchor_handle_jaw_center_step(
-                        left_handle_contact,
-                        sample["pot_pose"],
-                        target_left_handle_points,
-                    )
+                    if peer_contact_position_locked:
+                        from judo_isaaclab.put_pot import handle_jaw_center_offset_m
+
+                        jaw_residual_m = handle_jaw_center_offset_m(
+                            compose_pose(
+                                sample["pot_pose"], left_handle_contact
+                            ),
+                            sample["pot_pose"],
+                            target_left_handle_points,
+                        )
+                        jaw_applied_m = 0.0
+                    else:
+                        (
+                            left_handle_contact,
+                            jaw_residual_m,
+                            jaw_applied_m,
+                        ) = reanchor_handle_jaw_center_step(
+                            left_handle_contact,
+                            sample["pot_pose"],
+                            target_left_handle_points,
+                        )
                     missing_finger_corrections["left"] -= jaw_applied_m
                     peer_contact_recovery_residuals_m.append(
                         {
@@ -2456,6 +2490,7 @@ def main() -> None:
                     peer_contact_jaw_twist_fraction
                 ),
                 "peer_contact_gripper_retime": peer_contact_gripper_retime,
+                "peer_contact_position_locked": peer_contact_position_locked,
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
                 ),

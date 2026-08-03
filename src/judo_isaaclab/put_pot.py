@@ -680,6 +680,27 @@ def single_contact_pad_base_residual_m(
     )
 
 
+def lock_loaded_contact_position_for_reach_avoidance(
+    observed_pose: Any,
+    loaded_target_pose: Any,
+    rotation_fraction: float,
+    *,
+    base_fraction: float = LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+) -> tuple[np.ndarray, bool]:
+    """Keep a high-residual loaded contact at its observed world position."""
+
+    observed = _pose(observed_pose, "observed_pose")
+    target = _pose(loaded_target_pose, "loaded_target_pose")
+    if not np.isfinite(rotation_fraction) or not 0.0 <= rotation_fraction <= 1.0:
+        raise ValueError("rotation_fraction must be in [0, 1]")
+    if not np.isfinite(base_fraction) or not 0.0 <= base_fraction <= 1.0:
+        raise ValueError("base_fraction must be in [0, 1]")
+    locked = bool(rotation_fraction > base_fraction + 1.0e-9)
+    if locked:
+        target[:3] = observed[:3]
+    return target, locked
+
+
 def retime_loaded_gripper_close_for_pad_reseat(
     trajectory: SkillTrajectory,
     current_step: int,
