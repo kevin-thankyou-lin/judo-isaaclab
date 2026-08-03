@@ -1254,10 +1254,11 @@ def track_bimanual_handle_targets(
 def reanchor_bimanual_contact_hold(
     trajectory: SkillTrajectory,
     current_step: int,
-    observed_left_pose: Any,
-    observed_right_pose: Any,
+    observed_pot_pose: Any,
+    retained_left_contact_local: Any,
+    retained_right_contact_local: Any,
 ) -> SkillTrajectory:
-    """Hold a newly observed two-arm contact before transport begins."""
+    """Follow retained object-local two-arm contacts before transport."""
 
     hold_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
     if hold_end is None:
@@ -1267,8 +1268,16 @@ def reanchor_bimanual_contact_hold(
     start = current_step + 1
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
-    left[start : hold_end + 1] = _pose(observed_left_pose, "observed_left_pose")
-    right[start : hold_end + 1] = _pose(observed_right_pose, "observed_right_pose")
+    left_target = compose_pose(
+        _pose(observed_pot_pose, "observed_pot_pose"),
+        _pose(retained_left_contact_local, "retained_left_contact_local"),
+    )
+    right_target = compose_pose(
+        _pose(observed_pot_pose, "observed_pot_pose"),
+        _pose(retained_right_contact_local, "retained_right_contact_local"),
+    )
+    left[start : hold_end + 1] = left_target
+    right[start : hold_end + 1] = right_target
     return SkillTrajectory(
         left_poses=left,
         right_poses=right,
@@ -1276,6 +1285,31 @@ def reanchor_bimanual_contact_hold(
         stage_names=trajectory.stage_names,
         waypoint_steps=dict(trajectory.waypoint_steps),
     )
+
+
+def retained_contact_frame_after_acquisition(
+    observed_pot_pose: Any,
+    previous_eef_pose: Any,
+    observed_eef_pose: Any,
+    *,
+    retention_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Continue a measured contact-acquisition tangent by a geometry margin."""
+
+    root = _pose(observed_pot_pose, "observed_pot_pose")
+    previous = _pose(previous_eef_pose, "previous_eef_pose")
+    observed = _pose(observed_eef_pose, "observed_eef_pose")
+    if not np.isfinite(retention_m) or retention_m < 0.0:
+        raise ValueError("retention_m must be finite and nonnegative")
+    acquisition = observed[:3] - previous[:3]
+    norm = float(np.linalg.norm(acquisition))
+    if norm <= 1.0e-9:
+        raise ValueError("contact acquisition must include measured translation")
+    retained = observed.copy()
+    retained[:3] += retention_m * acquisition / norm
+    retained_local = compose_pose(inverse_pose(root), retained)
+    observed_local = compose_pose(inverse_pose(root), observed)
+    return retained_local, retained_local[:3] - observed_local[:3]
 
 
 def reanchor_bimanual_transport_from_observation(

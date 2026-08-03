@@ -1120,6 +1120,10 @@ def main() -> None:
         milestone_reanchor_accepted = None
         milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
+        contact_hold_latch_step = None
+        contact_hold_retention_local_m = None
+        retained_hold_left_contact_local = None
+        retained_hold_right_contact_local = None
         transport_reanchor_steps = []
         transport_reanchor_evaluation_steps = []
         transport_reanchor_signed_residuals_world_m = []
@@ -1449,19 +1453,38 @@ def main() -> None:
             if (
                 trajectory is not None
                 and contact_close_complete_step <= step < grasp_complete_step
-                and sample["left_grasp"]
-                and sample["right_grasp"]
             ):
                 from judo_isaaclab.put_pot import (
                     reanchor_bimanual_contact_hold,
+                    retained_contact_frame_after_acquisition,
                 )
 
-                trajectory = reanchor_bimanual_contact_hold(
-                    trajectory,
-                    step,
-                    sample["left_eef_pose"],
-                    sample["right_eef_pose"],
-                )
+                if (
+                    retained_hold_left_contact_local is None
+                    and sample["left_grasp"]
+                    and sample["right_grasp"]
+                ):
+                    (
+                        retained_hold_left_contact_local,
+                        contact_hold_retention_local_m,
+                    ) = retained_contact_frame_after_acquisition(
+                        sample["pot_pose"],
+                        samples[-2]["left_eef_pose"],
+                        sample["left_eef_pose"],
+                    )
+                    retained_hold_right_contact_local = compose_pose(
+                        inverse_pose(sample["pot_pose"]),
+                        sample["right_eef_pose"],
+                    )
+                    contact_hold_latch_step = step
+                if retained_hold_left_contact_local is not None:
+                    trajectory = reanchor_bimanual_contact_hold(
+                        trajectory,
+                        step,
+                        sample["pot_pose"],
+                        retained_hold_left_contact_local,
+                        retained_hold_right_contact_local,
+                    )
             if (
                 trajectory is not None
                 and grasp_complete_step <= step
@@ -2004,6 +2027,12 @@ def main() -> None:
                 "milestone_translation_limit_m": milestone_translation_limit_m,
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "milestone_reanchor_source": milestone_reanchor_source,
+                "contact_hold_latch_step": contact_hold_latch_step,
+                "contact_hold_retention_local_m": (
+                    None
+                    if contact_hold_retention_local_m is None
+                    else contact_hold_retention_local_m.tolist()
+                ),
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None
                 ),
