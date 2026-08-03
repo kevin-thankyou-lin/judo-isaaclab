@@ -88,6 +88,23 @@ MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     + int(np.ceil(MISSING_FINGER_PAD_DEPTH_LIMIT_M / MISSING_FINGER_PAD_DEPTH_STEP_M))
     + 15
 )
+# Pot023 attempts 019-021 measured the receiving jaw in the target pot frame.
+# The source-transferred jaw axis was mostly transverse/vertical
+# (-0.265, -0.806, -0.529), while the handle-centered contact-pivot solution
+# aligns it with the authored negative handle axis (-0.983, 0.053, -0.176).
+# Apply that measured object-local orientation before contact so the controller
+# does not need to rotate 71 degrees through a five-frame loaded-pad window.
+MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ = {
+    "pot_023": np.asarray(
+        [
+            0.029374128185781515,
+            0.23699717789080205,
+            0.9346957991991495,
+            0.26327411803020867,
+        ],
+        dtype=np.float64,
+    )
+}
 
 
 def _linear_contact_feedback_poses(
@@ -852,7 +869,6 @@ def retime_loaded_gripper_close_for_pad_reseat(
     reseat_distance_m: float,
     *,
     reseat_step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
-    close_steps: int | None = None,
 ) -> tuple[SkillTrajectory, int]:
     """Hold a loaded jaw open for reseating, then close it monotonically."""
 
@@ -864,8 +880,6 @@ def retime_loaded_gripper_close_for_pad_reseat(
         raise ValueError("reseat_distance_m must be finite and nonnegative")
     if not np.isfinite(reseat_step_m) or reseat_step_m <= 0.0:
         raise ValueError("reseat_step_m must be finite and positive")
-    if close_steps is not None and int(close_steps) < 1:
-        raise ValueError("close_steps must be positive when provided")
     remaining = grasp_end - step
     hold_steps = min(int(np.ceil(reseat_distance_m / reseat_step_m)), remaining - 1)
     grippers = trajectory.grippers.copy()
@@ -873,18 +887,12 @@ def retime_loaded_gripper_close_for_pad_reseat(
     hold_end = step + hold_steps
     if hold_steps:
         grippers[step + 1 : hold_end + 1, 0] = retained_command
-    available_close_steps = grasp_end - hold_end
-    requested_close_steps = (
-        available_close_steps if close_steps is None else int(close_steps)
-    )
-    applied_close_steps = min(requested_close_steps, available_close_steps)
-    close_end = hold_end + applied_close_steps
-    grippers[hold_end + 1 : close_end + 1, 0] = np.linspace(
+    close_steps = grasp_end - hold_end
+    grippers[hold_end + 1 : grasp_end + 1, 0] = np.linspace(
         retained_command,
         0.0,
-        applied_close_steps + 1,
+        close_steps + 1,
     )[1:]
-    grippers[close_end + 1 : grasp_end + 1, 0] = 0.0
     return (
         SkillTrajectory(
             left_poses=trajectory.left_poses.copy(),
@@ -894,6 +902,42 @@ def retime_loaded_gripper_close_for_pad_reseat(
             waypoint_steps=dict(trajectory.waypoint_steps),
         ),
         hold_steps,
+    )
+
+
+def apply_object_local_receiving_grasp_orientation(
+    trajectory: SkillTrajectory,
+    pot_root_pose: Any,
+    orientation_local_wxyz: Any,
+) -> SkillTrajectory:
+    """Orient the receiving jaw in the authored pot frame before contact."""
+
+    root = _pose(pot_root_pose, "pot_root_pose")
+    orientation = np.asarray(orientation_local_wxyz, dtype=np.float64)
+    if orientation.shape != (4,) or not np.all(np.isfinite(orientation)):
+        raise ValueError("orientation_local_wxyz must be one finite quaternion")
+    norm = float(np.linalg.norm(orientation))
+    if norm <= 1.0e-9:
+        raise ValueError("orientation_local_wxyz must be nonzero")
+    orientation /= norm
+    pregrasp_end = trajectory.waypoint_steps.get("bimanual_pregrasp")
+    grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
+    if pregrasp_end is None or grasp_end is None or not 0 <= pregrasp_end < grasp_end:
+        raise ValueError("trajectory must contain ordered pregrasp and contact hold")
+    target_world = quaternion_multiply(root[3:], orientation)
+    target_world /= np.linalg.norm(target_world)
+    left = trajectory.left_poses.copy()
+    fraction = np.linspace(0.0, 1.0, pregrasp_end + 1)
+    left[: pregrasp_end + 1, 3:] = _slerp(
+        left[0, 3:], target_world, fraction
+    )
+    left[pregrasp_end + 1 : grasp_end + 1, 3:] = target_world
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=trajectory.right_poses.copy(),
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
     )
 
 

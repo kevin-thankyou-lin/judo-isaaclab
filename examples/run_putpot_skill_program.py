@@ -1076,6 +1076,28 @@ def main() -> None:
             )
             if args.mode == "skill" else (None, None, None, None, None)
         )
+        target_left_grasp_orientation_override_local_wxyz = None
+        if trajectory is not None:
+            from judo_isaaclab.put_pot import (
+                MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
+                apply_object_local_receiving_grasp_orientation,
+            )
+
+            target_pot_name = Path(target_assets["pot"]).name.lower()
+            measured_orientation = (
+                MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ.get(
+                    target_pot_name
+                )
+            )
+            if measured_orientation is not None:
+                trajectory = apply_object_local_receiving_grasp_orientation(
+                    trajectory,
+                    target_geometry.root_pose,
+                    measured_orientation,
+                )
+                target_left_grasp_orientation_override_local_wxyz = (
+                    measured_orientation.tolist()
+                )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
         # pose, even when source and target geometry are identical.  Track the
@@ -1670,12 +1692,6 @@ def main() -> None:
                             step,
                             effective_pad_reseat_residual_m,
                             reseat_step_m=gripper_retime_step_m,
-                            close_steps=(
-                                1
-                                if peer_contact_handle_center_rotation_rad
-                                is not None
-                                else None
-                            ),
                         )
                     )
                     peer_contact_gripper_retime = {
@@ -1691,12 +1707,6 @@ def main() -> None:
                         ),
                         "hold_steps": gripper_hold_steps,
                         "hold_step_m": gripper_retime_step_m,
-                        "close_steps": (
-                            1
-                            if peer_contact_handle_center_rotation_rad
-                            is not None
-                            else grasp_complete_step - step - gripper_hold_steps
-                        ),
                         "close_end_step": grasp_complete_step,
                     }
                     left_handle_contact = compose_pose(
@@ -2785,6 +2795,9 @@ def main() -> None:
                 "peer_contact_pad_reseat_m": peer_contact_pad_reseat_m,
                 "peer_contact_pad_reseat_residuals_m": (
                     peer_contact_pad_reseat_residuals_m
+                ),
+                "target_left_grasp_orientation_override_local_wxyz": (
+                    target_left_grasp_orientation_override_local_wxyz
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
                 "contact_hold_loaded_residual_world_m": (

@@ -9,6 +9,7 @@ from judo_isaaclab.put_pot import (
     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
     MISSING_FINGER_CONTACT_LIMIT_M,
+    MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
     SINGLE_FINGER_CONTACT_LATCH_STEPS,
     PutPotSkillProgram,
     RigidSupportGeometry,
@@ -16,6 +17,7 @@ from judo_isaaclab.put_pot import (
     YAM_FINGER_PAD_AXIS_LENGTH_M,
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
+    apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
@@ -531,7 +533,7 @@ def test_loaded_gripper_hold_covers_measured_jaw_centering_horizon():
     )
 
 
-def test_loaded_gripper_can_close_inside_measured_contact_window():
+def test_measured_receiving_orientation_is_reached_before_contact():
     program = PutPotSkillProgram(_pose(), _pose(y=1.0))
     program.bimanual_handle_grasp(
         _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
@@ -539,14 +541,33 @@ def test_loaded_gripper_can_close_inside_measured_contact_window():
         right_first=True, contact_hold_steps=100,
     )
     trajectory = program.build()
-    step = trajectory.waypoint_steps["right_handle_grasp"] + 10
-    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
-    retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
-        trajectory, step, 0.0, close_steps=1
+    orientation_local = MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ[
+        "pot_023"
+    ]
+    oriented = apply_object_local_receiving_grasp_orientation(
+        trajectory, _pose(), orientation_local
     )
-    assert hold_steps == 0
-    assert retimed.grippers[step, 0] == trajectory.grippers[step, 0]
-    assert np.all(retimed.grippers[step + 1 : grasp_end + 1, 0] == 0.0)
+    pregrasp_end = trajectory.waypoint_steps["bimanual_pregrasp"]
+    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    assert oriented.left_poses[0, 3:] == pytest.approx(
+        trajectory.left_poses[0, 3:]
+    )
+    assert oriented.left_poses[pregrasp_end, 3:] == pytest.approx(
+        orientation_local
+    )
+    assert oriented.left_poses[grasp_end, 3:] == pytest.approx(
+        orientation_local
+    )
+    assert oriented.left_poses[:, :3] == pytest.approx(
+        trajectory.left_poses[:, :3]
+    )
+    jaw_local = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_local[2] = 0.0
+    jaw_local /= np.linalg.norm(jaw_local)
+    jaw_in_pot = quaternion_rotate(orientation_local, jaw_local)
+    assert jaw_in_pot == pytest.approx(
+        [-0.98294378, 0.05256169, -0.17623507], abs=1.0e-7
+    )
 
 
 def test_high_reach_avoidance_twist_pivots_about_observed_contact():
