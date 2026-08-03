@@ -765,6 +765,52 @@ def retime_loaded_gripper_close_for_pad_reseat(
     )
 
 
+def track_loaded_pad_center_from_observation(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    observed_eef_pose: Any,
+    finger_forces_n: Any,
+    finger_pad_centers_world: Any,
+    retained_orientation_pose: Any,
+) -> tuple[SkillTrajectory, np.ndarray]:
+    """Recompose only the next wrist target about its observed loaded pad."""
+
+    step = int(current_step)
+    grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
+    if grasp_end is None or step < 0 or step >= grasp_end:
+        raise ValueError("loaded pad tracking step is outside contact hold")
+    observed = _pose(observed_eef_pose, "observed_eef_pose")
+    retained = _pose(retained_orientation_pose, "retained_orientation_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
+    contacting = forces >= 0.1
+    if int(np.sum(contacting)) != 1:
+        raise ValueError("loaded pad tracking requires one contacting finger")
+    center = centers[int(np.flatnonzero(contacting)[0])]
+    pivot_local = quaternion_rotate(
+        inverse_pose(observed)[3:], center - observed[:3]
+    )
+    target = retained.copy()
+    target[:3] = center - quaternion_rotate(target[3:], pivot_local)
+    left = trajectory.left_poses.copy()
+    correction = target[:3] - left[step + 1, :3]
+    left[step + 1] = target
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=trajectory.right_poses.copy(),
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        correction,
+    )
+
+
 def reanchor_handle_jaw_center_step(
     contact_local: Any,
     pot_root_pose: Any,

@@ -61,6 +61,7 @@ from judo_isaaclab.put_pot import (
     support_aligned_pot_pose,
     support_boundary_staging_pose,
     track_bimanual_handle_targets,
+    track_loaded_pad_center_from_observation,
     track_retained_contact_from_observed_object,
     twist_jaw_away_from_limited_axis,
     twist_loaded_jaw_about_observed_contact,
@@ -488,6 +489,39 @@ def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     )
     assert not did_pivot
     assert wrist_twisted == pytest.approx(expected)
+
+
+def test_loaded_pad_tracking_reanchors_only_next_left_wrist_target():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=8,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["left_handle_grasp"] + 1
+    observed = _pose(0.1, 0.2, 0.3)
+    centers = np.asarray([[0.12, 0.21, 0.34], [0.08, 0.19, 0.34]])
+    retained = _pose(0.3, 0.4, 0.5)
+    retained[3:] = [0.5, 0.5, 0.5, 0.5]
+    tracked, correction = track_loaded_pad_center_from_observation(
+        trajectory, step, observed, [0.0, 8.0], centers, retained
+    )
+    pivot_local = quaternion_rotate(
+        inverse_pose(observed)[3:], centers[1] - observed[:3]
+    )
+    preserved_center = tracked.left_poses[step + 1, :3] + quaternion_rotate(
+        tracked.left_poses[step + 1, 3:], pivot_local
+    )
+    assert preserved_center == pytest.approx(centers[1])
+    assert correction == pytest.approx(
+        tracked.left_poses[step + 1, :3]
+        - trajectory.left_poses[step + 1, :3]
+    )
+    assert tracked.right_poses == pytest.approx(trajectory.right_poses)
+    assert tracked.left_poses[: step + 1] == pytest.approx(
+        trajectory.left_poses[: step + 1]
+    )
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

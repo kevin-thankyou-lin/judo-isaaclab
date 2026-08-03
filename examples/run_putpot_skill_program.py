@@ -1151,6 +1151,7 @@ def main() -> None:
         peer_contact_jaw_twist_fraction = None
         peer_contact_gripper_retime = None
         peer_contact_position_locked = False
+        peer_contact_pad_center_tracking = []
         peer_contact_recovery_residuals_m = []
         peer_contact_pad_reseat_m = 0.0
         peer_contact_pad_reseat_residuals_m = []
@@ -1431,6 +1432,7 @@ def main() -> None:
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
+                    track_loaded_pad_center_from_observation,
                     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
                 )
 
@@ -1665,6 +1667,35 @@ def main() -> None:
                         else CONTACT_FEEDBACK_HORIZON_STEPS
                     ),
                 )
+                left_contacting = (
+                    np.asarray(sample["left_finger_forces_n"]) >= 0.1
+                )
+                if (
+                    peer_contact_position_locked
+                    and not bool(sample["left_grasp"])
+                    and int(np.sum(left_contacting)) == 1
+                ):
+                    retained_left_world = compose_pose(
+                        sample["pot_pose"], left_handle_contact
+                    )
+                    trajectory, pad_center_correction = (
+                        track_loaded_pad_center_from_observation(
+                            trajectory,
+                            step,
+                            sample["left_eef_pose"],
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_centers_world"],
+                            retained_left_world,
+                        )
+                    )
+                    peer_contact_pad_center_tracking.append(
+                        {
+                            "step": step,
+                            "signed_correction_world_m": (
+                                pad_center_correction.tolist()
+                            ),
+                        }
+                    )
             if (
                 trajectory is not None
                 and contact_close_complete_step <= step < grasp_complete_step
@@ -2487,6 +2518,9 @@ def main() -> None:
                 ),
                 "peer_contact_gripper_retime": peer_contact_gripper_retime,
                 "peer_contact_position_locked": peer_contact_position_locked,
+                "peer_contact_pad_center_tracking": (
+                    peer_contact_pad_center_tracking
+                ),
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
                 ),
