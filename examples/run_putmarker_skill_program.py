@@ -837,22 +837,26 @@ def _right_handle_friction_assist_reason(
     return None
 
 
-def _handle_engagement_depth_m(
-    target_dataset: str, handle_point_local_z_m: float
+def _effective_handle_pull_vertical_offset_m(
+    target_dataset: str,
+    cabinet_root_z_m: float,
+    handle_point_local_z_m: float,
+    nominal_offset_m: float,
 ) -> float:
-    """Hook behind unusually low official feet-cabinet handles.
+    """Keep collision-limited feet-cabinet pulls horizontal.
 
-    The ordinary handle transfer reaches the nominal frame.  On the feet
-    family, handles below -13 cm in the cabinet frame need a small inward jaw
-    offset to retain contact through the pull instead of slipping at onset.
+    The nominal downward pull is valid in the central workspace.  Below a
+    measured 0.89 m world handle height it drives the gripper toward the table
+    and stalls the arm, so the collision-clear pull follows only the slide axis.
     """
 
-    if (
+    low_feet_handle = (
         Path(target_dataset).parent.name == "annotated_cabinet_with_feet"
-        and handle_point_local_z_m <= -0.13
-    ):
-        return 0.015
-    return 0.0
+        and cabinet_root_z_m + handle_point_local_z_m < 0.89
+    )
+    if cabinet_root_z_m >= 1.04 or low_feet_handle:
+        return 0.0
+    return nominal_offset_m
 
 
 def main() -> None:
@@ -935,14 +939,13 @@ def main() -> None:
                 - source_geometry.handle_frame(0.0)[:3]
             )
         )
-        effective_handle_vertical_offset_m = (
-            0.0
-            if float(target_geometry.root_pose[2]) >= 1.04
-            else args.handle_pull_vertical_offset_m
+        effective_handle_vertical_offset_m = _effective_handle_pull_vertical_offset_m(
+            args.target_dataset,
+            float(target_geometry.root_pose[2]),
+            float(target_geometry.handle_point_local[2]),
+            args.handle_pull_vertical_offset_m,
         )
-        handle_engagement_depth_m = _handle_engagement_depth_m(
-            args.target_dataset, float(target_geometry.handle_point_local[2])
-        )
+        handle_engagement_depth_m = 0.0
         right_handle_assist_reason = _right_handle_friction_assist_reason(
             args.target_dataset, float(target_geometry.root_pose[2])
         )
