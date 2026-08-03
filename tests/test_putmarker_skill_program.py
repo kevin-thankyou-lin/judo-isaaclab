@@ -77,6 +77,13 @@ def test_low_feet_handle_uses_corrected_target_semantic_frame_and_friction():
         1.0601,
         -0.1258,
     ) == ("friction", "official_cabinet_with_feet_workspace")
+    assert module._right_handle_assist_spec(
+        "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_015.hdf5",
+        0.9949,
+        -0.1362,
+        cabinet_spawn_lift_m=0.0248,
+        handle_bar_height_m=0.0101,
+    ) == ("fixed_joint", "collision_lifted_thick_handle_runtime_contact")
 
 
 def test_target_handle_grasp_index_comes_from_lower_drawer_motion():

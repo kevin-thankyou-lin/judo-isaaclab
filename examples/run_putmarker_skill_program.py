@@ -49,6 +49,8 @@ TARGET_HANDLE_MIN_LATERAL_OFFSET_M = 0.028
 # Keep collision-limited lower-drawer geometry outside both the authored table
 # surface and the millimetre-scale contact skin used by CPU PhysX.
 CABINET_TABLE_COLLISION_CLEARANCE_M = 0.002
+FIXED_HANDLE_ASSIST_MIN_SPAWN_LIFT_M = 0.020
+FIXED_HANDLE_ASSIST_MIN_BAR_HEIGHT_M = 0.010
 
 
 def _parser() -> argparse.Namespace:
@@ -252,6 +254,33 @@ def _usd_link_local_min_z(asset_path: str, link_name: str) -> float:
     )
     bounds = cache.ComputeWorldBound(matches[0]).ComputeAlignedRange()
     return float(bounds.GetMin()[2])
+
+
+def _usd_handle_bar_size(asset_path: str) -> np.ndarray:
+    """Return the authored central lower-drawer grip-bar size in metres."""
+
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.Open(_asset_root_usd(asset_path))
+    candidates = []
+    for prim in stage.TraverseAll():
+        path = str(prim.GetPath())
+        if (
+            prim.GetTypeName() != "Xform"
+            or "/object/link_2/collisions/" not in path
+            or "handle_col" not in prim.GetName()
+        ):
+            continue
+        transform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        translation = np.asarray(transform.ExtractTranslation(), dtype=np.float64)
+        scale = prim.GetAttribute("xformOp:scale").Get()
+        if scale is not None:
+            candidates.append((translation, np.abs(np.asarray(scale, dtype=np.float64))))
+    if not candidates:
+        raise RuntimeError(f"lower-drawer handle collision boxes missing in {asset_path}")
+    return max(candidates, key=lambda item: float(item[0][0]))[1]
 
 
 def _collision_clear_spawn_lift_m(
@@ -962,13 +991,23 @@ def _effective_handle_pull_vertical_offset_m(
 
 
 def _right_handle_assist_spec(
-    target_dataset: str, cabinet_root_z_m: float, handle_point_local_z_m: float
+    target_dataset: str,
+    cabinet_root_z_m: float,
+    handle_point_local_z_m: float,
+    *,
+    cabinet_spawn_lift_m: float = 0.0,
+    handle_bar_height_m: float = 0.0,
 ) -> tuple[str | None, str | None]:
     low_feet_handle = (
         Path(target_dataset).parent.name == "annotated_cabinet_with_feet"
         and cabinet_root_z_m + handle_point_local_z_m < 0.89
     )
     if low_feet_handle:
+        if (
+            cabinet_spawn_lift_m >= FIXED_HANDLE_ASSIST_MIN_SPAWN_LIFT_M
+            and handle_bar_height_m >= FIXED_HANDLE_ASSIST_MIN_BAR_HEIGHT_M
+        ):
+            return "fixed_joint", "collision_lifted_thick_handle_runtime_contact"
         return "friction", "target_semantic_handle_runtime_contact_correction"
     reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
     return ("friction", reason) if reason is not None else (None, None)
@@ -1084,6 +1123,11 @@ def main() -> None:
             if link_min_local_z_m is not None
             else 0.0
         )
+        target_handle_bar_size_m = (
+            _usd_handle_bar_size(target_assets["obj_1"])
+            if low_handle_target
+            else None
+        )
         if cabinet_spawn_lift_m > 0.0:
             target["initial_state"]["articulation"]["obj_1"]["root_pose"][
                 :, 2
@@ -1116,6 +1160,12 @@ def main() -> None:
                 args.target_dataset,
                 float(target_geometry.root_pose[2]),
                 float(target_geometry.handle_point_local[2]),
+                cabinet_spawn_lift_m=cabinet_spawn_lift_m,
+                handle_bar_height_m=(
+                    float(target_handle_bar_size_m[2])
+                    if target_handle_bar_size_m is not None
+                    else 0.0
+                ),
             )
         )
         right_handle_assist = None
@@ -1131,6 +1181,12 @@ def main() -> None:
             }
             if right_handle_assist_mechanism == "friction":
                 assist_spec["friction"] = {"high": 100.0, "low": 0.5}
+            elif right_handle_assist_mechanism == "fixed_joint":
+                assist_spec["fixed_joint"] = {
+                    "joint_type": "fixed",
+                    "disable_pair_collision": True,
+                    "verbose": True,
+                }
             right_handle_assist = build_grasp_assists(
                 env,
                 {"right": assist_spec},
@@ -1481,6 +1537,11 @@ def main() -> None:
                     ),
                     "target_handle_lateral_correction_m": (
                         target_handle_lateral_correction_m
+                    ),
+                    "target_handle_bar_size_m": (
+                        target_handle_bar_size_m.tolist()
+                        if target_handle_bar_size_m is not None
+                        else None
                     ),
                     "target_handle_pull_lift_m": (
                         TARGET_HANDLE_PULL_LIFT_M
