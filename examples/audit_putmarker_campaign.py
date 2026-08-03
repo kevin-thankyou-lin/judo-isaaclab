@@ -94,7 +94,12 @@ def audit_pair(key: str, record: dict[str, Any]) -> dict[str, Any]:
         and protocol.get("scene_resets") == 1
         and protocol.get("inter_stage_resets") == 0
         and protocol.get("teleports_after_reset") == 0
-        and protocol.get("grasp_assistance") in {"none", "task_config:right=friction"}
+        and protocol.get("grasp_assistance")
+        in {
+            "none",
+            "task_config:right=friction",
+            "task_config:right=fixed_joint(link_2)",
+        }
     ):
         errors.append("deterministic continuous-rollout protocol failed")
     device = protocol.get("actual_device_receipt", {})

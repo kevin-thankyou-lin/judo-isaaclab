@@ -859,6 +859,19 @@ def _effective_handle_pull_vertical_offset_m(
     return nominal_offset_m
 
 
+def _right_handle_assist_spec(
+    target_dataset: str, cabinet_root_z_m: float, handle_point_local_z_m: float
+) -> tuple[str | None, str | None]:
+    low_feet_handle = (
+        Path(target_dataset).parent.name == "annotated_cabinet_with_feet"
+        and cabinet_root_z_m + handle_point_local_z_m < 0.89
+    )
+    if low_feet_handle:
+        return "fixed_joint", "low_feet_handle_friction_retention_failed"
+    reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
+    return ("friction", reason) if reason is not None else (None, None)
+
+
 def main() -> None:
     args = _parser()
     if args.render and not args.video:
@@ -946,25 +959,34 @@ def main() -> None:
             args.handle_pull_vertical_offset_m,
         )
         handle_engagement_depth_m = 0.0
-        right_handle_assist_reason = _right_handle_friction_assist_reason(
-            args.target_dataset, float(target_geometry.root_pose[2])
+        right_handle_assist_mechanism, right_handle_assist_reason = (
+            _right_handle_assist_spec(
+                args.target_dataset,
+                float(target_geometry.root_pose[2]),
+                float(target_geometry.handle_point_local[2]),
+            )
         )
         right_handle_assist = None
         right_handle_assist_ever = False
         if right_handle_assist_reason is not None:
             from dc_study.utils.grasp import build_grasp_assists
 
+            assist_spec = {
+                "mechanism": right_handle_assist_mechanism,
+                "arm": "right_arm",
+                "target": {"object": "obj_1", "link": "link_2"},
+                "grasp_delay_s": 0.0,
+            }
+            if right_handle_assist_mechanism == "friction":
+                assist_spec["friction"] = {"high": 100.0, "low": 0.5}
+            elif right_handle_assist_mechanism == "fixed_joint":
+                assist_spec["fixed_joint"] = {
+                    "joint_type": "fixed",
+                    "disable_pair_collision": True,
+                }
             right_handle_assist = build_grasp_assists(
                 env,
-                {
-                    "right": {
-                        "mechanism": "friction",
-                        "arm": "right_arm",
-                        "target": {"object": "obj_1", "link": "link_1"},
-                        "grasp_delay_s": 0.0,
-                        "friction": {"high": 100.0, "low": 0.5},
-                    }
-                },
+                {"right": assist_spec},
             )["right"]
             right_handle_assist.reset(env_ids)
         # Every asset uses the measured handle frame and joint axis.  The old
@@ -1248,10 +1270,26 @@ def main() -> None:
                 "steps": total_steps,
                 "seed": args.seed,
                 "grasp_assistance": (
-                    "task_config:right=friction" if right_handle_assist is not None else "none"
+                    {
+                        "friction": "task_config:right=friction",
+                        "fixed_joint": "task_config:right=fixed_joint(link_2)",
+                    }.get(right_handle_assist_mechanism, "none")
                 ),
-                "right_handle_friction_assist_engaged": right_handle_assist_ever,
-                "right_handle_friction_assist_reason": right_handle_assist_reason,
+                "right_handle_friction_assist_engaged": (
+                    right_handle_assist_ever
+                    and right_handle_assist_mechanism == "friction"
+                ),
+                "right_handle_fixed_joint_assist_engaged": (
+                    right_handle_assist_ever
+                    and right_handle_assist_mechanism == "fixed_joint"
+                ),
+                "right_handle_assist_mechanism": right_handle_assist_mechanism,
+                "right_handle_assist_reason": right_handle_assist_reason,
+                "right_handle_friction_assist_reason": (
+                    right_handle_assist_reason
+                    if right_handle_assist_mechanism == "friction"
+                    else None
+                ),
                 "actual_device_receipt": actual_device_receipt,
                 "semantic_coordinate_axes_rendered": bool(args.draw_coordinate_axes),
                 "offline_ground_override": offline_ground,

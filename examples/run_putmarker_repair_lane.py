@@ -109,7 +109,11 @@ def _artifact_receipt(
         and protocol.get("inter_stage_resets") == 0
         and protocol.get("teleports_after_reset") == 0
         and protocol.get("grasp_assistance")
-        in {"none", "task_config:right=friction"}
+        in {
+            "none",
+            "task_config:right=friction",
+            "task_config:right=fixed_joint(link_2)",
+        }
     ):
         raise RuntimeError(f"deterministic continuity contract failed: {protocol}")
     device = _actual_cpu_receipt(result)
