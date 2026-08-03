@@ -512,6 +512,24 @@ def test_loaded_gripper_open_hold_scales_from_measured_peer_approach():
     assert retimed.grippers[grasp_end, 0] == pytest.approx(0.0)
 
 
+def test_loaded_gripper_hold_covers_measured_jaw_centering_horizon():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=100,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["right_handle_grasp"] + 10
+    retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, 0.0828290903209271, reseat_step_m=0.002
+    )
+    assert hold_steps == 42
+    assert retimed.grippers[step : step + hold_steps + 1, 0] == pytest.approx(
+        trajectory.grippers[step, 0]
+    )
+
+
 def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     observed = _pose(0.1, 0.2, 0.3)
     loaded = _pose(0.2, 0.4, 0.6)

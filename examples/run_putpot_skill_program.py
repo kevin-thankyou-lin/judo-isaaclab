@@ -1157,6 +1157,8 @@ def main() -> None:
         peer_contact_pre_twist_jaw_residual_m = None
         peer_contact_authored_jaw_center_locked = False
         peer_contact_latch_centering_applied_m = 0.0
+        peer_contact_centered_tracking_latch_step = None
+        peer_contact_observed_jaw_residuals_m = []
         peer_contact_gripper_retime = None
         peer_contact_position_locked = False
         peer_contact_pad_center_tracking = []
@@ -1631,11 +1633,19 @@ def main() -> None:
                         if peer_contact_position_locked
                         else initial_pad_reseat_residual_m
                     )
+                    gripper_retime_step_m = 0.001
+                    if abs(peer_contact_latch_centering_applied_m) > 0.0:
+                        effective_pad_reseat_residual_m = max(
+                            effective_pad_reseat_residual_m,
+                            abs(peer_contact_latch_centering_applied_m),
+                        )
+                        gripper_retime_step_m = 0.002
                     trajectory, gripper_hold_steps = (
                         retime_loaded_gripper_close_for_pad_reseat(
                             trajectory,
                             step,
                             effective_pad_reseat_residual_m,
+                            reseat_step_m=gripper_retime_step_m,
                         )
                     )
                     peer_contact_gripper_retime = {
@@ -1650,6 +1660,7 @@ def main() -> None:
                             effective_pad_reseat_residual_m
                         ),
                         "hold_steps": gripper_hold_steps,
+                        "hold_step_m": gripper_retime_step_m,
                         "close_end_step": grasp_complete_step,
                     }
                     left_handle_contact = compose_pose(
@@ -1672,6 +1683,42 @@ def main() -> None:
                             target_left_handle_points,
                         )
                     )
+
+                if (
+                    peer_single_contact_latch_step is not None
+                    and abs(peer_contact_latch_centering_applied_m) > 0.0
+                    and not peer_contact_position_locked
+                ):
+                    from judo_isaaclab.put_pot import (
+                        HANDLE_PAD_GEOMETRIC_MARGIN_M,
+                        handle_jaw_center_offset_m,
+                    )
+
+                    observed_jaw_residual_m = handle_jaw_center_offset_m(
+                        sample["left_eef_pose"],
+                        sample["pot_pose"],
+                        target_left_handle_points,
+                    )
+                    peer_contact_observed_jaw_residuals_m.append(
+                        {
+                            "step": step,
+                            "signed_residual_m": observed_jaw_residual_m,
+                        }
+                    )
+                    if (
+                        abs(observed_jaw_residual_m)
+                        <= HANDLE_PAD_GEOMETRIC_MARGIN_M
+                        and single_finger_contact_observed(
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                        )
+                    ):
+                        left_handle_contact = compose_pose(
+                            inverse_pose(sample["pot_pose"]),
+                            sample["left_eef_pose"],
+                        )
+                        peer_contact_position_locked = True
+                        peer_contact_centered_tracking_latch_step = step
 
                 for arm in ("left", "right"):
                     if (
@@ -2675,6 +2722,12 @@ def main() -> None:
                 ),
                 "peer_contact_latch_centering_applied_m": (
                     peer_contact_latch_centering_applied_m
+                ),
+                "peer_contact_centered_tracking_latch_step": (
+                    peer_contact_centered_tracking_latch_step
+                ),
+                "peer_contact_observed_jaw_residuals_m": (
+                    peer_contact_observed_jaw_residuals_m
                 ),
                 "peer_contact_gripper_retime": peer_contact_gripper_retime,
                 "peer_contact_position_locked": peer_contact_position_locked,
