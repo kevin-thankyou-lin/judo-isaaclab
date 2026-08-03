@@ -835,6 +835,7 @@ class SmoothBimanualTransport:
     right_poses: np.ndarray
     minimum_cooktop_clearance_m: float
     cooktop_overlap_samples: int
+    initial_clearance_recovery_m: float
 
 
 def _minimum_jerk_fraction(steps: int) -> np.ndarray:
@@ -919,15 +920,21 @@ def smooth_collision_aware_bimanual_transport(
         raise ValueError("transport target does not clear the cooktop")
     positive = np.flatnonzero(required_lift > 1.0e-9)
     lift_profile = np.zeros(steps, dtype=np.float64)
+    initial_clearance_recovery_m = 0.0
     if len(positive):
         first = int(positive[0])
         last = int(positive[-1])
         if first == 0:
-            raise ValueError(
-                "pot starts inside the cooktop footprint below transport clearance"
-            )
-        rise = _minimum_jerk_fraction(first + 1)
-        lift_profile[: first + 1] = rise
+            # A feedback reanchor may observe tracking drift after the pot has
+            # already entered the footprint.  Make the very next commanded
+            # sample a vertical clearance recovery, then continue the C2 fall.
+            # The observed state itself is retained in the trace; no reset or
+            # teleport is introduced.
+            initial_clearance_recovery_m = float(np.max(required_lift))
+            lift_profile[: last + 1] = 1.0
+        else:
+            rise = _minimum_jerk_fraction(first + 1)
+            lift_profile[: first + 1] = rise
         lift_profile[first : last + 1] = 1.0
         fall_steps = steps - last - 1
         if fall_steps:
@@ -946,6 +953,7 @@ def smooth_collision_aware_bimanual_transport(
         right_poses=right,
         minimum_cooktop_clearance_m=minimum_clearance,
         cooktop_overlap_samples=int(np.count_nonzero(overlap)),
+        initial_clearance_recovery_m=initial_clearance_recovery_m,
     )
 
 

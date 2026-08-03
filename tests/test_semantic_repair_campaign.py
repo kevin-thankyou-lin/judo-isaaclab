@@ -138,6 +138,32 @@ def test_preserved_demo_receipt_must_match_recorded_hash(monkeypatch):
         )
 
 
+def test_inaccessible_provenance_reuses_matching_hash_verified_demo(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    preserved = tmp_path / "skill_demo.hdf5"
+    preserved.write_bytes(b"verified")
+    monkeypatch.setattr(
+        module,
+        "validate_demo",
+        lambda path, assets: {"path": path, "sha256": "same", "actions": 800},
+    )
+
+    actual = module._validate_demo_receipt(
+        {"path": "/home/gear/missing.hdf5", "sha256": "same", "actions": 800},
+        {},
+        fallback={"path": str(preserved), "sha256": "same", "actions": 800},
+    )
+    assert actual["path"] == str(preserved)
+    with pytest.raises(RuntimeError, match="preserved demonstration hash differs"):
+        module._validate_demo_receipt(
+            {"path": "/home/gear/missing.hdf5", "sha256": "other"},
+            {},
+            fallback={"path": str(preserved), "sha256": "same"},
+        )
+
+
 def test_fail_fast_lane_stops_only_after_a_failed_attempt():
     module = _module()
 

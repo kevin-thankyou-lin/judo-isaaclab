@@ -1327,6 +1327,9 @@ def main() -> None:
                             "cooktop_overlap_samples": (
                                 observed_transport.cooktop_overlap_samples
                             ),
+                            "initial_clearance_recovery_m": (
+                                observed_transport.initial_clearance_recovery_m
+                            ),
                         }
                     )
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:

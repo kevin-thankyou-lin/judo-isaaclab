@@ -105,9 +105,23 @@ def _semantic_motion_success(source: dict[str, Any]) -> bool:
 
 
 def _validate_demo_receipt(
-    demonstration: dict[str, Any], assets: dict[str, str]
+    demonstration: dict[str, Any],
+    assets: dict[str, str],
+    *,
+    fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    actual = validate_demo(demonstration["path"], assets)
+    selected_path = demonstration["path"]
+    if not Path(selected_path).is_file() and fallback is not None:
+        if demonstration.get("sha256") not in (None, fallback.get("sha256")):
+            raise RuntimeError(
+                "preserved demonstration hash differs from inaccessible provenance"
+            )
+        if demonstration.get("actions") not in (None, fallback.get("actions")):
+            raise RuntimeError(
+                "preserved demonstration action count differs from inaccessible provenance"
+            )
+        selected_path = fallback["path"]
+    actual = validate_demo(selected_path, assets)
     if demonstration.get("sha256") not in (None, actual["sha256"]):
         raise RuntimeError(
             f"demonstration hash does not match its ledger: {demonstration['path']}"
@@ -256,7 +270,9 @@ def refresh_ledger(
                 selected = successes[-1]
                 result = selected["result"]
                 demonstration = _validate_demo_receipt(
-                    result["provenance"]["demonstration"], pair["assets"]
+                    result["provenance"]["demonstration"],
+                    pair["assets"],
+                    fallback=previous.get("demonstration"),
                 )
                 record.update(
                     {
@@ -267,7 +283,11 @@ def refresh_ledger(
                     }
                 )
             elif preserved_primary:
-                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
+                demonstration = _validate_demo_receipt(
+                    primary_demo,
+                    pair["assets"],
+                    fallback=previous.get("demonstration"),
+                )
                 record.update(
                     {
                         "accepted_source": "preserved_primary_deterministic",
@@ -278,7 +298,11 @@ def refresh_ledger(
                 )
             elif combined_audit_success:
                 selected = audit_motion_successes[-1]
-                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
+                demonstration = _validate_demo_receipt(
+                    primary_demo,
+                    pair["assets"],
+                    fallback=previous.get("demonstration"),
+                )
                 record.update(
                     {
                         "accepted_source": "semantic_audit_with_preserved_primary_demo",
