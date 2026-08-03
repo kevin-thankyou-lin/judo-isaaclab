@@ -14,6 +14,7 @@ from judo_isaaclab.hang_mug import (
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
+    reanchor_right_grasp_after_pregrasp,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from run_hangmug_skill_program import (
@@ -258,4 +259,30 @@ def test_branch_transport_reanchors_observed_right_contact():
     )
     assert adjusted.right_poses[:start] == pytest.approx(
         trajectory.right_poses[:start]
+    )
+
+
+def test_right_grasp_reanchors_after_pregrasp_contact():
+    program = HangMugSkillProgram(_pose(), _pose(y=-1))
+    program.semantic_left_grasp(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        approach_steps=2, close_steps=2, lift_steps=2,
+    )
+    program.physical_handover(
+        _pose(0.3), _pose(0.4, -0.2), _pose(0.4, -0.1), _pose(0.3, 0.2),
+        approach_steps=2, close_steps=2, release_steps=2,
+    )
+    trajectory = program.build()
+    original = trajectory.right_poses.copy()
+    observed_mug = _pose(0.0, 0.06, -0.02)
+    pregrasp_end = trajectory.waypoint_steps["handover_pregrasp"]
+    adjusted = reanchor_right_grasp_after_pregrasp(
+        trajectory, _pose(), observed_mug, original[pregrasp_end]
+    )
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    assert adjusted.right_poses[: pregrasp_end + 1] == pytest.approx(
+        original[: pregrasp_end + 1]
+    )
+    assert adjusted.right_poses[grasp_end, :3] == pytest.approx(
+        original[grasp_end, :3] + [0.0, 0.06, -0.02]
     )

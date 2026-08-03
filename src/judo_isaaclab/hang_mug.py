@@ -195,6 +195,39 @@ def reanchor_branch_transport_contact(
     )
 
 
+def reanchor_right_grasp_after_pregrasp(
+    trajectory: SkillTrajectory,
+    nominal_mug_pose: Any,
+    observed_mug_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Retarget the closing stroke after the pregrasp contacts a changed mug."""
+
+    required = ("handover_pregrasp", "right_grasp", "left_release")
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    start = steps["handover_pregrasp"] + 1
+    grasp_end = steps["right_grasp"]
+    release_end = steps["left_release"]
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    corrected_grasp = transfer_pose(
+        right[grasp_end], nominal_mug_pose, observed_mug_pose
+    )
+    right[start : grasp_end + 1] = interpolate_poses(
+        observed_right_pose, corrected_grasp, grasp_end - start + 1
+    )
+    right[grasp_end + 1 : release_end + 1] = corrected_grasp
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 
