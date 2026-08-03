@@ -147,6 +147,18 @@ def _select_grasp_assist_config(config, mechanism: str):
     return selected
 
 
+def _add_right_handover_assist(config):
+    """Mirror the datagen-supported mug assist onto the receiving hand."""
+
+    selected = copy.deepcopy(config)
+    if "left" not in selected:
+        raise RuntimeError("HangMug right assist requires the canonical left assist")
+    right = copy.deepcopy(selected["left"])
+    right["arm"] = "right_arm"
+    selected["right"] = right
+    return selected
+
+
 def _install_grasp_assist_config(manager_module, config_module, config) -> None:
     manager_module.GRASP_ASSIST_CONFIG = copy.deepcopy(config)
     config_module.GRASP_ASSIST_CONFIG = copy.deepcopy(config)
@@ -160,6 +172,7 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
     assist_config = _select_grasp_assist_config(
         config_module.GRASP_ASSIST_CONFIG, mechanism
     )
+    assist_config = _add_right_handover_assist(assist_config)
     if not assist_config:
         raise RuntimeError("HangMug datagen grasp-assist config is empty")
     if manager_module.GRASP_ASSIST_CONFIG != config_module.GRASP_ASSIST_CONFIG:
@@ -725,6 +738,14 @@ def main() -> None:
                 )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
             observation, _, _, _, info = env.step(action)
+            right_assist = env.grasp_assists.get("right")
+            if right_assist is not None and trajectory is not None:
+                _, right_grasping = env.robot.is_grasping()
+                releasing_right = step > trajectory.waypoint_steps["branch_unload"]
+                right_assist.update(
+                    engage=right_grasping,
+                    disable=torch.full_like(right_grasping, releasing_right),
+                )
             sample = _sample(env, step, stage, info)
             demo_recorder.append(
                 action,
@@ -813,6 +834,12 @@ def main() -> None:
             "left_grasp_assist_released": not final[
                 "grasp_assist_engaged"
             ].get("left", False),
+            "right_grasp_assist_engaged": any(
+                row["grasp_assist_engaged"].get("right", False) for row in samples
+            ),
+            "right_grasp_assist_released": not final[
+                "grasp_assist_engaged"
+            ].get("right", False),
             "coded_task_success": bool(final["task_success"]),
             "all_stages_latched": bool(final["stage1"] and final["stage2"] and final["stage3"]),
             "left_pick_observed": any(row["left_grasp"] and row["stage1"] for row in samples),

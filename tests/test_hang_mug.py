@@ -18,6 +18,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _add_right_handover_assist,
     _install_grasp_assist_config,
     _select_grasp_assist_config,
     _validate_datagen_grasp_assists,
@@ -123,6 +124,23 @@ def test_datagen_grasp_assist_mechanism_override():
     assert manager_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
     assert config_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
     assert config["left"]["mechanism"] == "fixed_joint"
+
+
+def test_right_handover_assist_mirrors_supported_friction_config():
+    config = {
+        "left": {
+            "mechanism": "friction",
+            "arm": "left_arm",
+            "target": {"object": "mug"},
+            "friction": {"high": 100.0, "low": 0.5},
+        }
+    }
+    selected = _add_right_handover_assist(config)
+    assert selected["right"] == {
+        **config["left"],
+        "arm": "right_arm",
+    }
+    assert config.keys() == {"left"}
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():
