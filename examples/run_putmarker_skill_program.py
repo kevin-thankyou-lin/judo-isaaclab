@@ -69,7 +69,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--rigid-handle-pull-m", type=float, default=0.10)
-    parser.add_argument("--handle-pull-vertical-offset-m", type=float, default=-0.040)
+    parser.add_argument("--handle-pull-vertical-offset-m", type=float, default=-0.050)
     parser.add_argument(
         "--integrate-left-ik",
         action="store_true",
