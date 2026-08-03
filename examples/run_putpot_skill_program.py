@@ -289,7 +289,7 @@ def _build_skill(
     right_start,
     args,
 ):
-    from judo_isaaclab.put_marker import compose_pose, inverse_pose, transfer_pose
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
     from judo_isaaclab.put_pot import (
         TRANSPORT_PLANNING_MARGIN_M,
         PutPotSkillProgram,
@@ -325,20 +325,20 @@ def _build_skill(
         target_handle = handle(target_parts, side)
         source_frame = compose_pose(frame["pot_pose"], source_handle)
         target_frame = compose_pose(target_initial.root_pose, target_handle)
-        # The authored handle center and outward reach change with the asset.
-        # Scale only along the measured handle axis; transverse fingertip
-        # clearances stay rigid so thin handles are not missed vertically.
-        from judo_isaaclab.put_pot import handle_axial_contact_scale
+        # The authored handle center and extent change with the asset.  Scale
+        # outward reach along its axis and preserve fingertip clearance from
+        # the measured transverse surfaces.
+        from judo_isaaclab.put_pot import (
+            transfer_handle_pose_preserving_surface_clearance,
+        )
 
-        return transfer_pose(
+        return transfer_handle_pose_preserving_surface_clearance(
             frame[f"{arm}_eef_pose"],
             source_frame,
             target_frame,
-            local_position_scale=handle_axial_contact_scale(
-                handle_size(source_parts, side),
-                handle_size(target_parts, side),
-                target_parts.handle_axis,
-            ),
+            handle_size(source_parts, side),
+            handle_size(target_parts, side),
+            target_parts.handle_axis,
         )
 
     left_grasp = transfer_initial("left_handle_grasp", "left")

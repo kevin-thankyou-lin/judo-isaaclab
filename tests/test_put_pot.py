@@ -20,6 +20,7 @@ from judo_isaaclab.put_pot import (
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     track_bimanual_handle_targets,
+    transfer_handle_pose_preserving_surface_clearance,
     _linear_contact_feedback_poses,
 )
 
@@ -82,6 +83,24 @@ def test_handle_contact_scales_only_measured_outward_reach():
         [0.06, 0.08, 0.04], [0.045, 0.07, 0.02], 0
     )
     assert scale == pytest.approx([0.75, 1.0, 1.0])
+
+
+def test_handle_transfer_preserves_measured_transverse_surface_clearance():
+    source = _pose()
+    target = _pose(x=0.4, y=-0.2, z=0.1)
+    wrist = _pose(x=0.06, y=0.09, z=0.066)
+    transferred = transfer_handle_pose_preserving_surface_clearance(
+        wrist,
+        source,
+        target,
+        [0.06, 0.086, 0.041],
+        [0.048, 0.082, 0.034],
+        0,
+    )
+    assert transferred[:3] == pytest.approx(
+        [0.4 + 0.048, -0.2 + 0.088, 0.1 + 0.0625]
+    )
+    assert transferred[3:] == pytest.approx(wrist[3:])
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

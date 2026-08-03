@@ -74,6 +74,33 @@ def handle_axial_contact_scale(
     return scale
 
 
+def transfer_handle_pose_preserving_surface_clearance(
+    value: Any,
+    source_frame: Any,
+    target_frame: Any,
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+) -> np.ndarray:
+    """Transfer a wrist pose while preserving local handle-surface clearance."""
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    local = compose_pose(inverse_pose(source_frame), value)
+    local[handle_axis] *= target[handle_axis] / source[handle_axis]
+    for axis in range(3):
+        if axis == handle_axis:
+            continue
+        sign = -1.0 if local[axis] < 0.0 else 1.0
+        surface_clearance = abs(local[axis]) - 0.5 * source[axis]
+        local[axis] = sign * (0.5 * target[axis] + surface_clearance)
+    return compose_pose(target_frame, local)
+
+
 @dataclass(frozen=True)
 class SmoothBimanualTransport:
     """One sampled pot path and the two rigidly attached handle paths."""
