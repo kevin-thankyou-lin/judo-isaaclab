@@ -507,6 +507,24 @@ def test_loaded_contact_residual_survives_object_local_hold_reanchor():
     assert np.linalg.norm(hold.left_poses[first_hold, :3] - observed[:3]) > 0.025
 
 
+def test_loaded_transport_reference_opposes_drift_without_becoming_observation():
+    root = _pose(0.4, -0.2, 0.8)
+    loaded_reference = _pose(0.23, 0.12, 0.11)
+    observed_local = loaded_reference.copy()
+    observed_local[:3] -= [0.013, -0.022, -0.010]
+    observed_world = compose_pose(root, observed_local)
+    retained, correction = compensate_retained_contact_tracking(
+        loaded_reference,
+        root,
+        observed_world,
+    )
+
+    assert np.linalg.norm(correction) == pytest.approx(HANDLE_PAD_GEOMETRIC_MARGIN_M)
+    assert np.dot(correction, loaded_reference[:3] - observed_local[:3]) > 0.0
+    assert retained[:3] == pytest.approx(loaded_reference[:3] + correction)
+    assert retained[:3] != pytest.approx(observed_local[:3])
+
+
 def test_jaw_twist_removes_limited_axis_without_changing_pad_tangent():
     pose = _pose()
     pads = np.asarray([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])

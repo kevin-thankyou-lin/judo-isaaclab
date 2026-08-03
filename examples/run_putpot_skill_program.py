@@ -1681,6 +1681,7 @@ def main() -> None:
             ):
                 from judo_isaaclab.put_pot import (
                     cartesian_smoothness_metrics,
+                    compensate_retained_contact_tracking,
                     maximum_bimanual_position_step_m,
                     reanchor_bimanual_transport_from_observation,
                     transport_contact_reanchor_required,
@@ -1709,6 +1710,24 @@ def main() -> None:
                     observed_right_contact_local = compose_pose(
                         observed_pot_inverse, sample["right_eef_pose"]
                     )
+                    retained_left_contact_local = (
+                        observed_left_contact_local
+                        if transport_reference_left_contact_local is None
+                        else compensate_retained_contact_tracking(
+                            transport_reference_left_contact_local,
+                            sample["pot_pose"],
+                            sample["left_eef_pose"],
+                        )[0]
+                    )
+                    retained_right_contact_local = (
+                        observed_right_contact_local
+                        if transport_reference_right_contact_local is None
+                        else compensate_retained_contact_tracking(
+                            transport_reference_right_contact_local,
+                            sample["pot_pose"],
+                            sample["right_eef_pose"],
+                        )[0]
+                    )
                     signed_residual = {
                         "step": step,
                         "left": (
@@ -1733,6 +1752,24 @@ def main() -> None:
                                 - transport_reference_right_contact_local[:3]
                             ).tolist(),
                         },
+                        "retained_contact_correction_local": {
+                            "left": (
+                                retained_left_contact_local[:3]
+                                - (
+                                    observed_left_contact_local[:3]
+                                    if transport_reference_left_contact_local is None
+                                    else transport_reference_left_contact_local[:3]
+                                )
+                            ).tolist(),
+                            "right": (
+                                retained_right_contact_local[:3]
+                                - (
+                                    observed_right_contact_local[:3]
+                                    if transport_reference_right_contact_local is None
+                                    else transport_reference_right_contact_local[:3]
+                                )
+                            ).tolist(),
+                        },
                     }
                     candidate_trajectory, observed_transport = (
                         reanchor_bimanual_transport_from_observation(
@@ -1746,6 +1783,8 @@ def main() -> None:
                             transport_clearance_m=args.transport_clearance_m,
                             collision_clearance_m=args.collision_clearance_m,
                             current_step=step,
+                            left_contact_local=retained_left_contact_local,
+                            right_contact_local=retained_right_contact_local,
                         )
                     )
                     start = step + 1
@@ -1756,12 +1795,14 @@ def main() -> None:
                     )
                     if candidate_maximum_step_m <= transport_reanchor_position_limit_m:
                         trajectory = candidate_trajectory
-                        transport_reference_left_contact_local = (
-                            observed_left_contact_local
-                        )
-                        transport_reference_right_contact_local = (
-                            observed_right_contact_local
-                        )
+                        if transport_reference_left_contact_local is None:
+                            transport_reference_left_contact_local = (
+                                observed_left_contact_local
+                            )
+                        if transport_reference_right_contact_local is None:
+                            transport_reference_right_contact_local = (
+                                observed_right_contact_local
+                            )
                         transport_reanchor_steps.append(step)
                         transport_reanchor_signed_residuals_world_m.append(
                             signed_residual
