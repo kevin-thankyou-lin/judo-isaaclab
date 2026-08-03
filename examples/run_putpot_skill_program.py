@@ -678,6 +678,9 @@ def _build_skill(
             support_inset_m=args.support_clearance_m,
         )
     grasp_geometry["left"]["supported_center_slide"] = supported_center_slide
+    grasp_geometry["left"]["support_unload_m"] = (
+        args.support_clearance_m if supported_center_slide else 0.0
+    )
     grasp_geometry["left"]["support_staging_offset_m"] = float(
         np.linalg.norm(transport_final_pot[:2] - final_pot_pose[:2])
     )
@@ -1513,6 +1516,7 @@ def main() -> None:
                     sample["pot_pose"],
                     sample["cooktop_pose"],
                     sample["right_eef_pose"],
+                    support_unload_m=args.support_clearance_m,
                 )
                 center_slide_reference_right_contact_local = compose_pose(
                     inverse_pose(sample["pot_pose"]), sample["right_eef_pose"]

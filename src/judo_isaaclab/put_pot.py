@@ -1586,6 +1586,7 @@ def reanchor_supported_center_slide(
     current_step: int | None = None,
     reference_right_contact_local: Any | None = None,
     contact_recovery_steps: int = CONTACT_FEEDBACK_HORIZON_STEPS,
+    support_unload_m: float = 0.0,
 ) -> SkillTrajectory:
     """Preserve observed right contact while sliding the supported pot to center."""
     steps = trajectory.waypoint_steps
@@ -1615,6 +1616,8 @@ def reanchor_supported_center_slide(
     slide_end = steps["center_slide"]
     if start > slide_end:
         raise ValueError("current_step is outside the supported center slide")
+    if not np.isfinite(support_unload_m) or support_unload_m < 0.0:
+        raise ValueError("support_unload_m must be finite and nonnegative")
     release_end = steps["pot_release"]
     withdraw_end = steps["bimanual_withdraw"]
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
@@ -1626,9 +1629,37 @@ def reanchor_supported_center_slide(
     right_withdraw[:3] += nominal_withdraw_delta
     remaining = slide_end - start + 1
     if reference_right_contact_local is None:
-        right[start : slide_end + 1] = interpolate_poses(
-            right_pose, right_center, remaining
-        )
+        if support_unload_m > 0.0:
+            lift_steps = min(
+                CONTACT_FEEDBACK_HORIZON_STEPS,
+                (remaining - 8) // 2,
+            )
+            if lift_steps < 1:
+                raise ValueError("supported slide needs room for support unloading")
+            lifted_pot_pose = pot_pose.copy()
+            lifted_pot_pose[2] += float(support_unload_m)
+            centered_lifted_pot_pose = centered_pot_pose.copy()
+            centered_lifted_pot_pose[2] += float(support_unload_m)
+            right_lift = compose_pose(lifted_pot_pose, right_contact)
+            right_center_lift = compose_pose(
+                centered_lifted_pot_pose, right_contact
+            )
+            translate_steps = remaining - 2 * lift_steps
+            right[start : start + lift_steps] = interpolate_poses(
+                right_pose, right_lift, lift_steps
+            )
+            right[
+                start + lift_steps : start + lift_steps + translate_steps
+            ] = interpolate_poses(
+                right_lift, right_center_lift, translate_steps
+            )
+            right[start + lift_steps + translate_steps : slide_end + 1] = (
+                interpolate_poses(right_center_lift, right_center, lift_steps)
+            )
+        else:
+            right[start : slide_end + 1] = interpolate_poses(
+                right_pose, right_center, remaining
+            )
     else:
         if contact_recovery_steps < 1:
             raise ValueError("contact_recovery_steps must be positive")

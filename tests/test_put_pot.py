@@ -1145,7 +1145,7 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
         _pose(0.5, 0.8, 0.3),
         lower_steps=2,
         left_release_steps=2,
-        center_steps=3,
+        center_steps=12,
         right_release_steps=2,
         withdraw_steps=2,
         settle_steps=2,
@@ -1160,6 +1160,18 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
     assert trajectory.grippers[
         trajectory.waypoint_steps["pot_release"]
     ] == pytest.approx([-0.0475, -0.0475])
+
+    unloaded = reanchor_supported_center_slide(
+        trajectory,
+        _pose(0.6, 0.1, 0.1),
+        _pose(0.7, -0.2, 0.1),
+        _pose(0.65, 0.9, 0.2),
+        support_unload_m=0.006,
+    )
+    slide_start = trajectory.waypoint_steps["left_unload_release"] + 1
+    slide_end = trajectory.waypoint_steps["center_slide"]
+    assert np.max(unloaded.right_poses[slide_start : slide_end + 1, 2]) > 0.205
+    assert unloaded.right_poses[slide_end, :2] == pytest.approx([0.75, 0.6])
 
     lowered = reanchor_centered_lowering(
         trajectory,
@@ -1182,7 +1194,6 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
         _pose(0.7, -0.2, 0.1),
         _pose(0.65, 0.9, 0.2),
     )
-    slide_end = trajectory.waypoint_steps["center_slide"]
     assert reanchored.right_poses[slide_end, :2] == pytest.approx(
         [0.75, 0.6]
     )
