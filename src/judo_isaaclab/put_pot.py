@@ -48,6 +48,12 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
 THIN_HANDLE_BALANCE_RATIO = 0.45
+# Pot020 attempt_001 reached the left command but first touched 30.2 mm past
+# the pad boundary while its mirrored right contact held for 353 frames.  The
+# authored target handles agree within 7 microns and retain 49.4% of the source
+# transverse thickness.  Position symmetry is therefore useful over a wider
+# measured range than the stronger positive-pivot balance correction above.
+THIN_HANDLE_SYMMETRY_RATIO = 0.50
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 
 
@@ -515,7 +521,12 @@ def geometry_conditioned_target_handle_symmetry(
     *,
     symmetry_relative_tolerance: float = 0.02,
 ) -> bool:
-    """Use one target-side contact relation for a thin measured-symmetric pair."""
+    """Use one target-side contact relation for a thin measured-symmetric pair.
+
+    The position-only mirror has its own measured thinning boundary.  It does
+    not grant the extra finger-pivot authority controlled by
+    ``THIN_HANDLE_BALANCE_RATIO``.
+    """
 
     values = [
         np.asarray(value, dtype=np.float64)
@@ -543,7 +554,7 @@ def geometry_conditioned_target_handle_symmetry(
         np.abs(target_negative - target_positive)
         <= symmetry_relative_tolerance * scale
     )
-    return bool(retained_ratio < THIN_HANDLE_BALANCE_RATIO and symmetric)
+    return bool(retained_ratio < THIN_HANDLE_SYMMETRY_RATIO and symmetric)
 
 
 @dataclass(frozen=True)

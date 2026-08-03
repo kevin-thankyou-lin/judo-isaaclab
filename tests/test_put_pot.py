@@ -328,6 +328,15 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
         target_positive,
         0,
     )
+    # Pot020 attempt_001: 20.01 mm / 40.56 mm = 0.4934 retained
+    # transverse thickness, with target sides symmetric to microns.
+    assert geometry_conditioned_target_handle_symmetry(
+        [0.059453, 0.085784, 0.040560],
+        [0.059405, 0.085782, 0.040535],
+        [0.069219, 0.061195, 0.020012],
+        [0.069210, 0.061195, 0.020007],
+        0,
+    )
     assert not geometry_conditioned_target_handle_symmetry(
         source_negative,
         source_positive,
