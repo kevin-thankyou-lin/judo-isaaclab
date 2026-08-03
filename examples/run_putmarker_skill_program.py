@@ -1064,6 +1064,8 @@ def main() -> None:
             ] += cabinet_spawn_lift_m
             target["cabinet_pose"] = np.asarray(target["cabinet_pose"]).copy()
             target["cabinet_pose"][:, 2] += cabinet_spawn_lift_m
+            target["eef_right"] = np.asarray(target["eef_right"]).copy()
+            target["eef_right"][:, 2, 3] += cabinet_spawn_lift_m
             target_geometry = _drawer_geometry(
                 target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
             )
@@ -1463,6 +1465,7 @@ def main() -> None:
                         "table_surface_z_m": table_surface_z_m,
                         "required_clearance_m": 0.001,
                         "application": "single_reset_initial_state",
+                        "target_semantic_frame_adjustment_m": cabinet_spawn_lift_m,
                     },
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
