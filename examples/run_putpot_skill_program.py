@@ -1094,6 +1094,7 @@ def main() -> None:
         center_slide_reanchor_steps = []
         center_slide_reanchor_signed_residuals_local_m = []
         center_slide_reference_right_contact_local = None
+        center_slide_contact_recovery_end_step = None
         transverse_handle_axes = [
             axis for axis in range(3) if axis != target_parts.handle_axis
         ]
@@ -1518,7 +1519,11 @@ def main() -> None:
                 )
                 center_slide_reanchor_steps.append(step)
                 center_slide_reanchor_signed_residuals_local_m.append(
-                    {"step": step, "right": [0.0, 0.0, 0.0]}
+                    {
+                        "step": step,
+                        "phase": "supported_contact_anchor",
+                        "right": [0.0, 0.0, 0.0],
+                    }
                 )
             elif (
                 trajectory is not None
@@ -1527,9 +1532,6 @@ def main() -> None:
                 < trajectory.waypoint_steps["center_slide"]
                 and sample["right_grasp"]
                 and center_slide_reference_right_contact_local is not None
-                and step - center_slide_reanchor_steps[-1]
-                >= TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
-                and trajectory.waypoint_steps["center_slide"] - step >= 8
             ):
                 observed_right_contact_local = compose_pose(
                     inverse_pose(sample["pot_pose"]), sample["right_eef_pose"]
@@ -1538,8 +1540,34 @@ def main() -> None:
                     observed_right_contact_local[:3]
                     - center_slide_reference_right_contact_local[:3]
                 )
-                if (
-                    np.linalg.norm(center_slide_contact_residual)
+                if step == center_slide_contact_recovery_end_step:
+                    from judo_isaaclab.put_pot import reanchor_supported_center_slide
+
+                    trajectory = reanchor_supported_center_slide(
+                        trajectory,
+                        sample["pot_pose"],
+                        sample["cooktop_pose"],
+                        sample["right_eef_pose"],
+                        current_step=step,
+                    )
+                    center_slide_reference_right_contact_local = (
+                        observed_right_contact_local
+                    )
+                    center_slide_contact_recovery_end_step = None
+                    center_slide_reanchor_steps.append(step)
+                    center_slide_reanchor_signed_residuals_local_m.append(
+                        {
+                            "step": step,
+                            "phase": "recovered_contact_latched",
+                            "right": center_slide_contact_residual.tolist(),
+                        }
+                    )
+                elif (
+                    center_slide_contact_recovery_end_step is None
+                    and step - center_slide_reanchor_steps[-1]
+                    >= TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
+                    and trajectory.waypoint_steps["center_slide"] - step >= 9
+                    and np.linalg.norm(center_slide_contact_residual)
                     > transport_contact_tracking_tolerance_m
                 ):
                     from judo_isaaclab.put_pot import reanchor_supported_center_slide
@@ -1554,10 +1582,15 @@ def main() -> None:
                             center_slide_reference_right_contact_local
                         ),
                     )
+                    center_slide_contact_recovery_end_step = step + min(
+                        CONTACT_FEEDBACK_HORIZON_STEPS,
+                        trajectory.waypoint_steps["center_slide"] - step - 8,
+                    )
                     center_slide_reanchor_steps.append(step)
                     center_slide_reanchor_signed_residuals_local_m.append(
                         {
                             "step": step,
+                            "phase": "contact_recovery_started",
                             "right": center_slide_contact_residual.tolist(),
                         }
                     )
