@@ -582,7 +582,6 @@ def _build_skill(
         left_grasp,
         left_lift,
         approach_steps=100,
-        contact_settle_steps=args.handover_contact_settle_steps,
         close_steps=50,
         lift_steps=70,
     )
@@ -597,6 +596,7 @@ def _build_skill(
         right_grasp,
         left_release,
         approach_steps=100,
+        contact_settle_steps=args.handover_contact_settle_steps,
         close_steps=50,
         release_steps=50,
     )
