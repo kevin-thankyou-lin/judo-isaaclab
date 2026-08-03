@@ -9,6 +9,7 @@ from judo_isaaclab.put_pot import (
     RigidSupportGeometry,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
+    deepen_handle_contact_along_approach,
     handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
@@ -101,6 +102,14 @@ def test_handle_transfer_preserves_measured_transverse_surface_clearance():
         [0.4 + 0.048, -0.2 + 0.088, 0.1 + 0.0625]
     )
     assert transferred[3:] == pytest.approx(wrist[3:])
+
+
+def test_handle_contact_depth_advances_along_measured_approach():
+    pregrasp = _pose(x=0.08, y=0.02, z=0.04)
+    grasp = _pose(x=0.07, y=0.02, z=0.04)
+    deepened = deepen_handle_contact_along_approach(pregrasp, grasp, 0.003)
+    assert deepened[:3] == pytest.approx([0.067, 0.02, 0.04])
+    assert deepened[3:] == pytest.approx(grasp[3:])
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
