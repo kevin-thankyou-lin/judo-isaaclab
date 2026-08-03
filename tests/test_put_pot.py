@@ -18,6 +18,7 @@ from judo_isaaclab.put_pot import (
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_grasp_hold_steps,
+    geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
     geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
@@ -297,6 +298,20 @@ def test_handle_pad_balance_preserves_measured_imbalance_sign_and_cap():
     assert bounded_handle_pad_balance(0.053) == pytest.approx(0.003)
     assert bounded_handle_pad_balance(-0.026) == pytest.approx(-0.003)
     assert bounded_handle_pad_balance(0.001) == pytest.approx(0.001)
+
+
+def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
+    source = [0.0594, 0.0858, 0.0405]
+    target = [0.0666, 0.0657, 0.0171]
+    assert geometry_conditioned_handle_balance_limit(
+        source, target, 0, 0.030
+    ) == pytest.approx(0.005)
+    assert geometry_conditioned_handle_balance_limit(
+        source, target, 0, -0.038
+    ) == pytest.approx(0.003)
+    assert geometry_conditioned_handle_balance_limit(
+        source, [0.0666, 0.0657, 0.030], 0, 0.030
+    ) == pytest.approx(0.003)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

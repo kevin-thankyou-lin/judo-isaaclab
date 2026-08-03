@@ -416,11 +416,11 @@ def _build_skill(
         )
         if frame_name == f"{arm}_handle_grasp":
             from judo_isaaclab.put_pot import (
-                HANDLE_PAD_RELATIVE_DEPTH_M,
                 balance_handle_contact_across_finger_pads,
                 bounded_handle_pad_balance,
                 center_handle_between_finger_pads,
                 geometry_conditioned_handle_pad_depth,
+                geometry_conditioned_handle_balance_limit,
                 handle_finger_pad_depth_imbalance,
                 handle_jaw_center_offset_m,
                 seat_handle_inside_finger_pads,
@@ -473,9 +473,15 @@ def _build_skill(
             predicted_imbalance = handle_finger_pad_depth_imbalance(
                 surface_pose, target_initial.root_pose, handle_points
             )
+            balance_limit = geometry_conditioned_handle_balance_limit(
+                handle_size(source_parts, side),
+                handle_size(target_parts, side),
+                target_parts.handle_axis,
+                predicted_imbalance,
+            )
             relative_balance = bounded_handle_pad_balance(
                 predicted_imbalance,
-                HANDLE_PAD_RELATIVE_DEPTH_M,
+                balance_limit,
             )
             surface_pose = balance_handle_contact_across_finger_pads(
                 surface_pose, relative_balance
@@ -483,6 +489,7 @@ def _build_skill(
             grasp_geometry[arm] = {
                 "pad_depth_m": pad_depth,
                 "jaw_center_offset_m": jaw_center_offset,
+                "balance_limit_m": balance_limit,
                 "predicted_pad_imbalance_m": predicted_imbalance,
                 "relative_balance_m": relative_balance,
             }

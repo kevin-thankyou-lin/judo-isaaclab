@@ -47,6 +47,8 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 )
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
+THIN_HANDLE_BALANCE_RATIO = 0.45
+THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -464,6 +466,44 @@ def bounded_handle_pad_balance(
     return float(
         np.clip(predicted_imbalance_m, -maximum_balance_m, maximum_balance_m)
     )
+
+
+def geometry_conditioned_handle_balance_limit(
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+    predicted_imbalance_m: float,
+    *,
+    base_limit_m: float = HANDLE_PAD_RELATIVE_DEPTH_M,
+) -> float:
+    """Add measured finger-0 pivot authority only for severely thinned handles.
+
+    Pot019 attempt_004 held the opposite arm for 210 strict frames, while this
+    arm's finger 0 remained only 0.021 pad-fraction tip-side.  Its target's
+    minimum transverse/source ratio is 0.421.  Preserve the proven negative
+    pivot cap and add 2 mm only when that measured thinning coincides with a
+    positive authored finger-0-minus-finger-1 depth residual.
+    """
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if not np.isfinite(predicted_imbalance_m):
+        raise ValueError("predicted_imbalance_m must be finite")
+    if not np.isfinite(base_limit_m) or base_limit_m < 0.0:
+        raise ValueError("base_limit_m must be finite and nonnegative")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    retained_ratio = min(float(target[axis] / source[axis]) for axis in transverse)
+    extra = (
+        THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M
+        if retained_ratio < THIN_HANDLE_BALANCE_RATIO
+        and predicted_imbalance_m > 0.0
+        else 0.0
+    )
+    return float(base_limit_m + extra)
 
 
 @dataclass(frozen=True)
