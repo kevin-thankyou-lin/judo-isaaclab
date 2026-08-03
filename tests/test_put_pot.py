@@ -56,6 +56,7 @@ from judo_isaaclab.put_pot import (
     reanchor_second_handle_grasp,
     reanchor_supported_center_slide,
     seat_handle_inside_finger_pads,
+    select_geometry_conditioned_milestone_reanchor,
     single_finger_contact_observed,
     single_contact_pad_base_residual_m,
     smooth_collision_aware_bimanual_transport,
@@ -990,7 +991,7 @@ def test_milestone_reanchor_rejects_motion_beyond_authored_clearance():
         milestone_reanchor_within_authored_clearance(-0.001, 0.066)
 
 
-def test_observed_peer_milestone_cannot_bypass_authored_clearance():
+def test_nonpeer_milestone_cannot_bypass_authored_clearance():
     original = _pose(0.1, 0.2, 0.3)
     candidate = _pose(0.4, 0.5, 0.6)
     selected, accepted = geometry_gated_milestone_reanchor(
@@ -1006,6 +1007,22 @@ def test_observed_peer_milestone_cannot_bypass_authored_clearance():
     )
     assert accepted
     assert selected == pytest.approx(candidate)
+
+
+def test_geometry_conditioned_peer_milestone_preserves_centered_pose_whole():
+    original = _pose(0.1, 0.2, 0.3)
+    candidate = _pose(0.4, 0.5, 0.6)
+    candidate[3:] = [0.5, 0.5, 0.5, 0.5]
+    selected, accepted = select_geometry_conditioned_milestone_reanchor(
+        original,
+        candidate,
+        0.16975527504133892,
+        0.06798973344669754,
+        peer_contact_transfer=True,
+    )
+    assert accepted
+    assert selected == pytest.approx(candidate)
+    assert selected[3:] != pytest.approx(original[3:])
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():

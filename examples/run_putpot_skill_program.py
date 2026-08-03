@@ -1302,10 +1302,10 @@ def main() -> None:
             ):
                 from judo_isaaclab.put_pot import (
                     HANDLE_PAD_DEPTH_MARGIN_M,
-                    geometry_gated_milestone_reanchor,
                     geometry_conditioned_peer_contact_transfer,
                     mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
+                    select_geometry_conditioned_milestone_reanchor,
                 )
 
                 original_left_contact = left_handle_contact.copy()
@@ -1374,23 +1374,23 @@ def main() -> None:
                     + HANDLE_PAD_DEPTH_MARGIN_M
                 )
                 left_handle_contact, milestone_reanchor_accepted = (
-                    geometry_gated_milestone_reanchor(
+                    select_geometry_conditioned_milestone_reanchor(
                         original_left_contact,
                         candidate_left_contact,
                         milestone_translation_m,
                         handle_grasp_geometry["left"]["regrasp_clearance_m"],
+                        peer_contact_transfer=peer_contact_transfer,
                     )
                 )
                 milestone_reanchor_source = (
                     "observed_peer_contact"
-                    if peer_contact_transfer and milestone_reanchor_accepted
+                    if peer_contact_transfer
                     else (
                         "authored_open_jaw"
                         if milestone_reanchor_accepted
                         else "original_object_local_contact"
                     )
                 )
-                left_handle_contact[3:] = original_left_contact[3:]
                 applied_left_world = compose_pose(
                     sample["pot_pose"], left_handle_contact
                 )

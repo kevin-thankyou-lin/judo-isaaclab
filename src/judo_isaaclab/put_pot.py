@@ -1069,6 +1069,30 @@ def geometry_gated_milestone_reanchor(
     return (candidate if accepted else original).copy(), accepted
 
 
+def select_geometry_conditioned_milestone_reanchor(
+    original_contact: Any,
+    candidate_contact: Any,
+    candidate_translation_m: float,
+    regrasp_clearance_m: float,
+    *,
+    peer_contact_transfer: bool,
+) -> tuple[np.ndarray, bool]:
+    """Select a complete peer pose or a clearance-gated authored reanchor."""
+
+    original = _pose(original_contact, "original_contact")
+    candidate = _pose(candidate_contact, "candidate_contact")
+    if peer_contact_transfer:
+        return candidate.copy(), True
+    selected, accepted = geometry_gated_milestone_reanchor(
+        original,
+        candidate,
+        candidate_translation_m,
+        regrasp_clearance_m,
+    )
+    selected[3:] = original[3:]
+    return selected, accepted
+
+
 def reanchor_missing_finger_pad_depth(
     contact_local: Any,
     observed_root_pose: Any,
