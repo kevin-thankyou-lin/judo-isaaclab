@@ -56,6 +56,7 @@ from judo_isaaclab.put_pot import (
     support_aligned_pot_pose,
     support_boundary_staging_pose,
     track_bimanual_handle_targets,
+    track_retained_contact_from_observed_object,
     twist_jaw_away_from_limited_axis,
     transfer_handle_approach_orientation,
     transfer_handle_pose_through_contact_frames,
@@ -1344,6 +1345,48 @@ def test_transport_reanchor_repeats_only_after_measured_contact_drift():
         last_reanchor_step=step,
         tracking_tolerance_m=0.01,
     )
+
+
+def test_retained_contact_tracking_changes_only_next_left_transport_command():
+    program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1), _pose(0.1, 1.0), _pose(0.2), _pose(0.2, 1.0),
+        approach_steps=2, left_close_steps=2, right_close_steps=2,
+    )
+    program.smooth_bimanual_transport_to_center(
+        _pose(0.0, 0.0, 0.8), _pose(0.5, 0.0, 1.0),
+        _pose(0.0, 0.1), _pose(0.0, -0.1), [0.2, 0.2, 0.2],
+        RigidSupportGeometry(_pose(0.5, 0.0, 0.8), [0.4, 0.4, 0.1]),
+        steps=20, collision_clearance_m=0.025,
+    )
+    trajectory = program.build()
+    original_left = trajectory.left_poses.copy()
+    original_right = trajectory.right_poses.copy()
+    step = trajectory.waypoint_steps["right_handle_grasp"] + 3
+    observed_pot = _pose(0.03, -0.02, 0.01)
+    retained_left_contact = _pose(0.11, 0.04, 0.06)
+
+    tracked = track_retained_contact_from_observed_object(
+        trajectory, step, observed_pot, retained_left_contact
+    )
+
+    assert tracked.left_poses[step + 1] == pytest.approx(
+        compose_pose(observed_pot, retained_left_contact)
+    )
+    assert tracked.left_poses[: step + 1] == pytest.approx(
+        original_left[: step + 1]
+    )
+    assert tracked.left_poses[step + 2 :] == pytest.approx(
+        original_left[step + 2 :]
+    )
+    assert tracked.right_poses == pytest.approx(original_right)
+    with pytest.raises(ValueError, match="outside transport"):
+        track_retained_contact_from_observed_object(
+            trajectory,
+            trajectory.waypoint_steps["smooth_transport"],
+            observed_pot,
+            retained_left_contact,
+        )
 
 
 def test_support_geometry_transfers_object_relative_handle_pose_with_scale():

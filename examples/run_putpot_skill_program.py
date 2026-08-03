@@ -1164,6 +1164,7 @@ def main() -> None:
         transport_expected_left_tracking_residual_local = None
         transport_expected_right_tracking_residual_local = None
         transport_motion_preload_local_m = None
+        loaded_transport_contact_tracking = []
         center_slide_reanchor_steps = []
         center_slide_reanchor_signed_residuals_local_m = []
         center_slide_reference_right_contact_local = None
@@ -1922,6 +1923,44 @@ def main() -> None:
                                 "position_step_limit_m": transport_reanchor_position_limit_m,
                             }
                         )
+            if (
+                trajectory is not None
+                and transport_reference_left_contact_local is not None
+                and grasp_complete_step <= step
+                < trajectory.waypoint_steps["smooth_transport"]
+                and sample["right_grasp"]
+            ):
+                from judo_isaaclab.put_pot import (
+                    track_retained_contact_from_observed_object,
+                )
+
+                observed_left_contact_local = compose_pose(
+                    inverse_pose(sample["pot_pose"]),
+                    sample["left_eef_pose"],
+                )
+                next_left_target = compose_pose(
+                    sample["pot_pose"],
+                    transport_reference_left_contact_local,
+                )
+                loaded_transport_contact_tracking.append(
+                    {
+                        "step": step,
+                        "target_residual_world_m": (
+                            next_left_target[:3]
+                            - np.asarray(sample["left_eef_pose"])[:3]
+                        ).tolist(),
+                        "contact_residual_local_m": (
+                            observed_left_contact_local[:3]
+                            - transport_reference_left_contact_local[:3]
+                        ).tolist(),
+                    }
+                )
+                trajectory = track_retained_contact_from_observed_object(
+                    trajectory,
+                    step,
+                    sample["pot_pose"],
+                    transport_reference_left_contact_local,
+                )
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:
                 from judo_isaaclab.put_pot import reanchor_centered_lowering
 
@@ -2402,6 +2441,9 @@ def main() -> None:
                 },
                 "transport_motion_preload_local_m": (
                     transport_motion_preload_local_m
+                ),
+                "loaded_transport_contact_tracking": (
+                    loaded_transport_contact_tracking
                 ),
                 "center_slide_reanchor_steps": center_slide_reanchor_steps,
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,

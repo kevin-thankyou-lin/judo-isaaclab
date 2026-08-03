@@ -1644,6 +1644,45 @@ def reanchor_bimanual_transport_from_observation(
     )
 
 
+def track_retained_contact_from_observed_object(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    observed_object_pose: Any,
+    retained_contact_local: Any,
+) -> SkillTrajectory:
+    """Track one retained contact without restarting the transport path.
+
+    The opposite arm continues to execute the authored smooth transport.  Only
+    the next command for this arm is composed from the current observed object
+    pose and its retained object-local contact frame.  Recomputing this after
+    every simulator observation prevents planned-versus-observed object lag
+    from unloading a contact while preserving one continuous rollout.
+    """
+
+    transport_end = trajectory.waypoint_steps.get("smooth_transport")
+    if transport_end is None:
+        raise ValueError("trajectory is missing smooth_transport")
+    grasp_end = max(
+        trajectory.waypoint_steps.get("left_handle_grasp", -1),
+        trajectory.waypoint_steps.get("right_handle_grasp", -1),
+    )
+    step = int(current_step)
+    if step < grasp_end or step >= transport_end:
+        raise ValueError("retained contact tracking step is outside transport")
+    left = trajectory.left_poses.copy()
+    left[step + 1] = compose_pose(
+        _pose(observed_object_pose, "observed_object_pose"),
+        _pose(retained_contact_local, "retained_contact_local"),
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=trajectory.right_poses.copy(),
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 def transport_contact_reanchor_required(
     trajectory: SkillTrajectory,
     step: int,
