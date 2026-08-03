@@ -905,7 +905,7 @@ def main() -> None:
             else args.handle_pull_vertical_offset_m
         )
         handle_engagement_depth_m = (
-            0.015 if float(target_geometry.root_pose[2]) >= 1.04 else 0.0
+            -0.015 if float(target_geometry.root_pose[2]) >= 1.04 else 0.0
         )
         # Every asset uses the measured handle frame and joint axis.  The old
         # source-nominal-only pull left all 21 original semantic failures below
