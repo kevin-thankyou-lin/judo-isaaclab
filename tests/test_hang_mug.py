@@ -22,6 +22,7 @@ from run_hangmug_skill_program import (
     _add_right_handover_assist,
     _install_grasp_assist_config,
     _requires_observed_handover_reanchor,
+    _sparse_joint_nominal,
     _schema_aware_success_acceptance,
     _select_grasp_assist_config,
     _update_authored_assist_releases,
@@ -463,3 +464,35 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     assert adjusted.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
         np.repeat(corrected[None], grasp_end - settle_end, axis=0)
     )
+
+    class FakeActions:
+        def __init__(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def __array__(self, dtype=None):
+            return np.asarray(self.value, dtype=dtype)
+
+    source = {"actions": FakeActions(np.arange(20 * 14).reshape(20, 14))}
+    indices = {
+        "left_pregrasp": 1,
+        "left_grasp": 2,
+        "left_lift": 3,
+        "right_pregrasp": 4,
+        "dual_grasp": 5,
+        "handover": 6,
+        "tree_approach": 7,
+        "inserted_held": 8,
+        "release": 9,
+        "stable_settle": 10,
+    }
+    nominal = _sparse_joint_nominal(
+        source, trajectory, {"semantic_indices": indices}
+    )
+    assert nominal.shape == (trajectory.steps, 14)
+    assert nominal[settle_end] == pytest.approx(source["actions"].value[5])

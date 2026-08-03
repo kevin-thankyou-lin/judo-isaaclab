@@ -634,6 +634,7 @@ def _sparse_joint_nominal(source, trajectory, keyframes):
         "left_grasp": indices["left_grasp"],
         "left_lift": indices["left_lift"],
         "handover_pregrasp": indices["right_pregrasp"],
+        "right_grasp_settle": indices["dual_grasp"],
         "right_grasp": indices["dual_grasp"],
         "left_release": indices["handover"],
         "tree_transport": indices["tree_approach"],
