@@ -1186,3 +1186,14 @@ def test_supported_center_slide_releases_left_before_exact_center_motion():
     assert reanchored.right_poses[slide_end, :2] == pytest.approx(
         [0.75, 0.6]
     )
+    late = reanchor_supported_center_slide(
+        reanchored,
+        _pose(0.65, 0.0, 0.1),
+        _pose(0.7, -0.2, 0.1),
+        _pose(0.70, 0.8, 0.2),
+        current_step=slide_end - 2,
+    )
+    assert late.right_poses[slide_end, :2] == pytest.approx([0.75, 0.6])
+    assert late.right_poses[slide_end - 1, :2] != pytest.approx(
+        reanchored.right_poses[slide_end - 1, :2]
+    )

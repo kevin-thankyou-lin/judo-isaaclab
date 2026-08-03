@@ -1582,6 +1582,8 @@ def reanchor_supported_center_slide(
     observed_pot_pose: Any,
     observed_cooktop_pose: Any,
     observed_right_pose: Any,
+    *,
+    current_step: int | None = None,
 ) -> SkillTrajectory:
     """Preserve observed right contact while sliding the supported pot to center."""
     steps = trajectory.waypoint_steps
@@ -1596,8 +1598,14 @@ def reanchor_supported_center_slide(
     centered_pot_pose = pot_pose.copy()
     centered_pot_pose[:2] = cooktop_pose[:2]
     right_center = compose_pose(centered_pot_pose, right_contact)
-    start = steps["left_unload_release"] + 1
+    start = (
+        steps["left_unload_release"] + 1
+        if current_step is None
+        else int(current_step) + 1
+    )
     slide_end = steps["center_slide"]
+    if start > slide_end:
+        raise ValueError("current_step is outside the supported center slide")
     release_end = steps["pot_release"]
     withdraw_end = steps["bimanual_withdraw"]
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
