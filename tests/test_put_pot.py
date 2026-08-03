@@ -510,6 +510,12 @@ def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
     assert feedback[CONTACT_FEEDBACK_HORIZON_STEPS - 1, 0] == pytest.approx(0.06)
     assert feedback[-1, 0] == pytest.approx(0.06)
 
+    measured = _linear_contact_feedback_poses(
+        _pose(), _pose(x=0.063), 30, horizon_steps=3
+    )
+    assert measured[0, 0] == pytest.approx(0.021)
+    assert measured[2, 0] == pytest.approx(0.063)
+
 
 def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
     pot_size = np.asarray([0.30, 0.28, 0.20])

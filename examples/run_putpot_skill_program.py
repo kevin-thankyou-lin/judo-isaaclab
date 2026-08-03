@@ -1003,6 +1003,7 @@ def main() -> None:
             and handle_grasp_geometry["left"].get("right_first_close", False)
         )
         milestone_jaw_center_residual_m = None
+        milestone_feedback_horizon_steps = None
         target_left_handle_points = None
         if right_first_close:
             side = int(handle_grasp_geometry["left"]["handle_side"])
@@ -1115,6 +1116,15 @@ def main() -> None:
                         target_left_handle_points,
                     )
                 )
+                milestone_feedback_horizon_steps = max(
+                    1,
+                    int(
+                        np.ceil(
+                            abs(milestone_jaw_center_residual_m)
+                            / args.max_position_step
+                        )
+                    ),
+                )
                 missing_finger_corrections["left"] = 0.0
                 missing_finger_depth_corrections["left"] = 0.0
                 missing_finger_streaks["left"] = 0
@@ -1123,6 +1133,7 @@ def main() -> None:
                 and pregrasp_complete_step <= step < grasp_complete_step
             ):
                 from judo_isaaclab.put_pot import (
+                    CONTACT_FEEDBACK_HORIZON_STEPS,
                     MISSING_FINGER_CONTACT_DELAY_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
@@ -1188,6 +1199,11 @@ def main() -> None:
                     left_contact_latched=bool(sample["left_grasp"]),
                     right_contact_latched=bool(sample["right_grasp"]),
                     right_first_close=right_first_close,
+                    feedback_horizon_steps=(
+                        milestone_feedback_horizon_steps
+                        if milestone_feedback_horizon_steps is not None
+                        else CONTACT_FEEDBACK_HORIZON_STEPS
+                    ),
                 )
             if (
                 trajectory is not None
@@ -1545,6 +1561,9 @@ def main() -> None:
                 "steps": len(actions),
                 "seed": args.seed,
                 "grasp_assistance": "none",
+                "milestone_feedback_horizon_steps": (
+                    milestone_feedback_horizon_steps
+                ),
                 "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {

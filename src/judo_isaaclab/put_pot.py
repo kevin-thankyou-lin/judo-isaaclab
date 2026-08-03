@@ -78,7 +78,13 @@ MISSING_FINGER_CONTACT_SETTLE_STEPS = (
 )
 
 
-def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
+def _linear_contact_feedback_poses(
+    start: Any,
+    target: Any,
+    steps: int,
+    *,
+    horizon_steps: int = CONTACT_FEEDBACK_HORIZON_STEPS,
+) -> np.ndarray:
     """Close a measured contact residual over a fixed feedback horizon.
 
     Contact feedback is recomputed every controller step.  A quintic profile
@@ -89,9 +95,11 @@ def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.nd
 
     if steps < 1:
         raise ValueError("contact feedback steps must be positive")
+    if horizon_steps < 1:
+        raise ValueError("contact feedback horizon must be positive")
     start_pose = _pose(start, "start")
     target_pose = _pose(target, "target")
-    horizon = min(CONTACT_FEEDBACK_HORIZON_STEPS, steps)
+    horizon = min(horizon_steps, steps)
     fraction = np.linspace(1.0 / horizon, 1.0, horizon)
     prefix = np.empty((horizon, 7), dtype=np.float64)
     prefix[:, :3] = (
@@ -1018,6 +1026,7 @@ def track_bimanual_handle_targets(
     left_contact_latched: bool = False,
     right_contact_latched: bool = False,
     right_first_close: bool = False,
+    feedback_horizon_steps: int = CONTACT_FEEDBACK_HORIZON_STEPS,
 ) -> SkillTrajectory:
     """Track both fixed local handle contacts during simultaneous closing.
 
@@ -1043,7 +1052,10 @@ def track_bimanual_handle_targets(
         right_target = compose_pose(observed_pot_pose, right_contact_local)
         right_remaining = right_end - current_step
         right[start : right_end + 1] = _linear_contact_feedback_poses(
-            observed_right_pose, right_target, right_remaining
+            observed_right_pose,
+            right_target,
+            right_remaining,
+            horizon_steps=feedback_horizon_steps,
         )
         right[right_end + 1 : grasp_end + 1] = right_target
         # Keep the left arm at its authored pregrasp until the proven right
@@ -1062,14 +1074,20 @@ def track_bimanual_handle_targets(
             _pose(observed_left_pose, "observed_left_pose")
             if left_contact_latched
             else _linear_contact_feedback_poses(
-                observed_left_pose, left_target, remaining
+                observed_left_pose,
+                left_target,
+                remaining,
+                horizon_steps=feedback_horizon_steps,
             )
         )
         right[start : grasp_end + 1] = (
             _pose(observed_right_pose, "observed_right_pose")
             if right_contact_latched
             else _linear_contact_feedback_poses(
-                observed_right_pose, right_target, remaining
+                observed_right_pose,
+                right_target,
+                remaining,
+                horizon_steps=feedback_horizon_steps,
             )
         )
     return SkillTrajectory(
