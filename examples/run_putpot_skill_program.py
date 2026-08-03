@@ -1302,8 +1302,8 @@ def main() -> None:
             ):
                 from judo_isaaclab.put_pot import (
                     HANDLE_PAD_DEPTH_MARGIN_M,
+                    geometry_gated_milestone_reanchor,
                     geometry_conditioned_peer_contact_transfer,
-                    milestone_reanchor_within_authored_clearance,
                     mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
                 )
@@ -1355,8 +1355,6 @@ def main() -> None:
                             - np.asarray(sample["left_eef_pose"])[:3]
                         )
                     )
-                    milestone_reanchor_accepted = True
-                    milestone_reanchor_source = "observed_peer_contact"
                 else:
                     (
                         candidate_left_contact,
@@ -1375,22 +1373,22 @@ def main() -> None:
                     handle_grasp_geometry["left"]["regrasp_clearance_m"]
                     + HANDLE_PAD_DEPTH_MARGIN_M
                 )
-                if not peer_contact_transfer:
-                    milestone_reanchor_accepted = (
-                        milestone_reanchor_within_authored_clearance(
-                            milestone_translation_m,
-                            handle_grasp_geometry["left"]["regrasp_clearance_m"],
-                        )
+                left_handle_contact, milestone_reanchor_accepted = (
+                    geometry_gated_milestone_reanchor(
+                        original_left_contact,
+                        candidate_left_contact,
+                        milestone_translation_m,
+                        handle_grasp_geometry["left"]["regrasp_clearance_m"],
                     )
-                    milestone_reanchor_source = (
+                )
+                milestone_reanchor_source = (
+                    "observed_peer_contact"
+                    if peer_contact_transfer and milestone_reanchor_accepted
+                    else (
                         "authored_open_jaw"
                         if milestone_reanchor_accepted
                         else "original_object_local_contact"
                     )
-                left_handle_contact = (
-                    candidate_left_contact
-                    if milestone_reanchor_accepted
-                    else original_left_contact
                 )
                 left_handle_contact[3:] = original_left_contact[3:]
                 applied_left_world = compose_pose(

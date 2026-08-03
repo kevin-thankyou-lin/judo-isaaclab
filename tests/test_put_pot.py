@@ -24,6 +24,7 @@ from judo_isaaclab.put_pot import (
     expand_handle_pregrasp_clearance,
     geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_loaded_jaw_rotation_fraction,
+    geometry_gated_milestone_reanchor,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
     geometry_conditioned_peer_contact_transfer,
@@ -987,6 +988,24 @@ def test_milestone_reanchor_rejects_motion_beyond_authored_clearance():
     assert not milestone_reanchor_within_authored_clearance(0.1765, 0.0666)
     with pytest.raises(ValueError):
         milestone_reanchor_within_authored_clearance(-0.001, 0.066)
+
+
+def test_observed_peer_milestone_cannot_bypass_authored_clearance():
+    original = _pose(0.1, 0.2, 0.3)
+    candidate = _pose(0.4, 0.5, 0.6)
+    selected, accepted = geometry_gated_milestone_reanchor(
+        original,
+        candidate,
+        0.16975527504133892,
+        0.06798973344669754,
+    )
+    assert not accepted
+    assert selected == pytest.approx(original)
+    selected, accepted = geometry_gated_milestone_reanchor(
+        original, candidate, 0.080, 0.06798973344669754
+    )
+    assert accepted
+    assert selected == pytest.approx(candidate)
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():

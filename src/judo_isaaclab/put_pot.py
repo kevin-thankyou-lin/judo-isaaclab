@@ -1052,6 +1052,23 @@ def milestone_reanchor_within_authored_clearance(
     )
 
 
+def geometry_gated_milestone_reanchor(
+    original_contact: Any,
+    candidate_contact: Any,
+    candidate_translation_m: float,
+    regrasp_clearance_m: float,
+) -> tuple[np.ndarray, bool]:
+    """Accept any observed milestone reanchor only within authored clearance."""
+
+    original = _pose(original_contact, "original_contact")
+    candidate = _pose(candidate_contact, "candidate_contact")
+    accepted = milestone_reanchor_within_authored_clearance(
+        candidate_translation_m,
+        regrasp_clearance_m,
+    )
+    return (candidate if accepted else original).copy(), accepted
+
+
 def reanchor_missing_finger_pad_depth(
     contact_local: Any,
     observed_root_pose: Any,
