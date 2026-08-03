@@ -25,6 +25,7 @@ from .put_marker import (
 
 
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
+TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,9 @@ def smooth_collision_aware_bimanual_transport(
         fall_steps = steps - last - 1
         if fall_steps:
             lift_profile[last + 1 :] = 1.0 - _minimum_jerk_fraction(fall_steps)
-        pot_poses[:, 2] += float(np.max(required_lift)) * lift_profile
+        pot_poses[:, 2] += (
+            float(np.max(required_lift)) + TRANSPORT_PLANNING_MARGIN_M
+        ) * lift_profile
     minimum_clearance = minimum_cooktop_clearance_m(pot_poses, size, cooktop)
     if minimum_clearance + 1.0e-9 < collision_clearance_m:
         raise AssertionError("constructed transport violates cooktop clearance")
@@ -288,7 +291,10 @@ def reanchor_bimanual_transport_from_observation(
     left_contact = compose_pose(inverse_pose(pot_pose), left_pose)
     right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
     transport_target = final_pose.copy()
-    transport_target[2] += float(transport_clearance_m)
+    transport_target[2] += (
+        max(float(transport_clearance_m), float(collision_clearance_m))
+        + TRANSPORT_PLANNING_MARGIN_M
+    )
     start = steps["right_handle_grasp"] + 1
     transport_end = steps["smooth_transport"]
     transport = smooth_collision_aware_bimanual_transport(

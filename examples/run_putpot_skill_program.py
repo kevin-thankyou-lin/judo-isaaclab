@@ -290,7 +290,12 @@ def _build_skill(
     args,
 ):
     from judo_isaaclab.put_marker import compose_pose, inverse_pose, transfer_pose
-    from judo_isaaclab.put_pot import PutPotSkillProgram, RigidSupportGeometry, support_aligned_pot_pose
+    from judo_isaaclab.put_pot import (
+        TRANSPORT_PLANNING_MARGIN_M,
+        PutPotSkillProgram,
+        RigidSupportGeometry,
+        support_aligned_pot_pose,
+    )
     from judo_isaaclab.semantic_parts import bimanual_handle_sides
 
     frames = keyframes["frames"]
@@ -344,7 +349,10 @@ def _build_skill(
         clearance_m=args.support_clearance_m,
     )
     transport_target = final_pot_pose.copy()
-    transport_target[2] += args.transport_clearance_m
+    transport_target[2] += (
+        max(args.transport_clearance_m, args.collision_clearance_m)
+        + TRANSPORT_PLANNING_MARGIN_M
+    )
 
     def held(pot_pose, local):
         return compose_pose(pot_pose, local)
@@ -367,7 +375,7 @@ def _build_skill(
         right_grasp,
         approach_steps=110,
         left_close_steps=45,
-        right_close_steps=45,
+        right_close_steps=90,
     )
     transport = program.smooth_bimanual_transport_to_center(
         target_initial.root_pose,
