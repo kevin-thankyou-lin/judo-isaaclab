@@ -87,9 +87,10 @@ def test_target_handle_grasp_index_comes_from_lower_drawer_motion():
 def test_spawn_lift_repairs_only_actual_table_penetration():
     module = _module()
 
+    assert module.CABINET_TABLE_COLLISION_CLEARANCE_M == pytest.approx(0.002)
     assert module._collision_clear_spawn_lift_m(
         1.0048369169, -0.2557240054, 0.7517
-    ) == pytest.approx(0.0035870885)
+    ) == pytest.approx(0.0045870885)
     assert module._collision_clear_spawn_lift_m(1.015924, -0.2557240054, 0.7517) == 0.0
 
 

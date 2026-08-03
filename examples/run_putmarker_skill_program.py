@@ -44,6 +44,9 @@ SEMANTIC_INDICES = {
 TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
 TARGET_HANDLE_PULL_LIFT_M = 0.050
 TARGET_HANDLE_GRIPPER_CLOSED_POSITION = -0.020
+# Keep collision-limited lower-drawer geometry outside both the authored table
+# surface and the millimetre-scale contact skin used by CPU PhysX.
+CABINET_TABLE_COLLISION_CLEARANCE_M = 0.002
 
 
 def _parser() -> argparse.Namespace:
@@ -254,7 +257,7 @@ def _collision_clear_spawn_lift_m(
     link_min_local_z_m: float,
     table_surface_z_m: float,
     *,
-    clearance_m: float = 0.001,
+    clearance_m: float = CABINET_TABLE_COLLISION_CLEARANCE_M,
 ) -> float:
     return max(
         0.0,
@@ -1463,7 +1466,7 @@ def main() -> None:
                         "link": "link_2" if low_handle_target else None,
                         "link_min_local_z_m": link_min_local_z_m,
                         "table_surface_z_m": table_surface_z_m,
-                        "required_clearance_m": 0.001,
+                        "required_clearance_m": CABINET_TABLE_COLLISION_CLEARANCE_M,
                         "application": "single_reset_initial_state",
                         "target_semantic_frame_adjustment_m": cabinet_spawn_lift_m,
                     },
