@@ -42,7 +42,7 @@ SEMANTIC_INDICES = {
 # farther-inboard assets retain the collision-free workspace posture while the
 # pull direction still comes from the target drawer's measured slide axis.
 LOW_HANDLE_MAX_WRIST_Y_M = -0.1477
-LOW_HANDLE_MIN_WRIST_Z_M = 0.8990
+LOW_HANDLE_MIN_WRIST_Z_M = 0.8920
 
 
 def _parser() -> argparse.Namespace:
