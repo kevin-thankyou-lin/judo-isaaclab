@@ -14,11 +14,14 @@ from judo_isaaclab.put_pot import (
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
+    center_handle_between_finger_pads,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
+    geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_handle_pad_depth,
     geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
+    handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
@@ -205,6 +208,33 @@ def test_handle_pad_depth_adds_measured_transverse_cross_section_loss():
     assert geometry_conditioned_handle_pad_depth(
         [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0, [0.0, 0.8, 0.6]
     ) == pytest.approx(HANDLE_PAD_DEPTH_MARGIN_M)
+
+
+def test_thin_handle_scales_contact_stabilization_duration():
+    assert geometry_conditioned_grasp_hold_steps(
+        30, [0.06, 0.08, 0.04], [0.07, 0.06, 0.016], 0
+    ) == 75
+    assert geometry_conditioned_grasp_hold_steps(
+        30, [0.06, 0.08, 0.04], [0.07, 0.09, 0.05], 0
+    ) == 30
+
+
+def test_authored_handle_span_is_centered_along_measured_jaw_axis():
+    grasp = _pose()
+    points = np.asarray(
+        [
+            [-0.050, 0.010, 0.050],
+            [-0.040, 0.010, 0.060],
+            [0.010, -0.010, 0.050],
+            [0.020, -0.010, 0.060],
+        ]
+    )
+    offset = handle_jaw_center_offset_m(grasp, _pose(), points)
+    centered = center_handle_between_finger_pads(grasp, offset)
+    assert offset < 0.0
+    assert handle_jaw_center_offset_m(centered, _pose(), points) == pytest.approx(
+        0.0, abs=1.0e-9
+    )
 
 
 def test_transport_duration_scales_with_measured_handle_cross_section():

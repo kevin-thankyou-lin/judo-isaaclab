@@ -419,12 +419,38 @@ def _build_skill(
                 HANDLE_PAD_RELATIVE_DEPTH_M,
                 balance_handle_contact_across_finger_pads,
                 bounded_handle_pad_balance,
+                center_handle_between_finger_pads,
                 geometry_conditioned_handle_pad_depth,
                 handle_finger_pad_depth_imbalance,
+                handle_jaw_center_offset_m,
                 seat_handle_inside_finger_pads,
             )
             from judo_isaaclab.put_marker import quaternion_rotate
 
+            boundary = (
+                target_parts.body_xy_min[target_parts.handle_axis]
+                if side < 0
+                else target_parts.body_xy_max[target_parts.handle_axis]
+            )
+            handle_points = np.concatenate(
+                [
+                    points
+                    for points in target_components
+                    if (
+                        np.min(points[:, target_parts.handle_axis])
+                        < boundary - 1.0e-4
+                        if side < 0
+                        else np.max(points[:, target_parts.handle_axis])
+                        > boundary + 1.0e-4
+                    )
+                ]
+            )
+            jaw_center_offset = handle_jaw_center_offset_m(
+                surface_pose, target_initial.root_pose, handle_points
+            )
+            surface_pose = center_handle_between_finger_pads(
+                surface_pose, jaw_center_offset
+            )
             target_handle_world = compose_pose(
                 target_initial.root_pose, handle(target_parts, side)
             )
@@ -444,24 +470,6 @@ def _build_skill(
             surface_pose = seat_handle_inside_finger_pads(
                 surface_pose, pad_depth
             )
-            boundary = (
-                target_parts.body_xy_min[target_parts.handle_axis]
-                if side < 0
-                else target_parts.body_xy_max[target_parts.handle_axis]
-            )
-            handle_points = np.concatenate(
-                [
-                    points
-                    for points in target_components
-                    if (
-                        np.min(points[:, target_parts.handle_axis])
-                        < boundary - 1.0e-4
-                        if side < 0
-                        else np.max(points[:, target_parts.handle_axis])
-                        > boundary + 1.0e-4
-                    )
-                ]
-            )
             predicted_imbalance = handle_finger_pad_depth_imbalance(
                 surface_pose, target_initial.root_pose, handle_points
             )
@@ -474,6 +482,7 @@ def _build_skill(
             )
             grasp_geometry[arm] = {
                 "pad_depth_m": pad_depth,
+                "jaw_center_offset_m": jaw_center_offset,
                 "predicted_pad_imbalance_m": predicted_imbalance,
                 "relative_balance_m": relative_balance,
             }
@@ -529,7 +538,22 @@ def _build_skill(
     left_withdraw[1] += 0.08
     right_withdraw[1] -= 0.08
 
-    from judo_isaaclab.put_pot import geometry_conditioned_transport_steps
+    from judo_isaaclab.put_pot import (
+        geometry_conditioned_grasp_hold_steps,
+        geometry_conditioned_transport_steps,
+    )
+
+    grasp_hold_steps = max(
+        geometry_conditioned_grasp_hold_steps(
+            30,
+            handle_size(source_parts, side),
+            handle_size(target_parts, side),
+            target_parts.handle_axis,
+        )
+        for side in (left_side, right_side)
+    )
+    for geometry in grasp_geometry.values():
+        geometry["grasp_hold_steps"] = grasp_hold_steps
 
     transport_steps = max(
         geometry_conditioned_transport_steps(
@@ -549,7 +573,7 @@ def _build_skill(
         right_grasp,
         approach_steps=110,
         left_close_steps=60,
-        right_close_steps=30,
+        right_close_steps=grasp_hold_steps,
         simultaneous=True,
     )
     transport = program.smooth_bimanual_transport_to_center(

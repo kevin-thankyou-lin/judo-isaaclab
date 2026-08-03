@@ -46,6 +46,7 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
     YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_FINGER_SEPARATION_LOCAL_M
 )
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
+HANDLE_JAW_CENTERING_LIMIT_M = 0.040
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -265,6 +266,89 @@ def geometry_conditioned_transport_steps(
         1.0, max(float(target[axis] / source[axis]) for axis in transverse)
     )
     return int(np.ceil(base_steps / retained_ratio))
+
+
+def geometry_conditioned_grasp_hold_steps(
+    base_steps: int,
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+) -> int:
+    """Give thinner measured handle cross-sections longer to form both contacts."""
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if base_steps < 1:
+        raise ValueError("base_steps must be positive")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    retained_ratio = min(
+        1.0, min(float(target[axis] / source[axis]) for axis in transverse)
+    )
+    return int(np.ceil(base_steps / retained_ratio))
+
+
+def handle_jaw_center_offset_m(
+    grasp_pose: Any,
+    pot_root_pose: Any,
+    handle_points_local: Any,
+) -> float:
+    """Measure the authored handle-span midpoint along the YAM jaw axis."""
+
+    grasp = _pose(grasp_pose, "grasp_pose")
+    root = _pose(pot_root_pose, "pot_root_pose")
+    points = np.asarray(handle_points_local, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
+        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("handle_points_local must be finite")
+    inverse_grasp = inverse_pose(grasp)
+    points_in_gripper = np.stack(
+        [
+            quaternion_rotate(
+                inverse_grasp[3:],
+                compose_pose(root, [*point, 1.0, 0.0, 0.0, 0.0])[:3]
+                - grasp[:3],
+            )
+            for point in points
+        ]
+    )
+    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_axis[2] = 0.0
+    jaw_axis /= np.linalg.norm(jaw_axis)
+    projections = points_in_gripper @ jaw_axis
+    finger_center = 0.5 * (
+        YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
+    return float(
+        0.5 * (np.min(projections) + np.max(projections))
+        - np.dot(finger_center, jaw_axis)
+    )
+
+
+def center_handle_between_finger_pads(
+    grasp_pose: Any,
+    offset_m: float,
+    *,
+    maximum_correction_m: float = HANDLE_JAW_CENTERING_LIMIT_M,
+) -> np.ndarray:
+    """Translate the wrist so the measured handle span is centered in its jaw."""
+
+    grasp = _pose(grasp_pose, "grasp_pose")
+    if not np.isfinite(offset_m):
+        raise ValueError("offset_m must be finite")
+    if not np.isfinite(maximum_correction_m) or maximum_correction_m < 0.0:
+        raise ValueError("maximum_correction_m must be finite and nonnegative")
+    correction = float(np.clip(offset_m, -maximum_correction_m, maximum_correction_m))
+    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_axis[2] = 0.0
+    jaw_axis /= np.linalg.norm(jaw_axis)
+    result = grasp.copy()
+    result[:3] += correction * quaternion_rotate(result[3:], jaw_axis)
+    return result
 
 
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
