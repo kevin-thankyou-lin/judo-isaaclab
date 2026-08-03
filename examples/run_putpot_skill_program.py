@@ -348,7 +348,12 @@ def _build_skill(
     right_start,
     args,
 ):
-    from judo_isaaclab.put_marker import compose_pose, inverse_pose, transfer_pose
+    from judo_isaaclab.put_marker import (
+        compose_pose,
+        inverse_pose,
+        quaternion_rotate,
+        transfer_pose,
+    )
     from judo_isaaclab.put_pot import (
         TRANSPORT_PLANNING_MARGIN_M,
         PutPotSkillProgram,
@@ -650,6 +655,31 @@ def _build_skill(
         grasp_geometry["left"]["predicted_pad_imbalance_m"],
     )
     grasp_geometry["left"]["right_first_close"] = right_first_close
+    if right_first_close:
+        approach = left_pregrasp[:3] - left_grasp[:3]
+        approach_norm = float(np.linalg.norm(approach))
+        if approach_norm <= 1.0e-9:
+            raise ValueError("left pregrasp and grasp positions must be distinct")
+        transverse = [
+            axis for axis in range(3) if axis != target_parts.handle_axis
+        ]
+        regrasp_clearance = (
+            0.5
+            * max(
+                float(handle_size(target_parts, left_side)[axis])
+                for axis in transverse
+            )
+            + args.collision_clearance_m
+        )
+        left_pregrasp[:3] += regrasp_clearance * approach / approach_norm
+        approach_world = left_grasp[:3] - left_pregrasp[:3]
+        approach_local = quaternion_rotate(
+            inverse_pose(target_initial.root_pose)[3:], approach_world
+        )
+        grasp_geometry["left"]["regrasp_clearance_m"] = regrasp_clearance
+        grasp_geometry["left"]["regrasp_approach_local_m"] = (
+            approach_local.tolist()
+        )
 
     grasp_hold_steps = max(
         geometry_conditioned_grasp_hold_steps(
@@ -1003,6 +1033,7 @@ def main() -> None:
             and handle_grasp_geometry["left"].get("right_first_close", False)
         )
         milestone_jaw_center_residual_m = None
+        milestone_translation_m = None
         milestone_feedback_horizon_steps = None
         target_left_handle_points = None
         if right_first_close:
@@ -1108,19 +1139,26 @@ def main() -> None:
                     reanchor_authored_handle_in_observed_jaw,
                 )
 
-                left_handle_contact, milestone_jaw_center_residual_m = (
-                    reanchor_authored_handle_in_observed_jaw(
-                        sample["pot_pose"],
-                        sample["left_eef_pose"],
-                        sample["left_pad_centers_world"],
-                        target_left_handle_points,
-                    )
+                original_left_contact = left_handle_contact.copy()
+                (
+                    left_handle_contact,
+                    milestone_jaw_center_residual_m,
+                    milestone_translation_m,
+                ) = reanchor_authored_handle_in_observed_jaw(
+                    sample["pot_pose"],
+                    sample["left_eef_pose"],
+                    sample["left_pad_centers_world"],
+                    target_left_handle_points,
+                    handle_grasp_geometry["left"][
+                        "regrasp_approach_local_m"
+                    ],
                 )
+                left_handle_contact[3:] = original_left_contact[3:]
                 milestone_feedback_horizon_steps = max(
                     1,
                     int(
                         np.ceil(
-                            abs(milestone_jaw_center_residual_m)
+                            milestone_translation_m
                             / args.max_position_step
                         )
                     ),
@@ -1564,6 +1602,7 @@ def main() -> None:
                 "milestone_feedback_horizon_steps": (
                     milestone_feedback_horizon_steps
                 ),
+                "milestone_translation_m": milestone_translation_m,
                 "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None and direct_replay is not None), "supported_center_slide": repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {

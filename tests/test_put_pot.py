@@ -467,14 +467,16 @@ def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():
             [0.040, 0.010, 0.0],
         ]
     )
-    local, residual = reanchor_authored_handle_in_observed_jaw(
+    local, residual, translation = reanchor_authored_handle_in_observed_jaw(
         _pose(),
         _pose(y=0.2),
         [[-0.050, 0.0, 0.0], [0.050, 0.0, 0.0]],
         points,
+        [0.0, 0.0, -0.040],
     )
     assert residual == pytest.approx(0.030)
-    assert local[:3] == pytest.approx([0.030, 0.2, 0.0])
+    assert translation == pytest.approx(0.050)
+    assert local[:3] == pytest.approx([0.030, 0.2, -0.040])
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():

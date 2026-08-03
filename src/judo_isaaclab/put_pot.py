@@ -517,7 +517,8 @@ def reanchor_authored_handle_in_observed_jaw(
     observed_eef_pose: Any,
     finger_pad_centers_world: Any,
     handle_points_local: Any,
-) -> tuple[np.ndarray, float]:
+    approach_delta_local: Any,
+) -> tuple[np.ndarray, float, float]:
     """Center authored handle points in the observed open jaw at a milestone.
 
     The result is a new object-local contact frame, not a world-space teleport.
@@ -529,12 +530,15 @@ def reanchor_authored_handle_in_observed_jaw(
     eef = _pose(observed_eef_pose, "observed_eef_pose")
     centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
     points = np.asarray(handle_points_local, dtype=np.float64)
+    approach = np.asarray(approach_delta_local, dtype=np.float64)
     if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
         raise ValueError("finger_pad_centers_world must contain two finite points")
     if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
         raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
     if not np.all(np.isfinite(points)):
         raise ValueError("handle_points_local must be finite")
+    if approach.shape != (3,) or not np.all(np.isfinite(approach)):
+        raise ValueError("approach_delta_local must contain three finite values")
     jaw_axis = centers[1] - centers[0]
     jaw_norm = float(np.linalg.norm(jaw_axis))
     if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
@@ -547,8 +551,15 @@ def reanchor_authored_handle_in_observed_jaw(
     projection = (points_world - jaw_midpoint) @ jaw_axis
     signed_residual = 0.5 * (float(np.min(projection)) + float(np.max(projection)))
     target = eef.copy()
-    target[:3] += signed_residual * jaw_axis
-    return compose_pose(inverse_pose(root), target), signed_residual
+    translation = signed_residual * jaw_axis + quaternion_rotate(
+        root[3:], approach
+    )
+    target[:3] += translation
+    return (
+        compose_pose(inverse_pose(root), target),
+        signed_residual,
+        float(np.linalg.norm(translation)),
+    )
 
 
 def reanchor_missing_finger_pad_depth(
