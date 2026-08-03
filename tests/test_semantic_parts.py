@@ -4,7 +4,6 @@ from judo_isaaclab.semantic_parts import (
     bimanual_handle_sides,
     closest_branch,
     corresponding_branch,
-    geometry_conditioned_handle_tangent_neighbors,
     infer_mug_parts,
     infer_open_drawer_cavity,
     infer_pot_handle_contact_frame,
@@ -122,17 +121,6 @@ def test_pot_handle_contact_frame_uses_local_tangent_on_curved_component():
     inferred_tangent = quaternion_rotate(frame[3:], [1.0, 0.0, 0.0])
     assert inferred_tangent[2] > 0.9
     assert abs(inferred_tangent[0]) < 0.35
-
-
-def test_handle_tangent_neighborhood_scales_with_measured_cross_section():
-    assert geometry_conditioned_handle_tangent_neighbors(
-        [0.0594, 0.0858, 0.0405],
-        [0.0687, 0.0589, 0.0272],
-        0,
-    ) == 23
-    assert geometry_conditioned_handle_tangent_neighbors(
-        [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0
-    ) == 32
 
 
 def test_infer_mug_parts_separates_body_footprint_and_handle_hole():

@@ -376,10 +376,7 @@ def _build_skill(
         frame_name = f"{arm}_handle_grasp"
         frame = frames[frame_name]
         grasp_surface = transfer_surface(frame_name, arm)
-        from judo_isaaclab.semantic_parts import (
-            geometry_conditioned_handle_tangent_neighbors,
-            infer_pot_handle_contact_frame,
-        )
+        from judo_isaaclab.semantic_parts import infer_pot_handle_contact_frame
 
         source_reference = compose_pose(
             inverse_pose(frame["pot_pose"]), frame[f"{arm}_eef_pose"]
@@ -392,15 +389,7 @@ def _build_skill(
                 source_components, source_parts, side, source_reference[:3]
             ),
             infer_pot_handle_contact_frame(
-                target_components,
-                target_parts,
-                side,
-                target_reference[:3],
-                neighbor_count=geometry_conditioned_handle_tangent_neighbors(
-                    handle_size(source_parts, side),
-                    handle_size(target_parts, side),
-                    target_parts.handle_axis,
-                ),
+                target_components, target_parts, side, target_reference[:3]
             ),
         )
         return contact_frames[arm]
