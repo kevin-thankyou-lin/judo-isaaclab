@@ -1125,6 +1125,7 @@ def main() -> None:
         peer_single_contact_latch_step = None
         peer_single_contact_latch_support_frames = None
         peer_single_contact_latch_local_m = None
+        peer_single_contact_tracking_residual_world_m = None
         contact_hold_latch_step = None
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
@@ -1389,6 +1390,7 @@ def main() -> None:
                     SINGLE_FINGER_CONTACT_LATCH_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
+                    preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
                 )
@@ -1413,13 +1415,23 @@ def main() -> None:
                     and peer_supported_contact_streak
                     >= SINGLE_FINGER_CONTACT_LATCH_STEPS
                 ):
+                    loaded_left_world, retained_residual = (
+                        preserve_loaded_contact_target(
+                            sample["left_eef_pose"],
+                            trajectory.left_poses[step],
+                            maximum_position_residual_m=args.max_position_step,
+                        )
+                    )
                     left_handle_contact = compose_pose(
                         inverse_pose(sample["pot_pose"]),
-                        sample["left_eef_pose"],
+                        loaded_left_world,
                     )
                     peer_single_contact_latch_step = step
                     peer_single_contact_latch_local_m = (
                         left_handle_contact[:3].tolist()
+                    )
+                    peer_single_contact_tracking_residual_world_m = (
+                        retained_residual.tolist()
                     )
 
                 for arm in ("left", "right"):
@@ -2080,6 +2092,9 @@ def main() -> None:
                 ),
                 "peer_single_contact_latch_local_m": (
                     peer_single_contact_latch_local_m
+                ),
+                "peer_single_contact_tracking_residual_world_m": (
+                    peer_single_contact_tracking_residual_world_m
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
                 "contact_hold_retention_local_m": (

@@ -33,6 +33,7 @@ from judo_isaaclab.put_pot import (
     maximum_bimanual_position_step_m,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
+    preserve_loaded_contact_target,
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
     reanchor_bimanual_contact_hold,
@@ -449,6 +450,18 @@ def test_single_finger_contact_detection_is_exact_and_thresholded():
     assert not single_finger_contact_observed([0.1, 0.1], [0.5, 0.5])
     assert not single_finger_contact_observed([0.0, 2.0], [np.nan, -0.005])
     assert not single_finger_contact_observed([0.0, 2.0], [np.nan, 0.81])
+
+
+def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
+    observed = _pose()
+    commanded = _pose(0.03, 0.04, 0.0)
+    result, residual = preserve_loaded_contact_target(
+        observed, commanded, maximum_position_residual_m=0.025
+    )
+
+    assert residual == pytest.approx([0.015, 0.02, 0.0])
+    assert result[:3] == pytest.approx(residual)
+    assert result[3:] == pytest.approx(commanded[3:])
 
 
 def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():

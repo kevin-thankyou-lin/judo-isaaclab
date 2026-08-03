@@ -487,6 +487,31 @@ def single_finger_contact_observed(
     )
 
 
+def preserve_loaded_contact_target(
+    observed_pose: Any,
+    commanded_pose: Any,
+    *,
+    maximum_position_residual_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reanchor a loaded contact without releasing measured compression."""
+
+    observed = _pose(observed_pose, "observed_pose")
+    commanded = _pose(commanded_pose, "commanded_pose")
+    if (
+        not np.isfinite(maximum_position_residual_m)
+        or maximum_position_residual_m <= 0.0
+    ):
+        raise ValueError("maximum_position_residual_m must be finite and positive")
+    residual = commanded[:3] - observed[:3]
+    norm = float(np.linalg.norm(residual))
+    if norm > maximum_position_residual_m:
+        residual *= maximum_position_residual_m / norm
+    result = observed.copy()
+    result[:3] += residual
+    result[3:] = commanded[3:]
+    return result, residual
+
+
 def reanchor_missing_finger_contact(
     contact_local: Any,
     observed_root_pose: Any,
