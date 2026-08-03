@@ -224,6 +224,12 @@ def test_thin_handle_scales_contact_stabilization_duration():
     assert geometry_conditioned_grasp_hold_steps(
         30, [0.06, 0.08, 0.04], [0.07, 0.09, 0.05], 0
     ) == 30
+    assert geometry_conditioned_grasp_hold_steps(
+        30,
+        [0.059453, 0.085784, 0.040560],
+        [0.069219, 0.061195, 0.020012],
+        0,
+    ) == 141
 
 
 def test_authored_handle_span_is_centered_along_measured_jaw_axis():

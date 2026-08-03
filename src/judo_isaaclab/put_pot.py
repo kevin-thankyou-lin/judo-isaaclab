@@ -68,6 +68,12 @@ MISSING_FINGER_CONTACT_DELAY_STEPS = 10
 MISSING_FINGER_PAD_DEPTH_STEP_M = 0.001
 MISSING_FINGER_PAD_DEPTH_LIMIT_M = 0.010
 MISSING_FINGER_PAD_TARGET_FRACTION = 0.02
+MISSING_FINGER_CONTACT_SETTLE_STEPS = (
+    MISSING_FINGER_CONTACT_DELAY_STEPS
+    + int(np.ceil(MISSING_FINGER_CONTACT_LIMIT_M / MISSING_FINGER_CONTACT_STEP_M))
+    + int(np.ceil(MISSING_FINGER_PAD_DEPTH_LIMIT_M / MISSING_FINGER_PAD_DEPTH_STEP_M))
+    + 15
+)
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -309,7 +315,10 @@ def geometry_conditioned_grasp_hold_steps(
     retained_ratio = min(
         1.0, min(float(target[axis] / source[axis]) for axis in transverse)
     )
-    return int(np.ceil(base_steps / retained_ratio))
+    scaled = int(np.ceil(base_steps / retained_ratio))
+    if THIN_HANDLE_SYMMETRY_RATIO <= retained_ratio < THIN_HANDLE_BALANCE_RATIO:
+        scaled += MISSING_FINGER_CONTACT_SETTLE_STEPS
+    return scaled
 
 
 def handle_jaw_center_offset_m(
