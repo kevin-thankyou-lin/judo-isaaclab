@@ -297,11 +297,17 @@ def reanchor_marker_placement(
     )
 
 
-def center_marker_over_cavity(marker_pose: Any, cavity_frame: Any) -> np.ndarray:
+def center_marker_over_cavity(
+    marker_pose: Any, cavity_frame: Any, support_clearance_m: float | None = None
+) -> np.ndarray:
     """Center a transferred marker pose on the measured drawer support region."""
 
     local = compose_pose(inverse_pose(cavity_frame), marker_pose)
     local[:2] = 0.0
+    if support_clearance_m is not None:
+        if not np.isfinite(support_clearance_m) or support_clearance_m < 0.0:
+            raise ValueError("support_clearance_m must be finite and nonnegative")
+        local[2] = float(support_clearance_m)
     return compose_pose(cavity_frame, local)
 
 

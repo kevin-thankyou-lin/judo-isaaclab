@@ -376,7 +376,9 @@ def _build_skill(
                 target_geometry.cavity_size / source_geometry.cavity_size
             ),
         )
-        return center_marker_over_cavity(transferred, cavity_frame)
+        return center_marker_over_cavity(
+            transferred, cavity_frame, support_clearance_m=0.030
+        )
 
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
@@ -972,10 +974,7 @@ def main() -> None:
                     args,
                     right_dls_gain=right_dls_gain,
                     integrate_right_ik=integrate_right_ik,
-                    integrate_left_ik=(
-                        step > trajectory.waypoint_steps["drawer_open"]
-                        or _integrate_left_ik(args.integrate_left_ik, step)
-                    ),
+                    integrate_left_ik=_integrate_left_ik(args.integrate_left_ik, step),
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
@@ -1187,7 +1186,7 @@ def main() -> None:
                     "left_ik_anchor": (
                         "integrated_measured_joint"
                         if args.integrate_left_ik
-                        else "sparse_through_open_then_integrated_measured_joint"
+                        else "sparse_semantic_nominal"
                     ),
                 },
             },

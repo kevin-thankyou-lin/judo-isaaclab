@@ -58,6 +58,8 @@ def test_marker_pose_is_centered_in_measured_cavity_frame():
     marker = _pose(0.7, 0.05, 0.86)
     centered = center_marker_over_cavity(marker, cavity)
     assert centered[:3] == pytest.approx([0.8, -0.1, 0.86])
+    supported = center_marker_over_cavity(marker, cavity, support_clearance_m=0.03)
+    assert supported[:3] == pytest.approx([0.8, -0.1, 0.93])
 
 
 def test_drawer_local_pose_retargets_to_observed_joint_frame():
