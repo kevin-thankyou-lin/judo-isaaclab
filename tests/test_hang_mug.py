@@ -305,8 +305,10 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     )
     trajectory = program.build()
     original = trajectory.right_poses.copy()
+    original_left = trajectory.left_poses.copy()
+    observed_left = _pose(0.3, 0.05)
     adjusted = reanchor_physical_handover(
-        trajectory, _pose(0.3), _pose(0.3, 0.1), original[5]
+        trajectory, _pose(0.3), _pose(0.3, 0.1), observed_left, original[5]
     )
     lift_end = trajectory.waypoint_steps["left_lift"]
     grasp_end = trajectory.waypoint_steps["right_grasp"]
@@ -323,7 +325,17 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     assert adjusted.right_poses[transport_end + 1 :] == pytest.approx(
         original[transport_end + 1 :]
     )
-    assert adjusted.left_poses == pytest.approx(trajectory.left_poses)
+    pregrasp_end = trajectory.waypoint_steps["handover_pregrasp"]
+    release_end = trajectory.waypoint_steps["left_release"]
+    assert adjusted.left_poses[: lift_end + 1] == pytest.approx(
+        original_left[: lift_end + 1]
+    )
+    assert adjusted.left_poses[lift_end + 1 : grasp_end + 1] == pytest.approx(
+        np.repeat(observed_left[None], grasp_end - lift_end, axis=0)
+    )
+    expected_release = original_left[release_end].copy()
+    expected_release[:3] += observed_left[:3] - original_left[pregrasp_end, :3]
+    assert adjusted.left_poses[release_end] == pytest.approx(expected_release)
     assert adjusted.grippers == pytest.approx(trajectory.grippers)
 
 

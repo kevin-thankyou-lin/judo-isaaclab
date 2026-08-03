@@ -143,14 +143,16 @@ def reanchor_physical_handover(
     trajectory: SkillTrajectory,
     nominal_mug_pose: Any,
     observed_mug_pose: Any,
+    observed_left_pose: Any,
     observed_right_pose: Any,
 ) -> SkillTrajectory:
     """Reanchor only the handover path to the mug pose observed after lift.
 
     The mug can rotate inside a frictional left grasp, especially when its
     geometry changes.  This deterministic feedback update preserves the
-    semantic right-contact transform while leaving pick and support targets
-    unchanged.
+    semantic right-contact transform while holding the observed left anchor
+    through receiver closure.  The authored left-release transform and all
+    support targets remain unchanged.
     """
 
     required = (
@@ -169,7 +171,16 @@ def reanchor_physical_handover(
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
     transport_end = steps["tree_transport"]
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    observed_left = _pose(observed_left_pose, "observed_left_pose")
+    corrected_release = transfer_pose(
+        left[release_end], left[pregrasp_end], observed_left
+    )
+    left[start : grasp_end + 1] = observed_left
+    left[grasp_end + 1 : release_end + 1] = interpolate_poses(
+        observed_left, corrected_release, release_end - grasp_end
+    )
     corrected_pregrasp = transfer_pose(
         right[pregrasp_end], nominal_mug_pose, observed_mug_pose
     )
@@ -189,7 +200,7 @@ def reanchor_physical_handover(
         transport_end - release_end,
     )
     return SkillTrajectory(
-        left_poses=trajectory.left_poses.copy(),
+        left_poses=left,
         right_poses=right,
         grippers=trajectory.grippers.copy(),
         stage_names=trajectory.stage_names,
