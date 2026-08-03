@@ -1145,6 +1145,8 @@ def main() -> None:
         transport_reanchor_rejections = []
         transport_reference_left_contact_local = None
         transport_reference_right_contact_local = None
+        transport_expected_left_tracking_residual_local = None
+        transport_expected_right_tracking_residual_local = None
         center_slide_reanchor_steps = []
         center_slide_reanchor_signed_residuals_local_m = []
         center_slide_reference_right_contact_local = None
@@ -1644,6 +1646,21 @@ def main() -> None:
                         transport_reference_right_contact_local = (
                             reference_hold_right_contact_local
                         )
+                        observed_inverse = inverse_pose(sample["pot_pose"])
+                        observed_left_local = compose_pose(
+                            observed_inverse, sample["left_eef_pose"]
+                        )
+                        observed_right_local = compose_pose(
+                            observed_inverse, sample["right_eef_pose"]
+                        )
+                        transport_expected_left_tracking_residual_local = (
+                            retained_hold_left_contact_local[:3]
+                            - observed_left_local[:3]
+                        )
+                        transport_expected_right_tracking_residual_local = (
+                            reference_hold_right_contact_local[:3]
+                            - observed_right_local[:3]
+                        )
                         transport_reanchor_evaluation_steps.append(step)
                         transport_reanchor_steps.append(step)
                         start = step + 1
@@ -1701,6 +1718,12 @@ def main() -> None:
                         else None
                     ),
                     tracking_tolerance_m=transport_contact_tracking_tolerance_m,
+                    expected_left_tracking_residual_local=(
+                        transport_expected_left_tracking_residual_local
+                    ),
+                    expected_right_tracking_residual_local=(
+                        transport_expected_right_tracking_residual_local
+                    ),
                 ):
                     transport_reanchor_evaluation_steps.append(step)
                     observed_pot_inverse = inverse_pose(sample["pot_pose"])
@@ -1799,9 +1822,15 @@ def main() -> None:
                             transport_reference_left_contact_local = (
                                 observed_left_contact_local
                             )
+                            transport_expected_left_tracking_residual_local = (
+                                np.zeros(3, dtype=np.float64)
+                            )
                         if transport_reference_right_contact_local is None:
                             transport_reference_right_contact_local = (
                                 observed_right_contact_local
+                            )
+                            transport_expected_right_tracking_residual_local = (
+                                np.zeros(3, dtype=np.float64)
                             )
                         transport_reanchor_steps.append(step)
                         transport_reanchor_signed_residuals_world_m.append(
@@ -2294,6 +2323,18 @@ def main() -> None:
                 "transport_reanchor_position_limit_m": transport_reanchor_position_limit_m,
                 "transport_reanchor_signed_residuals_world_m": transport_reanchor_signed_residuals_world_m,
                 "transport_reanchor_rejections": transport_reanchor_rejections,
+                "transport_expected_tracking_residual_local_m": {
+                    "left": (
+                        None
+                        if transport_expected_left_tracking_residual_local is None
+                        else transport_expected_left_tracking_residual_local.tolist()
+                    ),
+                    "right": (
+                        None
+                        if transport_expected_right_tracking_residual_local is None
+                        else transport_expected_right_tracking_residual_local.tolist()
+                    ),
+                },
                 "center_slide_reanchor_steps": center_slide_reanchor_steps,
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,

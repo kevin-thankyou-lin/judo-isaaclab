@@ -1576,8 +1576,10 @@ def transport_contact_reanchor_required(
     last_reanchor_step: int | None,
     tracking_tolerance_m: float,
     minimum_interval_steps: int = TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
+    expected_left_tracking_residual_local: Any | None = None,
+    expected_right_tracking_residual_local: Any | None = None,
 ) -> bool:
-    """Return whether grasped transport has drifted beyond handle retention."""
+    """Return whether transport drift exceeds its retained loaded residual."""
 
     if not np.isfinite(tracking_tolerance_m) or tracking_tolerance_m <= 0.0:
         raise ValueError("tracking_tolerance_m must be positive and finite")
@@ -1600,14 +1602,30 @@ def transport_contact_reanchor_required(
     observed_right_contact = compose_pose(
         inverse_pot, _pose(observed_right_pose, "observed_right_pose")
     )
-    left_drift = np.linalg.norm(
+    left_delta = (
         observed_left_contact[:3]
         - _pose(reference_left_contact_local, "reference_left_contact_local")[:3]
     )
-    right_drift = np.linalg.norm(
+    right_delta = (
         observed_right_contact[:3]
         - _pose(reference_right_contact_local, "reference_right_contact_local")[:3]
     )
+    if expected_left_tracking_residual_local is not None:
+        expected = np.asarray(
+            expected_left_tracking_residual_local, dtype=np.float64
+        )
+        if expected.shape != (3,) or not np.all(np.isfinite(expected)):
+            raise ValueError("expected left tracking residual must be finite 3D")
+        left_delta += expected
+    if expected_right_tracking_residual_local is not None:
+        expected = np.asarray(
+            expected_right_tracking_residual_local, dtype=np.float64
+        )
+        if expected.shape != (3,) or not np.all(np.isfinite(expected)):
+            raise ValueError("expected right tracking residual must be finite 3D")
+        right_delta += expected
+    left_drift = np.linalg.norm(left_delta)
+    right_drift = np.linalg.norm(right_delta)
     return bool(max(left_drift, right_drift) > tracking_tolerance_m)
 
 

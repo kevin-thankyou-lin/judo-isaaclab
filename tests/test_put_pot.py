@@ -1231,6 +1231,34 @@ def test_transport_reanchor_repeats_only_after_measured_contact_drift():
         left_contact, right_contact,
         last_reanchor_step=step - 10, tracking_tolerance_m=0.01,
     )
+    loaded_left_reference = left_contact.copy()
+    loaded_left_reference[0] += 0.028
+    assert not transport_contact_reanchor_required(
+        trajectory,
+        step,
+        observed_pot,
+        observed_left,
+        observed_right,
+        loaded_left_reference,
+        right_contact,
+        last_reanchor_step=step - 10,
+        tracking_tolerance_m=0.01,
+        expected_left_tracking_residual_local=[0.028, 0.0, 0.0],
+        expected_right_tracking_residual_local=[0.0, 0.0, 0.0],
+    )
+    with pytest.raises(ValueError, match="expected left tracking residual"):
+        transport_contact_reanchor_required(
+            trajectory,
+            step,
+            observed_pot,
+            observed_left,
+            observed_right,
+            loaded_left_reference,
+            right_contact,
+            last_reanchor_step=step - 10,
+            tracking_tolerance_m=0.01,
+            expected_left_tracking_residual_local=[0.028, 0.0],
+        )
     transport_end = trajectory.waypoint_steps["smooth_transport"]
     assert not transport_contact_reanchor_required(
         trajectory,
