@@ -307,6 +307,7 @@ def _build_skill(
     rigid_target_handle_pull,
     rigid_handle_pull_m,
     handle_pull_vertical_offset_m,
+    handle_engagement_depth_m,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
@@ -387,7 +388,14 @@ def _build_skill(
             source_geometry, source_attach("right", index), source_q
         )
 
-    handle_open = right_handle("handle_grasp")
+    handle_pregrasp = right_handle("handle_pregrasp")
+    handle_grasp = right_handle("handle_grasp")
+    inward = -quaternion_rotate(
+        target_geometry.root_pose[3:], target_geometry.slide_axis_local
+    ) * float(handle_engagement_depth_m)
+    handle_pregrasp[:3] += inward
+    handle_grasp[:3] += inward
+    handle_open = handle_grasp.copy()
     handle_open[:3] += quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * working_q
@@ -408,8 +416,8 @@ def _build_skill(
     )
     program.open_drawer(
         left_marker("marker_clear_hold"),
-        right_handle("handle_pregrasp"),
-        right_handle("handle_grasp"),
+        handle_pregrasp,
+        handle_grasp,
         handle_open,
         hold_steps=60,
         approach_steps=118,
@@ -896,6 +904,9 @@ def main() -> None:
             if float(target_geometry.root_pose[2]) >= 1.04
             else args.handle_pull_vertical_offset_m
         )
+        handle_engagement_depth_m = (
+            0.015 if float(target_geometry.root_pose[2]) >= 1.04 else 0.0
+        )
         # Every asset uses the measured handle frame and joint axis.  The old
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
@@ -913,6 +924,7 @@ def main() -> None:
                 integrated_target_handle_ik,
                 args.rigid_handle_pull_m,
                 effective_handle_vertical_offset_m,
+                handle_engagement_depth_m,
             )
             if args.mode == "skill" else (None, None, None, None)
         )
@@ -1186,6 +1198,7 @@ def main() -> None:
                     "effective_handle_pull_vertical_offset_m": (
                         effective_handle_vertical_offset_m
                     ),
+                    "handle_engagement_depth_m": handle_engagement_depth_m,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
