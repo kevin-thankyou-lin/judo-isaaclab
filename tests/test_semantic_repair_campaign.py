@@ -144,3 +144,15 @@ def test_fail_fast_lane_stops_only_after_a_failed_attempt():
     assert not module._stop_after_attempt(True, {"status": "accepted"})
     assert module._stop_after_attempt(True, {"status": "pending"})
     assert not module._stop_after_attempt(False, {"status": "pending"})
+
+
+def test_repair_policy_is_target_direct_and_preserves_successes(tmp_path, monkeypatch):
+    module = _module()
+    monkeypatch.setattr(module, "_git_head", lambda: "rev")
+    ledger = module.refresh_ledger(
+        {"tasks": []}, tmp_path / "results", tmp_path / "ledger.json"
+    )
+
+    assert "source semantic success is not required" in ledger["policy"]
+    assert "preserve hash-verified successes" in ledger["policy"]
+    assert "stop on first failed pair" in ledger["policy"]

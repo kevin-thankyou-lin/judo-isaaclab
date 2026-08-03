@@ -141,10 +141,11 @@ The exact receipt is `validation/hangmug_near_contact_smoke.json`.
 ## Evidence-led coding agents
 
 `examples/evidence_adaptation_harness.py` provides a task-agnostic, append-only
-ledger for coding-agent asset adaptation. It requires source-skill success,
-target-replay failure, adapted target-skill success, and a continuous rendered
-success on the same target and revision. Failed attempts produce structured
-diagnoses rather than weakening the task predicate.
+ledger for coding-agent asset adaptation. It requires target-replay failure,
+adapted target-skill success, and a continuous rendered success on the same
+target and revision. Source-skill runs are optional diagnostics, never a proof
+prerequisite. Failed attempts produce structured diagnoses rather than
+weakening the task predicate.
 
 The agent loop and PutPot/HangMug deployment bundles are documented in
 `docs/evidence_driven_asset_adaptation.md` and

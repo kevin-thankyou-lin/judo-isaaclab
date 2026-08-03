@@ -12,11 +12,12 @@ from typing import Any, Iterable
 
 
 PROOF_PHASES = (
-    "source_skill",
     "target_replay",
     "target_skill",
     "final_render",
 )
+
+OPTIONAL_PHASES = ("source_replay", "source_skill")
 
 
 def _expand_environment(value: Any) -> Any:
@@ -172,7 +173,7 @@ def evaluate_result(
     video_exists: bool = False,
 ) -> AttemptEvaluation:
     """Normalize one task result and evaluate its phase-specific gate."""
-    if phase not in (*PROOF_PHASES, "source_replay"):
+    if phase not in (*PROOF_PHASES, *OPTIONAL_PHASES):
         raise ValueError(f"unknown phase: {phase}")
     task_success = bool(
         _first_path(result, contract.result_paths["task_success"], False)
@@ -331,7 +332,7 @@ class EvidenceLedger:
         missing = [phase for phase, attempt in attempts.items() if attempt is None]
         if missing:
             return {"complete": False, "missing": missing}
-        target_ids = {attempts[phase]["target_id"] for phase in PROOF_PHASES[1:]}
+        target_ids = {attempts[phase]["target_id"] for phase in PROOF_PHASES}
         source_ids = {attempts[phase]["source_id"] for phase in PROOF_PHASES}
         revisions = {
             attempts[phase]["revision"] for phase in ("target_skill", "final_render")

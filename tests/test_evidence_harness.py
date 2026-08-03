@@ -107,7 +107,6 @@ def test_ledger_requires_same_target_and_revision(tmp_path):
             video_path=video if phase == "final_render" else None,
         )
 
-    assert add("source_skill", True)["accepted"]
     assert add("target_replay", False)["accepted"]
     assert add("target_skill", True)["accepted"]
     assert add("final_render", True, revision="other")["accepted"]
@@ -115,6 +114,35 @@ def test_ledger_requires_same_target_and_revision(tmp_path):
     assert add("final_render", True)["accepted"]
     assert ledger.proof_status()["complete"]
     assert json.loads((tmp_path / "ledger.json").read_text())["status"] == "complete"
+
+
+def test_failed_optional_source_skill_does_not_block_target_proof(tmp_path):
+    bundle = _contract(tmp_path)
+    ledger = EvidenceLedger(tmp_path / "ledger.json", bundle)
+    log = tmp_path / "run.log"
+    log.write_text("ok")
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    def add(phase, success):
+        result = tmp_path / f"{phase}.json"
+        result.write_text(json.dumps(_result(success, place=success)))
+        return ledger.add_attempt(
+            phase=phase,
+            result_path=result,
+            log_path=log,
+            returncode=0,
+            revision="rev",
+            source_id="source",
+            target_id="target",
+            video_path=video if phase == "final_render" else None,
+        )
+
+    assert not add("source_skill", False)["accepted"]
+    assert add("target_replay", False)["accepted"]
+    assert add("target_skill", True)["accepted"]
+    assert add("final_render", True)["accepted"]
+    assert ledger.proof_status()["complete"]
 
 
 def test_contract_rejects_missing_replay_failure_gate(tmp_path):

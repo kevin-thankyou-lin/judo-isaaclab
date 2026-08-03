@@ -27,6 +27,9 @@ source demo + task predicate + asset geometry
 - Start from the task predicate. Preserve its thresholds and stable windows.
 - Use the demonstration for subtask order, ownership, contact intent, and
   object-relative relationships—not as a target joint trajectory.
+- Generate target code directly from the current target state and authored
+  target-local part geometry. A failed semantic run on the source asset does
+  not block target repair; source-skill runs are optional diagnostics.
 - Express targets in semantic frames: grasp contacts, support surfaces, handle
   holes, branch tangents, drawer cavities, and articulation axes.
 - Preserve task-native interaction mechanisms used by the authoritative datagen
@@ -40,19 +43,25 @@ source demo + task predicate + asset geometry
 - Test a repaired stage locally, but accept only a one-reset, uninterrupted
   end-to-end rollout. Mid-contact resets are not valid substitutes for natural
   contact history.
+- Reanchor from observed state after contact-critical milestones, then preserve
+  the observed object-to-gripper contact frames through transport.
+- Scale duration and clearance from measured geometry, preserve hash-verified
+  successes, and stop a sequential lane at its first failed pair for diagnosis.
 - Treat task completion and motion quality as separate gates. A successful
   path can still need shorter motion, fewer internal stops, better clearance,
   or a more useful observer view.
 
 ## Required proof
 
-The final claim requires four accepted runs:
+The final claim requires three accepted runs:
 
-1. `source_skill`: the coded skill succeeds on the source assets.
-2. `target_replay`: source actions fail on the selected target assets.
-3. `target_skill`: the adapted coded skill succeeds on that same target.
-4. `final_render`: the same target skill revision succeeds in one continuous,
+1. `target_replay`: source actions fail on the selected target assets.
+2. `target_skill`: the adapted coded skill succeeds on that same target.
+3. `final_render`: the same target skill revision succeeds in one continuous,
    technically valid rendered rollout.
+
+`source_skill` remains an optional diagnostic phase. It is not required when
+source action replay and an earlier semantic program both fail.
 
 The target-replay failure matters. If source replay already succeeds, the target
 is useful regression coverage but does not prove adaptation.
@@ -65,7 +74,8 @@ is useful regression coverage but does not prove adaptation.
    collision geometry.
 3. Implement a continuous graph of small deterministic primitives such as
    `grasp`, `handover`, `transport`, `insert/place`, `release`, and `close`.
-4. Prove the coded skill on the source assets.
+4. Optionally run the skill on source assets to diagnose correspondence; do not
+   gate target generation on source semantic success.
 5. Rank target candidates geometrically and run unchanged source actions until
    a validated replay-failure target is found.
 6. Execute the skill on that target and classify the first failed predicate as

@@ -312,8 +312,11 @@ def refresh_ledger(
         "schema_version": 1,
         "campaign": str(output_root.resolve()),
         "policy": (
-            "one geometry-conditioned deterministic semantic program per task; "
-            "numbered immutable attempts; one heavy Isaac process"
+            "target-direct geometry-conditioned deterministic semantic program per task; "
+            "source demonstration supplies phase/contact intent but source semantic success "
+            "is not required; reanchor contact milestones; separate task and motion gates; "
+            "numbered immutable attempts; preserve hash-verified successes; stop on first "
+            "failed pair; one heavy Isaac process"
         ),
         "code_head": _git_head(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
