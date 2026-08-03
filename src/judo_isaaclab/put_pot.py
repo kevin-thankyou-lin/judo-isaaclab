@@ -112,19 +112,28 @@ def smooth_collision_aware_bimanual_transport(
     overlap = _cooktop_overlap_mask(pot_poses[:, :3], size, cooktop)
     required_bottom_z = cooktop.top_frame[2] + float(collision_clearance_m)
     base_bottom_z = pot_poses[:, 2] - 0.5 * size[2]
-    fraction = np.linspace(1.0 / steps, 1.0, steps)
-    # Unit-height C2 bump: value, velocity, and acceleration are zero at both
-    # endpoints, unlike a parabolic arch.
-    bump = 64.0 * fraction**3 * (1.0 - fraction) ** 3
     required_lift = np.zeros(steps, dtype=np.float64)
     required_lift[overlap] = np.maximum(
         0.0, required_bottom_z - base_bottom_z[overlap]
     )
     if required_lift[-1] > 1.0e-9:
         raise ValueError("transport target does not clear the cooktop")
-    usable = overlap & (bump > 1.0e-9)
-    amplitude = float(np.max(required_lift[usable] / bump[usable])) if np.any(usable) else 0.0
-    pot_poses[:, 2] += amplitude * bump
+    positive = np.flatnonzero(required_lift > 1.0e-9)
+    lift_profile = np.zeros(steps, dtype=np.float64)
+    if len(positive):
+        first = int(positive[0])
+        last = int(positive[-1])
+        if first == 0:
+            raise ValueError(
+                "pot starts inside the cooktop footprint below transport clearance"
+            )
+        rise = _minimum_jerk_fraction(first + 1)
+        lift_profile[: first + 1] = rise
+        lift_profile[first : last + 1] = 1.0
+        fall_steps = steps - last - 1
+        if fall_steps:
+            lift_profile[last + 1 :] = 1.0 - _minimum_jerk_fraction(fall_steps)
+        pot_poses[:, 2] += float(np.max(required_lift)) * lift_profile
     minimum_clearance = minimum_cooktop_clearance_m(pot_poses, size, cooktop)
     if minimum_clearance + 1.0e-9 < collision_clearance_m:
         raise AssertionError("constructed transport violates cooktop clearance")

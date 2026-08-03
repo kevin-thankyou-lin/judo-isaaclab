@@ -104,6 +104,26 @@ def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
     assert metrics["internal_stop_count"] == 0
 
 
+def test_clearance_lift_reaches_height_before_overlap_without_tall_arch():
+    cooktop = RigidSupportGeometry(
+        [0.7055, -0.3, 0.7843, 0.7071, 0.0, 0.0, -0.7071],
+        [0.264, 0.3355, 0.0653],
+    )
+    transport = smooth_collision_aware_bimanual_transport(
+        [0.7069, 0.0048, 0.8370, 0.3473, 0.0146, 0.0, -0.9376],
+        [0.7055, -0.3, 0.9303, 0.5141, 0.0, 0.0, -0.8577],
+        _pose(-0.20, -0.12, 0.12),
+        _pose(0.23, -0.03, 0.11),
+        [0.3362, 0.2345, 0.1646],
+        cooktop,
+        steps=180,
+        collision_clearance_m=0.025,
+    )
+
+    assert transport.minimum_cooktop_clearance_m >= 0.025 - 1.0e-9
+    assert np.max(transport.pot_poses[:, 2]) < 1.10
+
+
 def test_single_transport_removes_segment_boundary_speed_dips():
     cooktop = RigidSupportGeometry(_pose(0.7, -0.3, 0.8), [0.36, 0.34, 0.10])
     pot_size = np.asarray([0.30, 0.28, 0.20])
