@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -12,6 +13,11 @@ def _module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_lane_bootstraps_repository_src_for_failure_diagnosis():
+    module = _module()
+    assert str(module.REPO_ROOT / "src") in sys.path
 
 
 def test_actual_cpu_receipt_is_fail_closed():

@@ -22,6 +22,9 @@ import subprocess
 import sys
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
 from run_semantic_repair_campaign import _diagnosis, _strict_semantic_success
 from run_three_task_asset_campaign import (
     _atomic_json,
@@ -32,9 +35,6 @@ from run_three_task_asset_campaign import (
     validate_asset_inventory,
     validate_demo,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
 
 def _sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
