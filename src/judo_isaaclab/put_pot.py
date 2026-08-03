@@ -75,11 +75,11 @@ SINGLE_FINGER_CONTACT_LATCH_FRACTION = 0.20
 SINGLE_FINGER_CONTACT_LATCH_STEPS = CONTACT_FEEDBACK_HORIZON_STEPS
 # Pot021 attempt_019 left the missing pad just before the authored pad interval
 # (fraction -0.04), while attempt_020's complete -26.9 degree reach-avoidance
-# twist carried it beyond the opposite end (fraction 1.03).  The other pad
-# remained supported at fractions 0.22-0.31.  Interpolating those measured,
-# signed contact residuals puts the missing pad at 0.44 without sacrificing the
-# acquired pad.  This is a fixed geometry-conditioned correction, not a search.
-LOADED_JAW_REACH_AVOIDANCE_FRACTION = 0.45
+# twist carried it beyond the opposite end (fraction 1.03).  Attempt_026's 45%
+# twist latched at fraction 0.618 but crossed the far edge as lift began.
+# Interpolating those measured signed residuals centers the pad near 0.40 at a
+# 30% twist.  This is a fixed geometry-conditioned correction, not a search.
+LOADED_JAW_REACH_AVOIDANCE_FRACTION = 0.30
 MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     MISSING_FINGER_CONTACT_DELAY_STEPS
     + int(np.ceil(MISSING_FINGER_CONTACT_LIMIT_M / MISSING_FINGER_CONTACT_STEP_M))
