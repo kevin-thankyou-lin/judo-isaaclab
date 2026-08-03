@@ -512,6 +512,52 @@ def preserve_loaded_contact_target(
     return result, residual
 
 
+def twist_jaw_away_from_limited_axis(
+    pose: Any,
+    pad_axes_world: Any,
+    *,
+    limited_axis_world: Any = (1.0, 0.0, 0.0),
+) -> tuple[np.ndarray, float]:
+    """Twist about the acquired pad tangent to remove jaw motion on one axis."""
+
+    value = _pose(pose, "pose")
+    pads = np.asarray(pad_axes_world, dtype=np.float64)
+    limited = np.asarray(limited_axis_world, dtype=np.float64)
+    if pads.shape != (2, 3) or not np.all(np.isfinite(pads)):
+        raise ValueError("pad_axes_world must contain two finite 3D axes")
+    if limited.shape != (3,) or not np.all(np.isfinite(limited)):
+        raise ValueError("limited_axis_world must contain three finite values")
+    pad_axis = np.mean(pads, axis=0)
+    pad_axis /= np.linalg.norm(pad_axis)
+    limited /= np.linalg.norm(limited)
+    jaw_local = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_local[2] = 0.0
+    jaw_local /= np.linalg.norm(jaw_local)
+    jaw_world = quaternion_rotate(value[3:], jaw_local)
+    jaw_world -= pad_axis * np.dot(jaw_world, pad_axis)
+    jaw_world /= np.linalg.norm(jaw_world)
+    target = np.cross(pad_axis, limited)
+    target_norm = float(np.linalg.norm(target))
+    if target_norm <= 1.0e-9:
+        raise ValueError("limited axis must not be parallel to the pad tangent")
+    target /= target_norm
+    if np.dot(target, jaw_world) < 0.0:
+        target *= -1.0
+    angle = float(
+        np.arctan2(
+            np.dot(pad_axis, np.cross(jaw_world, target)),
+            np.dot(jaw_world, target),
+        )
+    )
+    delta = np.concatenate(
+        ([np.cos(0.5 * angle)], pad_axis * np.sin(0.5 * angle))
+    )
+    result = value.copy()
+    result[3:] = quaternion_multiply(delta, value[3:])
+    result[3:] /= np.linalg.norm(result[3:])
+    return result, angle
+
+
 def reanchor_handle_jaw_center_step(
     contact_local: Any,
     pot_root_pose: Any,

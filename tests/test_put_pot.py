@@ -53,6 +53,7 @@ from judo_isaaclab.put_pot import (
     support_aligned_pot_pose,
     support_boundary_staging_pose,
     track_bimanual_handle_targets,
+    twist_jaw_away_from_limited_axis,
     transfer_handle_approach_orientation,
     transfer_handle_pose_through_contact_frames,
     transfer_handle_pose_preserving_surface_clearance,
@@ -463,6 +464,21 @@ def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
     assert residual == pytest.approx([0.015, 0.02, 0.0])
     assert result[:3] == pytest.approx(residual)
     assert result[3:] == pytest.approx(commanded[3:])
+
+
+def test_jaw_twist_removes_limited_axis_without_changing_pad_tangent():
+    pose = _pose()
+    pads = np.asarray([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+    result, angle = twist_jaw_away_from_limited_axis(pose, pads)
+    jaw = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw[2] = 0.0
+    jaw /= np.linalg.norm(jaw)
+
+    assert angle != pytest.approx(0.0)
+    assert quaternion_rotate(result[3:], jaw)[0] == pytest.approx(0.0, abs=1e-9)
+    assert quaternion_rotate(result[3:], [0.0, 1.0, 0.0]) == pytest.approx(
+        [0.0, 1.0, 0.0], abs=1e-9
+    )
 
 
 def test_contact_recovery_remeasures_authored_jaw_residual_each_step():

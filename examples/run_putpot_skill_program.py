@@ -1131,6 +1131,7 @@ def main() -> None:
         peer_single_contact_latch_local_m = None
         peer_single_contact_tracking_residual_world_m = None
         peer_contact_latch_jaw_residual_m = None
+        peer_contact_jaw_twist_rad = None
         peer_contact_recovery_residuals_m = []
         contact_hold_latch_step = None
         contact_hold_retention_local_m = None
@@ -1399,6 +1400,7 @@ def main() -> None:
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
+                    twist_jaw_away_from_limited_axis,
                 )
 
                 supported_peer_contact = bool(
@@ -1426,6 +1428,12 @@ def main() -> None:
                             sample["left_eef_pose"],
                             trajectory.left_poses[step],
                             maximum_position_residual_m=args.max_position_step,
+                        )
+                    )
+                    loaded_left_world, peer_contact_jaw_twist_rad = (
+                        twist_jaw_away_from_limited_axis(
+                            loaded_left_world,
+                            sample["left_pad_axes_world"],
                         )
                     )
                     left_handle_contact = compose_pose(
@@ -2146,6 +2154,7 @@ def main() -> None:
                 "peer_contact_latch_jaw_residual_m": (
                     peer_contact_latch_jaw_residual_m
                 ),
+                "peer_contact_jaw_twist_rad": peer_contact_jaw_twist_rad,
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
                 ),
