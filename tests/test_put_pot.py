@@ -1264,6 +1264,18 @@ def test_transport_reanchor_repeats_only_after_measured_contact_drift():
         left_contact, right_contact,
         last_reanchor_step=step - 5, tracking_tolerance_m=0.01,
     )
+    assert not transport_contact_reanchor_required(
+        trajectory,
+        step,
+        observed_pot,
+        observed_left,
+        drifted_right,
+        left_contact,
+        right_contact,
+        last_reanchor_step=step - 20,
+        tracking_tolerance_m=0.01,
+        minimum_interval_steps=80,
+    )
     assert transport_contact_reanchor_required(
         trajectory, step, observed_pot, observed_left, drifted_right,
         left_contact, right_contact,

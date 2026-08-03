@@ -1749,6 +1749,9 @@ def main() -> None:
                     expected_right_tracking_residual_local=(
                         transport_expected_right_tracking_residual_local
                     ),
+                    minimum_interval_steps=max(
+                        1, int(transport_plan.get("vertical_rise_steps", 1))
+                    ),
                 ):
                     transport_reanchor_evaluation_steps.append(step)
                     observed_pot_inverse = inverse_pose(sample["pot_pose"])
@@ -2357,6 +2360,13 @@ def main() -> None:
                 "transport_reanchor_position_limit_m": transport_reanchor_position_limit_m,
                 "transport_reanchor_signed_residuals_world_m": transport_reanchor_signed_residuals_world_m,
                 "transport_reanchor_rejections": transport_reanchor_rejections,
+                "transport_reanchor_minimum_interval_steps": (
+                    None
+                    if transport_plan is None
+                    else max(
+                        1, int(transport_plan.get("vertical_rise_steps", 1))
+                    )
+                ),
                 "transport_expected_tracking_residual_local_m": {
                     "left": (
                         None
