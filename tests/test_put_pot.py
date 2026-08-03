@@ -16,6 +16,7 @@ from judo_isaaclab.put_pot import (
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_handle_pad_depth,
+    handle_finger_pad_depth_imbalance,
     handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
@@ -190,6 +191,35 @@ def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():
     )
     assert right_after == pytest.approx(right_before)
     assert left_after[2] - left_before[2] == pytest.approx(0.003, abs=2.0e-6)
+
+
+def test_negative_handle_pad_balance_keeps_left_pivot_and_deepens_right_finger():
+    grasp = _pose(x=0.07, y=0.02, z=0.04)
+    balanced = balance_handle_contact_across_finger_pads(grasp, -0.003)
+    left_before = grasp[:3] + YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    left_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    )
+    right_before = grasp[:3] + YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    right_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
+    assert left_after == pytest.approx(left_before)
+    assert right_after[2] - right_before[2] == pytest.approx(0.003, abs=2.0e-6)
+
+
+def test_handle_pad_depth_imbalance_uses_nearest_authored_points():
+    points = np.asarray(
+        [
+            [-0.045, 0.024, 0.08],
+            [-0.044, 0.024, 0.08],
+            [0.045, -0.024, 0.11],
+            [0.044, -0.024, 0.11],
+        ]
+    )
+    assert handle_finger_pad_depth_imbalance(_pose(), _pose(), points) == pytest.approx(
+        -0.03
+    )
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

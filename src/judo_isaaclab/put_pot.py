@@ -238,37 +238,82 @@ def balance_handle_contact_across_finger_pads(
     grasp_pose: Any,
     relative_depth_m: float = HANDLE_PAD_RELATIVE_DEPTH_M,
 ) -> np.ndarray:
-    """Tilt about the right-finger pivot to deepen only the left-pad contact.
+    """Tilt about one finger pivot to deepen only the opposite pad contact.
 
     PutPot012 traces showed that pivoting about the authored left finger held
     the failing pad fraction unchanged while moving the already-valid pad.
-    The opposite authored pivot therefore preserves the valid contact and
-    moves the failing contact inward by the measured relative depth.
+    Positive depth preserves the right finger and deepens the left; negative
+    depth preserves the left finger and deepens the right.
     """
 
     grasp = _pose(grasp_pose, "grasp_pose")
-    right_to_left = -YAM_FINGER_SEPARATION_LOCAL_M
-    span = float(np.linalg.norm(right_to_left))
-    if not np.isfinite(relative_depth_m) or not 0.0 <= relative_depth_m < span:
+    magnitude = abs(float(relative_depth_m))
+    span = float(np.linalg.norm(YAM_FINGER_SEPARATION_LOCAL_M))
+    if not np.isfinite(relative_depth_m) or magnitude >= span:
         raise ValueError("relative_depth_m must be finite and smaller than finger span")
+    if magnitude == 0.0:
+        return grasp.copy()
+    if relative_depth_m > 0.0:
+        separation = -YAM_FINGER_SEPARATION_LOCAL_M
+        pivot = YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    else:
+        separation = YAM_FINGER_SEPARATION_LOCAL_M
+        pivot = YAM_LEFT_FINGER_PIVOT_LOCAL_M
     axis = np.asarray(
-        [right_to_left[1], -right_to_left[0], 0.0], dtype=np.float64
+        [separation[1], -separation[0], 0.0], dtype=np.float64
     )
     axis /= np.linalg.norm(axis)
-    angle = float(np.arcsin(relative_depth_m / span))
+    angle = float(np.arcsin(magnitude / span))
     delta = np.concatenate(
         ([np.cos(0.5 * angle)], axis * np.sin(0.5 * angle))
     )
     result = grasp.copy()
     pivot_world = grasp[:3] + quaternion_rotate(
-        grasp[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+        grasp[3:], pivot
     )
     result[3:] = quaternion_multiply(grasp[3:], delta)
     result[3:] /= np.linalg.norm(result[3:])
     result[:3] = pivot_world - quaternion_rotate(
-        result[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+        result[3:], pivot
     )
     return result
+
+
+def handle_finger_pad_depth_imbalance(
+    grasp_pose: Any,
+    pot_root_pose: Any,
+    handle_points_local: Any,
+) -> float:
+    """Estimate finger-0 minus finger-1 pad depth from authored geometry."""
+
+    grasp = _pose(grasp_pose, "grasp_pose")
+    root = _pose(pot_root_pose, "pot_root_pose")
+    points = np.asarray(handle_points_local, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
+        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("handle_points_local must be finite")
+    inverse_grasp = inverse_pose(grasp)
+    points_in_gripper = np.stack(
+        [
+            quaternion_rotate(
+                inverse_grasp[3:],
+                compose_pose(root, [*point, 1.0, 0.0, 0.0, 0.0])[:3]
+                - grasp[:3],
+            )
+            for point in points
+        ]
+    )
+
+    def depth(pivot: np.ndarray) -> float:
+        index = int(
+            np.argmin(np.linalg.norm(points_in_gripper[:, :2] - pivot[:2], axis=1))
+        )
+        return float(points_in_gripper[index, 2] - pivot[2])
+
+    return depth(YAM_LEFT_FINGER_PIVOT_LOCAL_M) - depth(
+        YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
 
 
 @dataclass(frozen=True)
