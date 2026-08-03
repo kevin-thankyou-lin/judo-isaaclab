@@ -87,6 +87,42 @@ def test_pot_handle_contact_frame_uses_nearest_authored_segment_tangent():
     assert frame[0] < parts.body_xy_min[0]
 
 
+def test_pot_handle_contact_frame_uses_local_tangent_on_curved_component():
+    horizontal = np.asarray(
+        [
+            [x, y, z]
+            for x in np.linspace(-0.12, -0.22, 31)
+            for y in (-0.004, 0.004)
+            for z in (0.016, 0.024)
+        ]
+    )
+    vertical = np.asarray(
+        [
+            [x, y, z]
+            for z in np.linspace(0.02, 0.09, 31)
+            for x in (-0.224, -0.216)
+            for y in (-0.004, 0.004)
+        ]
+    )
+    negative = np.concatenate((horizontal, vertical))
+    components = [
+        _box((-0.12, -0.11, -0.08), (0.12, 0.11, -0.07)),
+        _box((-0.12, -0.11, -0.07), (0.12, 0.11, 0.08)),
+        negative,
+        _box((0.12, -0.02, 0.01), (0.19, 0.02, 0.06)),
+    ]
+    parts = infer_pot_parts(components)
+    frame = infer_pot_handle_contact_frame(
+        components, parts, -1, [-0.23, 0.0, 0.105]
+    )
+
+    from judo_isaaclab.put_marker import quaternion_rotate
+
+    inferred_tangent = quaternion_rotate(frame[3:], [1.0, 0.0, 0.0])
+    assert inferred_tangent[2] > 0.9
+    assert abs(inferred_tangent[0]) < 0.35
+
+
 def test_infer_mug_parts_separates_body_footprint_and_handle_hole():
     components = [
         _box((-0.05, -0.04, -0.04), (0.025, 0.04, -0.034)),

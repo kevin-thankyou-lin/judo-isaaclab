@@ -16,6 +16,9 @@ import numpy as np
 from judo_isaaclab.put_marker import pose_from_matrix
 
 
+LOCAL_HANDLE_TANGENT_NEIGHBORS = 32
+
+
 def _points(value: object) -> np.ndarray:
     result = np.asarray(value, dtype=np.float64)
     if result.ndim != 2 or result.shape[1] != 3 or len(result) < 4:
@@ -259,7 +262,16 @@ def infer_pot_handle_contact_frame(
         key=lambda points: float(np.min(np.linalg.norm(points - reference, axis=1))),
     )
     nearest = component[np.argmin(np.linalg.norm(component - reference, axis=1))]
-    covariance = np.cov(component - component.mean(axis=0), rowvar=False)
+    # Curved handles are commonly authored as one convex component.  A PCA of
+    # every vertex describes the whole arc rather than the tangent under the
+    # transferred wrist.  Use the nearest authored surface neighborhood so the
+    # frame remains local to the actual contact region.
+    distances = np.linalg.norm(component - reference, axis=1)
+    count = min(LOCAL_HANDLE_TANGENT_NEIGHBORS, len(component))
+    neighborhood = component[np.argsort(distances)[:count]]
+    covariance = np.cov(
+        neighborhood - neighborhood.mean(axis=0), rowvar=False
+    )
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     tangent = eigenvectors[:, int(np.argmax(eigenvalues))]
     if tangent[2] < 0.0 or (
