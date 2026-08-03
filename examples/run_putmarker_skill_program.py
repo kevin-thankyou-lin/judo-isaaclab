@@ -43,6 +43,7 @@ SEMANTIC_INDICES = {
 # correction restores contact without importing the target joint trajectory.
 TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
 TARGET_HANDLE_PULL_LIFT_M = 0.050
+TARGET_HANDLE_GRIPPER_CLOSED_POSITION = -0.020
 
 
 def _parser() -> argparse.Namespace:
@@ -448,6 +449,11 @@ def _build_skill(
         approach_steps=118,
         close_steps=8,
         pull_steps=114,
+        closed=(
+            TARGET_HANDLE_GRIPPER_CLOSED_POSITION
+            if target_handle_grasp_index is not None
+            else 0.0
+        ),
     )
     program.place_marker_in_drawer(
         left_drawer("marker_collision_clear"),
@@ -1369,6 +1375,11 @@ def main() -> None:
                     ),
                     "target_handle_pull_lift_m": (
                         TARGET_HANDLE_PULL_LIFT_M
+                        if target_handle_grasp_index is not None
+                        else 0.0
+                    ),
+                    "target_handle_gripper_closed_position": (
+                        TARGET_HANDLE_GRIPPER_CLOSED_POSITION
                         if target_handle_grasp_index is not None
                         else 0.0
                     ),
