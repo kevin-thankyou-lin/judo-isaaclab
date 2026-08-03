@@ -249,9 +249,15 @@ def track_bimanual_handle_targets(
     left_contact_local: Any,
     right_contact_local: Any,
     *,
-    contacts_latched: bool = False,
+    left_contact_latched: bool = False,
+    right_contact_latched: bool = False,
 ) -> SkillTrajectory:
-    """Track both fixed local handle contacts during the second-arm approach."""
+    """Track both fixed local handle contacts during simultaneous closing.
+
+    Either handle may latch first on a new asset.  Keep an already latched
+    wrist at its measured contact and smoothly chase the other handle in the
+    observed pot frame instead of assuming that the left contact always leads.
+    """
 
     steps = trajectory.waypoint_steps
     left_end = steps.get("left_handle_grasp")
@@ -261,9 +267,10 @@ def track_bimanual_handle_targets(
     if current_step < left_end or current_step >= right_end:
         raise ValueError("current_step is outside the second-handle approach")
     start = current_step + 1
+    remaining = right_end - current_step
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
-    if contacts_latched:
+    if left_contact_latched and right_contact_latched:
         left[start : right_end + 1] = _pose(
             observed_left_pose, "observed_left_pose"
         )
@@ -273,9 +280,15 @@ def track_bimanual_handle_targets(
     else:
         left_target = compose_pose(observed_pot_pose, left_contact_local)
         right_target = compose_pose(observed_pot_pose, right_contact_local)
-        left[start : right_end + 1] = left_target
-        right[start : right_end + 1] = interpolate_poses(
-            observed_right_pose, right_target, right_end - current_step
+        left[start : right_end + 1] = (
+            _pose(observed_left_pose, "observed_left_pose")
+            if left_contact_latched
+            else interpolate_poses(observed_left_pose, left_target, remaining)
+        )
+        right[start : right_end + 1] = (
+            _pose(observed_right_pose, "observed_right_pose")
+            if right_contact_latched
+            else interpolate_poses(observed_right_pose, right_target, remaining)
         )
     return SkillTrajectory(
         left_poses=left,

@@ -275,7 +275,8 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         observed_right,
         left_contact,
         right_contact,
-        contacts_latched=True,
+        left_contact_latched=True,
+        right_contact_latched=True,
     )
     assert latched.left_poses[left_end + 1 : right_end + 1] == pytest.approx(
         np.broadcast_to(observed_left, (right_end - left_end, 7))
@@ -283,6 +284,25 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     assert latched.right_poses[left_end + 1 : right_end + 1] == pytest.approx(
         np.broadcast_to(observed_right, (right_end - left_end, 7))
     )
+
+    displaced_left = observed_left.copy()
+    displaced_left[0] -= 0.06
+    right_first = track_bimanual_handle_targets(
+        trajectory,
+        left_end,
+        observed,
+        displaced_left,
+        observed_right,
+        left_contact,
+        right_contact,
+        right_contact_latched=True,
+    )
+    assert right_first.right_poses[left_end + 1 : right_end + 1] == pytest.approx(
+        np.broadcast_to(observed_right, (right_end - left_end, 7))
+    )
+    assert right_first.left_poses[left_end + 1, 0] > displaced_left[0]
+    assert right_first.left_poses[left_end + 1, 0] < observed_left[0]
+    assert right_first.left_poses[right_end] == pytest.approx(observed_left)
 
     corrected, transport = reanchor_bimanual_transport_from_observation(
         grasp,

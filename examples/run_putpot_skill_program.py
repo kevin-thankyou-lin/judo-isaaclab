@@ -756,9 +756,8 @@ def main() -> None:
                     sample["right_eef_pose"],
                     left_handle_contact,
                     right_handle_contact,
-                    contacts_latched=bool(
-                        sample["left_grasp"] and sample["right_grasp"]
-                    ),
+                    left_contact_latched=bool(sample["left_grasp"]),
+                    right_contact_latched=bool(sample["right_grasp"]),
                 )
             if (
                 trajectory is not None
