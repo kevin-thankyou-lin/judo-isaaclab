@@ -23,6 +23,7 @@ from judo_isaaclab.put_pot import (
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_grasp_hold_steps,
+    geometry_conditioned_loaded_jaw_rotation_fraction,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
     geometry_conditioned_peer_contact_transfer,
@@ -406,6 +407,18 @@ def test_single_contact_reseats_from_measured_pad_base_residual():
     assert unchanged == pytest.approx(contact)
     assert cumulative == pytest.approx(0.0)
     assert residual == pytest.approx(0.0)
+
+
+def test_loaded_jaw_twist_scales_only_from_retained_pad_base_residual():
+    assert geometry_conditioned_loaded_jaw_rotation_fraction(
+        [0.0, 8.0], [np.nan, 0.734]
+    ) == pytest.approx(0.934)
+    assert geometry_conditioned_loaded_jaw_rotation_fraction(
+        [0.0, 8.0], [np.nan, 0.22]
+    ) == pytest.approx(LOADED_JAW_REACH_AVOIDANCE_FRACTION)
+    assert geometry_conditioned_loaded_jaw_rotation_fraction(
+        [8.0, 8.0], [0.2, 0.8]
+    ) == pytest.approx(LOADED_JAW_REACH_AVOIDANCE_FRACTION)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

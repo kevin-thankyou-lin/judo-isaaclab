@@ -621,6 +621,39 @@ def twist_jaw_away_from_limited_axis(
     return result, angle
 
 
+def geometry_conditioned_loaded_jaw_rotation_fraction(
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    *,
+    base_fraction: float = LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+    target_pad_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
+    contact_threshold_n: float = 0.1,
+) -> float:
+    """Scale reach-avoidance twist by the retained pad's baseward residual."""
+
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
+    if not np.isfinite(base_fraction) or not 0.0 <= base_fraction <= 1.0:
+        raise ValueError("base_fraction must be in [0, 1]")
+    if (
+        not np.isfinite(target_pad_fraction)
+        or not 0.0 <= target_pad_fraction < 0.5
+    ):
+        raise ValueError("target_pad_fraction must be finite and in [0, 0.5)")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return float(base_fraction)
+    fraction = float(fractions[int(np.flatnonzero(contacting)[0])])
+    if not np.isfinite(fraction):
+        return float(base_fraction)
+    baseward_residual = max(0.0, fraction - target_pad_fraction)
+    return float(np.clip(base_fraction + baseward_residual, 0.0, 1.0))
+
+
 def reanchor_handle_jaw_center_step(
     contact_local: Any,
     pot_root_pose: Any,

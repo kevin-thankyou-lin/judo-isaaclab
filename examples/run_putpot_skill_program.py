@@ -1148,6 +1148,7 @@ def main() -> None:
         peer_single_contact_tracking_residual_world_m = None
         peer_contact_latch_jaw_residual_m = None
         peer_contact_jaw_twist_rad = None
+        peer_contact_jaw_twist_fraction = None
         peer_contact_recovery_residuals_m = []
         peer_contact_pad_reseat_m = 0.0
         peer_contact_pad_reseat_residuals_m = []
@@ -1421,6 +1422,7 @@ def main() -> None:
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
                     reanchor_single_contact_pad_fraction,
+                    geometry_conditioned_loaded_jaw_rotation_fraction,
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
@@ -1455,13 +1457,17 @@ def main() -> None:
                             maximum_position_residual_m=args.max_position_step,
                         )
                     )
+                    peer_contact_jaw_twist_fraction = (
+                        geometry_conditioned_loaded_jaw_rotation_fraction(
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                        )
+                    )
                     loaded_left_world, peer_contact_jaw_twist_rad = (
                         twist_jaw_away_from_limited_axis(
                             loaded_left_world,
                             sample["left_pad_axes_world"],
-                            rotation_fraction=(
-                                LOADED_JAW_REACH_AVOIDANCE_FRACTION
-                            ),
+                            rotation_fraction=peer_contact_jaw_twist_fraction,
                         )
                     )
                     left_handle_contact = compose_pose(
@@ -2419,6 +2425,9 @@ def main() -> None:
                     peer_contact_latch_jaw_residual_m
                 ),
                 "peer_contact_jaw_twist_rad": peer_contact_jaw_twist_rad,
+                "peer_contact_jaw_twist_fraction": (
+                    peer_contact_jaw_twist_fraction
+                ),
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
                 ),
