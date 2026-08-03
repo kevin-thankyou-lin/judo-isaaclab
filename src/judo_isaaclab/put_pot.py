@@ -27,29 +27,35 @@ from .put_marker import (
 
 CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
+CONTACT_FEEDBACK_HORIZON_STEPS = 10
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
-    """Close a measured contact residual uniformly over the remaining steps.
+    """Close a measured contact residual over a fixed feedback horizon.
 
     Contact feedback is recomputed every controller step.  A quintic profile
     would restart at zero velocity on every update and defer almost the entire
-    correction to the last frame; linear residual closure remains continuous
-    under this receding-horizon update and reaches the measured handle frame.
+    correction to the last frame.  Closing over a short fixed horizon also
+    tracks a handle that moves when the opposite gripper contacts the pot.
     """
 
     if steps < 1:
         raise ValueError("contact feedback steps must be positive")
     start_pose = _pose(start, "start")
     target_pose = _pose(target, "target")
-    fraction = np.linspace(1.0 / steps, 1.0, steps)
-    result = np.empty((steps, 7), dtype=np.float64)
-    result[:, :3] = (
+    horizon = min(CONTACT_FEEDBACK_HORIZON_STEPS, steps)
+    fraction = np.linspace(1.0 / horizon, 1.0, horizon)
+    prefix = np.empty((horizon, 7), dtype=np.float64)
+    prefix[:, :3] = (
         start_pose[:3]
         + fraction[:, None] * (target_pose[:3] - start_pose[:3])
     )
-    result[:, 3:] = _slerp(start_pose[3:], target_pose[3:], fraction)
-    return result
+    prefix[:, 3:] = _slerp(start_pose[3:], target_pose[3:], fraction)
+    if horizon == steps:
+        return prefix
+    return np.concatenate(
+        (prefix, np.broadcast_to(target_pose, (steps - horizon, 7)))
+    )
 
 
 def handle_axial_contact_scale(

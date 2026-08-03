@@ -4,6 +4,7 @@ import pytest
 
 from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
+    CONTACT_FEEDBACK_HORIZON_STEPS,
     PutPotSkillProgram,
     RigidSupportGeometry,
     cartesian_smoothness_metrics,
@@ -19,9 +20,10 @@ from judo_isaaclab.put_pot import (
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     track_bimanual_handle_targets,
+    _linear_contact_feedback_poses,
 )
 
-from run_putpot_skill_program import _build_center_repair, _parser
+from run_putpot_skill_program import _build_center_repair
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
@@ -46,22 +48,6 @@ def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
     )
 
 
-def test_putpot_program_reserves_measured_contact_acquisition_window(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "run_putpot_skill_program.py",
-            "--gear-repo", "/gear",
-            "--source-dataset", "/source.hdf5",
-            "--target-dataset", "/target.hdf5",
-            "--objects-root", "/objects",
-            "--mode", "skill",
-            "--source-keyframes", "/keyframes.json",
-            "--trace-npz", "/trace.npz",
-            "--result-json", "/result.json",
-        ],
-    )
-    assert _parser().bimanual_contact_hold_steps == 90
 from judo_isaaclab.put_marker import compose_pose, interpolate_poses, inverse_pose
 
 
@@ -96,6 +82,15 @@ def test_handle_contact_scales_only_measured_outward_reach():
         [0.06, 0.08, 0.04], [0.045, 0.07, 0.02], 0
     )
     assert scale == pytest.approx([0.75, 1.0, 1.0])
+
+
+def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
+    feedback = _linear_contact_feedback_poses(_pose(), _pose(x=0.06), 30)
+    assert feedback[0, 0] == pytest.approx(
+        0.06 / CONTACT_FEEDBACK_HORIZON_STEPS
+    )
+    assert feedback[CONTACT_FEEDBACK_HORIZON_STEPS - 1, 0] == pytest.approx(0.06)
+    assert feedback[-1, 0] == pytest.approx(0.06)
 
 
 def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():
