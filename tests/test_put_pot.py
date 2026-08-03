@@ -8,6 +8,7 @@ from judo_isaaclab.put_pot import (
     RigidSupportGeometry,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
+    handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
     reanchor_centered_unload,
@@ -70,6 +71,13 @@ def test_default_support_alignment_targets_true_cooktop_center():
     assert cooktop_center_error_m(
         _pose(0.731, -0.3, 0.8), cooktop.root_pose
     ) > CENTERED_ON_COOKTOP_TOLERANCE_M
+
+
+def test_handle_contact_scales_only_measured_outward_reach():
+    scale = handle_axial_contact_scale(
+        [0.06, 0.08, 0.04], [0.045, 0.07, 0.02], 0
+    )
+    assert scale == pytest.approx([0.75, 1.0, 1.0])
 
 
 def test_single_smooth_transport_preserves_contacts_and_clears_cooktop():

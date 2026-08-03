@@ -28,6 +28,22 @@ CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
 
 
+def handle_axial_contact_scale(
+    source_handle_size: Any, target_handle_size: Any, handle_axis: int
+) -> np.ndarray:
+    """Scale only outward wrist reach with measured handle-axis extent."""
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    scale = np.ones(3, dtype=np.float64)
+    scale[handle_axis] = target[handle_axis] / source[handle_axis]
+    return scale
+
+
 @dataclass(frozen=True)
 class SmoothBimanualTransport:
     """One sampled pot path and the two rigidly attached handle paths."""

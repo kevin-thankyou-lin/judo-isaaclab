@@ -313,6 +313,11 @@ def _build_skill(
             return parts.negative_handle_frame
         return parts.positive_handle_frame
 
+    def handle_size(parts, side):
+        if side < 0:
+            return parts.negative_handle_size
+        return parts.positive_handle_size
+
     def transfer_initial(frame_name: str, arm: str) -> np.ndarray:
         frame = frames[frame_name]
         side = left_side if arm == "left" else right_side
@@ -320,12 +325,20 @@ def _build_skill(
         target_handle = handle(target_parts, side)
         source_frame = compose_pose(frame["pot_pose"], source_handle)
         target_frame = compose_pose(target_initial.root_pose, target_handle)
-        # The authored handle center changes with the asset; the rigid
-        # gripper-to-contact transform does not scale with handle thickness.
+        # The authored handle center and outward reach change with the asset.
+        # Scale only along the measured handle axis; transverse fingertip
+        # clearances stay rigid so thin handles are not missed vertically.
+        from judo_isaaclab.put_pot import handle_axial_contact_scale
+
         return transfer_pose(
             frame[f"{arm}_eef_pose"],
             source_frame,
             target_frame,
+            local_position_scale=handle_axial_contact_scale(
+                handle_size(source_parts, side),
+                handle_size(target_parts, side),
+                target_parts.handle_axis,
+            ),
         )
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
