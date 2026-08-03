@@ -34,6 +34,7 @@ from judo_isaaclab.put_pot import (
     mirror_handle_position_in_receiving_jaw_frame,
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
+    reanchor_bimanual_contact_hold,
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
     reanchor_centered_support,
@@ -521,12 +522,25 @@ def test_right_first_peer_grasp_holds_closed_contact_before_transport():
     )
     trajectory = program.build()
     left_end = trajectory.waypoint_steps["left_handle_grasp"]
-    assert left_end == 8
-    assert trajectory.left_poses[left_end - 2 : left_end + 1] == pytest.approx(
+    hold_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    assert left_end == 5
+    assert hold_end == 8
+    assert trajectory.left_poses[left_end + 1 : hold_end + 1] == pytest.approx(
         np.broadcast_to(_pose(0.2), (3, 7))
     )
-    assert trajectory.grippers[left_end - 2 : left_end + 1] == pytest.approx(
+    assert trajectory.grippers[left_end + 1 : hold_end + 1] == pytest.approx(
         np.zeros((3, 2))
+    )
+    observed_left = _pose(0.21, 0.01)
+    observed_right = _pose(0.21, 1.01)
+    latched = reanchor_bimanual_contact_hold(
+        trajectory, left_end, observed_left, observed_right
+    )
+    assert latched.left_poses[left_end + 1 : hold_end + 1] == pytest.approx(
+        np.broadcast_to(observed_left, (3, 7))
+    )
+    assert latched.right_poses[left_end + 1 : hold_end + 1] == pytest.approx(
+        np.broadcast_to(observed_right, (3, 7))
     )
 
 

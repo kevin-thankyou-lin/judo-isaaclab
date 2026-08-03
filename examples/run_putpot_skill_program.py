@@ -1064,10 +1064,19 @@ def main() -> None:
         # post-grasp semantic path with integrated Cartesian IK in every skill
         # rollout instead of falling back to the demonstration joint nominal.
         integrate_target_ik = trajectory is not None
-        grasp_complete_step = (
+        contact_close_complete_step = (
             max(
                 trajectory.waypoint_steps["left_handle_grasp"],
                 trajectory.waypoint_steps["right_handle_grasp"],
+            )
+            if trajectory is not None else None
+        )
+        grasp_complete_step = (
+            max(
+                contact_close_complete_step,
+                trajectory.waypoint_steps.get(
+                    "bimanual_contact_hold", contact_close_complete_step
+                ),
             )
             if trajectory is not None else None
         )
@@ -1361,7 +1370,7 @@ def main() -> None:
                 missing_finger_streaks["left"] = 0
             if (
                 trajectory is not None
-                and pregrasp_complete_step <= step < grasp_complete_step
+                and pregrasp_complete_step <= step < contact_close_complete_step
             ):
                 from judo_isaaclab.put_pot import (
                     CONTACT_FEEDBACK_HORIZON_STEPS,
@@ -1435,6 +1444,22 @@ def main() -> None:
                         if milestone_feedback_horizon_steps is not None
                         else CONTACT_FEEDBACK_HORIZON_STEPS
                     ),
+                )
+            if (
+                trajectory is not None
+                and contact_close_complete_step <= step < grasp_complete_step
+                and sample["left_grasp"]
+                and sample["right_grasp"]
+            ):
+                from judo_isaaclab.put_pot import (
+                    reanchor_bimanual_contact_hold,
+                )
+
+                trajectory = reanchor_bimanual_contact_hold(
+                    trajectory,
+                    step,
+                    sample["left_eef_pose"],
+                    sample["right_eef_pose"],
                 )
             if (
                 trajectory is not None

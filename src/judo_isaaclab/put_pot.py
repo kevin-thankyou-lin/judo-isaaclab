@@ -1251,6 +1251,33 @@ def track_bimanual_handle_targets(
     )
 
 
+def reanchor_bimanual_contact_hold(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Hold a newly observed two-arm contact before transport begins."""
+
+    hold_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
+    if hold_end is None:
+        raise ValueError("trajectory has no bimanual contact hold")
+    if current_step < 0 or current_step >= hold_end:
+        raise ValueError("current_step is outside the bimanual contact hold")
+    start = current_step + 1
+    left = trajectory.left_poses.copy()
+    right = trajectory.right_poses.copy()
+    left[start : hold_end + 1] = _pose(observed_left_pose, "observed_left_pose")
+    right[start : hold_end + 1] = _pose(observed_right_pose, "observed_right_pose")
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 def reanchor_bimanual_transport_from_observation(
     trajectory: SkillTrajectory,
     observed_pot_pose: Any,
@@ -1993,7 +2020,7 @@ class PutPotSkillProgram:
             )
         if contact_hold_steps:
             self._append(
-                "left_handle_grasp" if right_first else "right_handle_grasp",
+                "bimanual_contact_hold",
                 "bimanual_handle_grasp",
                 contact_hold_steps,
             )
