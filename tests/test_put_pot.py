@@ -18,7 +18,6 @@ from judo_isaaclab.put_pot import (
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
     center_handle_between_finger_pads,
-    continue_contact_recovery_without_force,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_grasp_hold_steps,
@@ -43,6 +42,7 @@ from judo_isaaclab.put_pot import (
     reanchor_missing_finger_pad_depth,
     reanchor_centered_support,
     reanchor_centered_unload,
+    reanchor_handle_jaw_center_step,
     reanchor_centered_release,
     reanchor_centered_lowering,
     reanchor_second_handle_grasp,
@@ -465,18 +465,18 @@ def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
     assert result[3:] == pytest.approx(commanded[3:])
 
 
-def test_contact_recovery_continues_signed_residual_through_force_gap():
-    contact, signed = continue_contact_recovery_without_force(
-        _pose(), 0.018, 0.042374, [0.0, 2.0, 0.0]
+def test_contact_recovery_remeasures_authored_jaw_residual_each_step():
+    points = np.asarray(
+        [[0.02, -0.01, 0.0], [0.02, 0.01, 0.0], [0.04, -0.01, 0.0], [0.04, 0.01, 0.0]]
     )
-    assert signed == pytest.approx(0.019)
-    assert contact[:3] == pytest.approx([0.0, 0.001, 0.0])
-
-    contact, signed = continue_contact_recovery_without_force(
-        contact, signed, 0.0194, [0.0, 1.0, 0.0]
+    contact, residual, applied = reanchor_handle_jaw_center_step(
+        _pose(y=0.03), _pose(), points
     )
-    assert signed == pytest.approx(0.0194)
-    assert contact[:3] == pytest.approx([0.0, 0.0014, 0.0])
+    assert residual > 0.001
+    assert applied == pytest.approx(0.001)
+    assert handle_jaw_center_offset_m(contact, _pose(), points) == pytest.approx(
+        residual - applied
+    )
 
 
 def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():

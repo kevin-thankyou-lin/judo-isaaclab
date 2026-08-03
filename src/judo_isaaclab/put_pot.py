@@ -512,34 +512,26 @@ def preserve_loaded_contact_target(
     return result, residual
 
 
-def continue_contact_recovery_without_force(
+def reanchor_handle_jaw_center_step(
     contact_local: Any,
-    signed_correction_m: float,
-    target_signed_correction_m: float,
-    jaw_axis_local: Any,
+    pot_root_pose: Any,
+    handle_points_local: Any,
     *,
     step_m: float = MISSING_FINGER_CONTACT_STEP_M,
-) -> tuple[np.ndarray, float]:
-    """Continue a measured signed jaw correction through a contact gap."""
+) -> tuple[np.ndarray, float, float]:
+    """Close the current authored handle-to-jaw residual by one bounded step."""
 
     contact = _pose(contact_local, "contact_local")
-    axis = np.asarray(jaw_axis_local, dtype=np.float64)
-    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
-        raise ValueError("jaw_axis_local must contain three finite values")
-    norm = float(np.linalg.norm(axis))
-    if norm <= 1.0e-9:
-        raise ValueError("jaw_axis_local must be nonzero")
-    if not np.isfinite(signed_correction_m) or not np.isfinite(
-        target_signed_correction_m
-    ):
-        raise ValueError("signed corrections must be finite")
     if not np.isfinite(step_m) or step_m <= 0.0:
         raise ValueError("step_m must be finite and positive")
-    remaining = target_signed_correction_m - signed_correction_m
-    delta = float(np.clip(remaining, -step_m, step_m))
-    result = contact.copy()
-    result[:3] += delta * axis / norm
-    return result, float(signed_correction_m + delta)
+    root = _pose(pot_root_pose, "pot_root_pose")
+    world = compose_pose(root, contact)
+    residual = handle_jaw_center_offset_m(world, root, handle_points_local)
+    applied = float(np.clip(residual, -step_m, step_m))
+    centered = center_handle_between_finger_pads(
+        world, residual, maximum_correction_m=step_m
+    )
+    return compose_pose(inverse_pose(root), centered), residual, applied
 
 
 def reanchor_missing_finger_contact(

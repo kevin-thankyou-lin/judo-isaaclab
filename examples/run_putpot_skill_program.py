@@ -630,6 +630,7 @@ def _build_skill(
 
     from judo_isaaclab.put_pot import (
         CONTACT_FEEDBACK_HORIZON_STEPS,
+        MISSING_FINGER_CONTACT_SETTLE_STEPS,
         geometry_conditioned_grasp_hold_steps,
         geometry_conditioned_peer_contact_transfer,
         geometry_conditioned_right_first_close,
@@ -644,7 +645,7 @@ def _build_skill(
     )
     grasp_geometry["left"]["right_first_close"] = right_first_close
     peer_contact_hold_steps = (
-        CONTACT_FEEDBACK_HORIZON_STEPS
+        MISSING_FINGER_CONTACT_SETTLE_STEPS
         if geometry_conditioned_peer_contact_transfer(
             handle_size(target_parts, left_side),
             handle_size(target_parts, right_side),
@@ -1097,7 +1098,6 @@ def main() -> None:
             from judo_isaaclab.put_marker import (
                 compose_pose,
                 inverse_pose,
-                quaternion_rotate,
             )
 
             left_handle_contact = compose_pose(
@@ -1130,8 +1130,8 @@ def main() -> None:
         peer_single_contact_latch_support_frames = None
         peer_single_contact_latch_local_m = None
         peer_single_contact_tracking_residual_world_m = None
-        peer_contact_recovery_axis_local = None
-        peer_contact_recovery_target_signed_m = None
+        peer_contact_latch_jaw_residual_m = None
+        peer_contact_recovery_residuals_m = []
         contact_hold_latch_step = None
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
@@ -1388,12 +1388,11 @@ def main() -> None:
                 missing_finger_streaks["left"] = 0
             if (
                 trajectory is not None
-                and pregrasp_complete_step <= step < contact_close_complete_step
+                and pregrasp_complete_step <= step < grasp_complete_step
             ):
                 from judo_isaaclab.put_pot import (
                     CONTACT_FEEDBACK_HORIZON_STEPS,
                     MISSING_FINGER_CONTACT_DELAY_STEPS,
-                    MISSING_FINGER_CONTACT_LIMIT_M,
                     SINGLE_FINGER_CONTACT_LATCH_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
@@ -1440,20 +1439,14 @@ def main() -> None:
                     peer_single_contact_tracking_residual_world_m = (
                         retained_residual.tolist()
                     )
-                    jaw_axis_world = (
-                        np.asarray(sample["left_pad_centers_world"])[1]
-                        - np.asarray(sample["left_pad_centers_world"])[0]
-                    )
-                    peer_contact_recovery_axis_local = quaternion_rotate(
-                        inverse_pose(sample["pot_pose"])[3:], jaw_axis_world
-                    )
-                    contacting_left = (
-                        np.asarray(sample["left_finger_forces_n"]) >= 0.1
-                    )
-                    recovery_sign = 1.0 if contacting_left[1] else -1.0
-                    peer_contact_recovery_target_signed_m = recovery_sign * min(
-                        abs(float(milestone_jaw_center_residual_m)),
-                        MISSING_FINGER_CONTACT_LIMIT_M,
+                    from judo_isaaclab.put_pot import handle_jaw_center_offset_m
+
+                    peer_contact_latch_jaw_residual_m = (
+                        handle_jaw_center_offset_m(
+                            loaded_left_world,
+                            sample["pot_pose"],
+                            target_left_handle_points,
+                        )
                     )
                     milestone_feedback_horizon_steps = 1
 
@@ -1513,21 +1506,27 @@ def main() -> None:
                 if (
                     peer_single_contact_latch_step is not None
                     and not bool(sample["left_grasp"])
-                    and peer_contact_recovery_axis_local is not None
-                    and peer_contact_recovery_target_signed_m is not None
                 ):
                     from judo_isaaclab.put_pot import (
-                        continue_contact_recovery_without_force,
+                        reanchor_handle_jaw_center_step,
                     )
 
                     (
                         left_handle_contact,
-                        missing_finger_corrections["left"],
-                    ) = continue_contact_recovery_without_force(
+                        jaw_residual_m,
+                        jaw_applied_m,
+                    ) = reanchor_handle_jaw_center_step(
                         left_handle_contact,
-                        missing_finger_corrections["left"],
-                        peer_contact_recovery_target_signed_m,
-                        peer_contact_recovery_axis_local,
+                        sample["pot_pose"],
+                        target_left_handle_points,
+                    )
+                    missing_finger_corrections["left"] -= jaw_applied_m
+                    peer_contact_recovery_residuals_m.append(
+                        {
+                            "step": step,
+                            "signed_residual_m": jaw_residual_m,
+                            "applied_m": jaw_applied_m,
+                        }
                     )
 
                 trajectory = track_bimanual_handle_targets(
@@ -2144,13 +2143,11 @@ def main() -> None:
                 "peer_single_contact_tracking_residual_world_m": (
                     peer_single_contact_tracking_residual_world_m
                 ),
-                "peer_contact_recovery_axis_local": (
-                    None
-                    if peer_contact_recovery_axis_local is None
-                    else peer_contact_recovery_axis_local.tolist()
+                "peer_contact_latch_jaw_residual_m": (
+                    peer_contact_latch_jaw_residual_m
                 ),
-                "peer_contact_recovery_target_signed_m": (
-                    peer_contact_recovery_target_signed_m
+                "peer_contact_recovery_residuals_m": (
+                    peer_contact_recovery_residuals_m
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
                 "contact_hold_retention_local_m": (
