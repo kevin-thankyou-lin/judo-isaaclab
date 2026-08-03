@@ -9,6 +9,7 @@ from judo_isaaclab.put_marker import (
     interpolate_poses,
     inverse_pose,
     pose_from_matrix,
+    reanchor_marker_placement,
     transfer_pose,
 )
 
@@ -171,3 +172,21 @@ def test_put_marker_skills_build_one_continuous_named_rollout():
     release_step = trajectory.waypoint_steps["marker_release"]
     assert trajectory.grippers[release_step, 0] == pytest.approx(-0.0475)
     assert trajectory.grippers[-1, 1] == pytest.approx(-0.0475)
+
+    observed_marker = _pose(0.2, 0.2, 0.3)
+    observed_left = _pose(0.3, 0.2, 0.4)
+    adjusted = reanchor_marker_placement(
+        trajectory,
+        _pose(0.5, -0.1, 0.4),
+        _pose(0.6, -0.1, 0.2),
+        observed_marker,
+        observed_left,
+    )
+    cavity_end = trajectory.waypoint_steps["marker_cavity"]
+    assert adjusted.left_poses[cavity_end] == pytest.approx(
+        _pose(0.7, -0.1, 0.3)
+    )
+    drawer_open_end = trajectory.waypoint_steps["drawer_open"]
+    assert adjusted.left_poses[: drawer_open_end + 1] == pytest.approx(
+        trajectory.left_poses[: drawer_open_end + 1]
+    )

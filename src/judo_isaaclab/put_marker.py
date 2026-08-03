@@ -246,6 +246,57 @@ class DrawerGeometry:
         )
 
 
+def reanchor_marker_placement(
+    trajectory: "SkillTrajectory",
+    intended_collision_clear_marker_pose: Any,
+    intended_cavity_marker_pose: Any,
+    observed_marker_pose: Any,
+    observed_left_pose: Any,
+) -> "SkillTrajectory":
+    """Preserve the observed grasp while following drawer-local marker poses."""
+
+    required = (
+        "drawer_open",
+        "marker_collision_clear",
+        "marker_cavity",
+        "marker_release",
+        "marker_settle",
+        "left_withdraw",
+    )
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"placement trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    contact = compose_pose(inverse_pose(observed_marker_pose), observed_left_pose)
+    corrected_clear = compose_pose(intended_collision_clear_marker_pose, contact)
+    corrected_cavity = compose_pose(intended_cavity_marker_pose, contact)
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    start = steps["drawer_open"] + 1
+    clear_end = steps["marker_collision_clear"]
+    cavity_end = steps["marker_cavity"]
+    settle_end = steps["marker_settle"]
+    withdraw_end = steps["left_withdraw"]
+    left[start : clear_end + 1] = interpolate_poses(
+        observed_left_pose, corrected_clear, clear_end - start + 1
+    )
+    left[clear_end + 1 : cavity_end + 1] = interpolate_poses(
+        corrected_clear, corrected_cavity, cavity_end - clear_end
+    )
+    left[cavity_end + 1 : settle_end + 1] = corrected_cavity
+    left[settle_end + 1 : withdraw_end + 1] = interpolate_poses(
+        corrected_cavity,
+        trajectory.left_poses[withdraw_end],
+        withdraw_end - settle_end,
+    )
+    return SkillTrajectory(
+        left_poses=left,
+        right_poses=trajectory.right_poses.copy(),
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 def geometry_conditioned_drawer_open_position(
     geometry: DrawerGeometry,
     requested_m: float,

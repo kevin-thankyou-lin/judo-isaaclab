@@ -316,6 +316,18 @@ def _build_skill(
             local_position_scale=target_geometry.cavity_size / source_geometry.cavity_size,
         )
 
+    def marker_in_drawer(name: str) -> np.ndarray:
+        index = SEMANTIC_INDICES[name]
+        source_q = float(np.asarray(source["drawer_joint"])[index, 1])
+        return transfer_pose(
+            np.asarray(source["marker_pose"])[index],
+            source_geometry.drawer_frame(source_q),
+            target_geometry.drawer_frame(working_q),
+            local_position_scale=(
+                target_geometry.cavity_size / source_geometry.cavity_size
+            ),
+        )
+
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
@@ -371,7 +383,11 @@ def _build_skill(
     trajectory = program.build()
     if trajectory.steps != 607:
         raise AssertionError(f"expected 607 programmed steps, got {trajectory.steps}")
-    return trajectory
+    return (
+        trajectory,
+        marker_in_drawer("marker_collision_clear"),
+        marker_in_drawer("marker_cavity"),
+    )
 
 
 def _sparse_joint_nominal(source, handle_pull_joint_extension: float) -> np.ndarray:
@@ -815,7 +831,7 @@ def main() -> None:
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
         integrated_target_handle_ik = True
-        trajectory = (
+        trajectory, intended_marker_clear, intended_marker_cavity = (
             _build_skill(
                 source,
                 target,
@@ -828,7 +844,7 @@ def main() -> None:
                 integrated_target_handle_ik,
                 args.rigid_handle_pull_m,
             )
-            if args.mode == "skill" else None
+            if args.mode == "skill" else (None, None, None)
         )
         joint_nominal = (
             _sparse_joint_nominal(source, args.handle_pull_joint_extension)
@@ -899,6 +915,16 @@ def main() -> None:
                 desired_right_trace.append(desired_right)
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
+            if trajectory is not None and step == trajectory.waypoint_steps["drawer_open"]:
+                from judo_isaaclab.put_marker import reanchor_marker_placement
+
+                trajectory = reanchor_marker_placement(
+                    trajectory,
+                    intended_marker_clear,
+                    intended_marker_cavity,
+                    sample["marker_pose"],
+                    sample["left_eef_pose"],
+                )
             demo_recorder.append(
                 action,
                 env.scene.get_state(is_relative=False),
@@ -1069,6 +1095,7 @@ def main() -> None:
                     "rigid_handle_pull_m": args.rigid_handle_pull_m,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
+                    "marker_placement_feedback_reanchor": trajectory is not None,
                 },
             },
             "provenance": {
