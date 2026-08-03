@@ -25,6 +25,7 @@ from judo_isaaclab.put_pot import (
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
+    mirror_handle_position_in_receiving_jaw_frame,
     reanchor_bimanual_transport_from_observation,
     reanchor_centered_support,
     reanchor_centered_unload,
@@ -356,14 +357,35 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
 def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
     right_handle = _pose(x=0.16)
     left_handle = np.asarray([-0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
-    right_pose = np.asarray([0.21, -0.04, 0.08, 0.92387953, 0.0, 0.0, 0.38268343])
+    right_pose = np.asarray([0.16, -0.04, 0.08, 0.92387953, 0.0, 0.0, 0.38268343])
     left_pose = np.asarray([-0.18, 0.03, 0.09, 0.70710678, 0.70710678, 0.0, 0.0])
+    handle_points = np.asarray(
+        [
+            [-0.20, -0.03, -0.02],
+            [-0.20, -0.03, 0.02],
+            [-0.14, 0.01, -0.02],
+            [-0.14, 0.01, 0.02],
+        ]
+    )
     mirrored = transfer_pose(right_pose, right_handle, left_handle)
-    result = left_pose.copy()
-    result[:3] = mirrored[:3]
+    uncentered = left_pose.copy()
+    uncentered[:3] = mirrored[:3]
+    assert abs(handle_jaw_center_offset_m(uncentered, _pose(), handle_points)) > 1.0e-3
 
-    assert result[:3] == pytest.approx(mirrored[:3])
+    result, offset = mirror_handle_position_in_receiving_jaw_frame(
+        right_pose,
+        right_handle,
+        left_pose,
+        left_handle,
+        _pose(),
+        handle_points,
+    )
+
+    assert offset != pytest.approx(0.0)
     assert result[3:] == pytest.approx(left_pose[3:])
+    assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
+        0.0, abs=1.0e-9
+    )
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

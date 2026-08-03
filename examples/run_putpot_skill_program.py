@@ -527,16 +527,44 @@ def _build_skill(
         left_handle_world = compose_pose(
             target_initial.root_pose, handle(target_parts, left_side)
         )
-        mirrored_left_grasp = transfer_pose(
-            right_grasp, right_handle_world, left_handle_world
+        from judo_isaaclab.put_pot import (
+            mirror_handle_position_in_receiving_jaw_frame,
+        )
+
+        boundary = target_parts.body_xy_min[target_parts.handle_axis]
+        left_handle_points = np.concatenate(
+            [
+                points
+                for points in target_components
+                if np.min(points[:, target_parts.handle_axis])
+                < boundary - 1.0e-4
+            ]
+        )
+        mirrored_left_grasp, post_mirror_jaw_offset = (
+            mirror_handle_position_in_receiving_jaw_frame(
+                right_grasp,
+                right_handle_world,
+                left_grasp,
+                left_handle_world,
+                target_initial.root_pose,
+                left_handle_points,
+            )
         )
         mirrored_left_pregrasp = transfer_pose(
             right_pregrasp, right_handle_world, left_handle_world
         )
-        left_grasp[:3] = mirrored_left_grasp[:3]
-        left_pregrasp[:3] = mirrored_left_pregrasp[:3]
+        receiving_jaw_correction = mirrored_left_grasp[:3] - transfer_pose(
+            right_grasp, right_handle_world, left_handle_world
+        )[:3]
+        left_grasp = mirrored_left_grasp
+        left_pregrasp[:3] = (
+            mirrored_left_pregrasp[:3] + receiving_jaw_correction
+        )
         grasp_poses["left"] = left_grasp.copy()
         grasp_geometry["left"]["target_symmetric_position_from"] = "right"
+        grasp_geometry["left"]["post_mirror_jaw_center_offset_m"] = (
+            post_mirror_jaw_offset
+        )
     # Anchor both contact transforms to the target pot at the transferred
     # grasp.  This makes the first smooth-transport sample continuous for every
     # asset scale instead of switching to a source-root convention.

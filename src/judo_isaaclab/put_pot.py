@@ -359,6 +359,36 @@ def center_handle_between_finger_pads(
     return result
 
 
+def mirror_handle_position_in_receiving_jaw_frame(
+    reference_pose: Any,
+    reference_handle_frame: Any,
+    receiving_pose: Any,
+    receiving_handle_frame: Any,
+    pot_root_pose: Any,
+    receiving_handle_points_local: Any,
+) -> tuple[np.ndarray, float]:
+    """Mirror a proven position, then center it for the receiving arm's jaw.
+
+    Mirroring the complete reference pose discards the receiving arm's useful
+    orientation.  Mirroring only its position can instead move the authored
+    handle away from the receiving jaw center because that orientation has a
+    different jaw axis.  Re-measure and remove that signed residual after the
+    positional transfer.
+    """
+
+    mirrored = transfer_pose(
+        _pose(reference_pose, "reference_pose"),
+        _pose(reference_handle_frame, "reference_handle_frame"),
+        _pose(receiving_handle_frame, "receiving_handle_frame"),
+    )
+    result = _pose(receiving_pose, "receiving_pose")
+    result[:3] = mirrored[:3]
+    offset = handle_jaw_center_offset_m(
+        result, pot_root_pose, receiving_handle_points_local
+    )
+    return center_handle_between_finger_pads(result, offset), offset
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 
