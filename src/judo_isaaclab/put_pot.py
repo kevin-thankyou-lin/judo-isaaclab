@@ -49,6 +49,7 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 YAM_FINGER_PAD_AXIS_LENGTH_M = float(np.linalg.norm([0.068, 0.0, -0.003]))
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
+LOADED_CONTACT_MOTION_PRELOAD_M = 0.006
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
@@ -533,6 +534,40 @@ def preserve_loaded_contact_target(
     result[:3] += residual
     result[3:] = commanded[3:]
     return result, residual
+
+
+def reinforce_loaded_contact_for_motion(
+    contact_local: Any,
+    observed_contact_local: Any,
+    handle_size: Any,
+    handle_axis: int,
+    *,
+    requested_preload_m: float = LOADED_CONTACT_MOTION_PRELOAD_M,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Add bounded preload along a measured object-local compression residual."""
+
+    contact = _pose(contact_local, "contact_local")
+    observed = _pose(observed_contact_local, "observed_contact_local")
+    size = np.asarray(handle_size, dtype=np.float64)
+    if size.shape != (3,) or np.any(size <= 0.0):
+        raise ValueError("handle_size must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if not np.isfinite(requested_preload_m) or requested_preload_m < 0.0:
+        raise ValueError("requested_preload_m must be finite and nonnegative")
+    residual = contact[:3] - observed[:3]
+    norm = float(np.linalg.norm(residual))
+    if norm <= 1.0e-9 or requested_preload_m == 0.0:
+        return contact.copy(), np.zeros(3, dtype=np.float64)
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    preload_m = min(
+        requested_preload_m,
+        0.5 * min(float(size[axis]) for axis in transverse),
+    )
+    preload = preload_m * residual / norm
+    result = contact.copy()
+    result[:3] += preload
+    return result, preload
 
 
 def twist_jaw_away_from_limited_axis(

@@ -1163,6 +1163,7 @@ def main() -> None:
         transport_reference_right_contact_local = None
         transport_expected_left_tracking_residual_local = None
         transport_expected_right_tracking_residual_local = None
+        transport_motion_preload_local_m = None
         center_slide_reanchor_steps = []
         center_slide_reanchor_signed_residuals_local_m = []
         center_slide_reference_right_contact_local = None
@@ -1587,6 +1588,7 @@ def main() -> None:
                     maximum_bimanual_position_step_m,
                     reanchor_bimanual_contact_hold,
                     reanchor_bimanual_transport_from_observation,
+                    reinforce_loaded_contact_for_motion,
                 )
 
                 if (
@@ -1636,6 +1638,32 @@ def main() -> None:
                         reference_hold_right_contact_local,
                     )
                     if step + 1 == grasp_complete_step:
+                        observed_inverse = inverse_pose(sample["pot_pose"])
+                        observed_left_local = compose_pose(
+                            observed_inverse, sample["left_eef_pose"]
+                        )
+                        observed_right_local = compose_pose(
+                            observed_inverse, sample["right_eef_pose"]
+                        )
+                        (
+                            retained_hold_left_contact_local,
+                            transport_motion_preload,
+                        ) = reinforce_loaded_contact_for_motion(
+                            retained_hold_left_contact_local,
+                            observed_left_local,
+                            (
+                                target_parts.negative_handle_size
+                                if int(
+                                    handle_grasp_geometry["left"]["handle_side"]
+                                )
+                                < 0
+                                else target_parts.positive_handle_size
+                            ),
+                            target_parts.handle_axis,
+                        )
+                        transport_motion_preload_local_m = (
+                            transport_motion_preload.tolist()
+                        )
                         trajectory, retained_transport = (
                             reanchor_bimanual_transport_from_observation(
                                 trajectory,
@@ -1667,13 +1695,6 @@ def main() -> None:
                         )
                         transport_reference_right_contact_local = (
                             reference_hold_right_contact_local
-                        )
-                        observed_inverse = inverse_pose(sample["pot_pose"])
-                        observed_left_local = compose_pose(
-                            observed_inverse, sample["left_eef_pose"]
-                        )
-                        observed_right_local = compose_pose(
-                            observed_inverse, sample["right_eef_pose"]
                         )
                         transport_expected_left_tracking_residual_local = (
                             retained_hold_left_contact_local[:3]
@@ -2379,6 +2400,9 @@ def main() -> None:
                         else transport_expected_right_tracking_residual_local.tolist()
                     ),
                 },
+                "transport_motion_preload_local_m": (
+                    transport_motion_preload_local_m
+                ),
                 "center_slide_reanchor_steps": center_slide_reanchor_steps,
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,

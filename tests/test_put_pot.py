@@ -36,6 +36,7 @@ from judo_isaaclab.put_pot import (
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     preserve_loaded_contact_target,
+    reinforce_loaded_contact_for_motion,
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
     reanchor_bimanual_contact_hold,
@@ -506,6 +507,28 @@ def test_loaded_contact_residual_survives_object_local_hold_reanchor():
 
     assert np.linalg.norm(residual) == pytest.approx(0.025)
     assert np.linalg.norm(hold.left_poses[first_hold, :3] - observed[:3]) > 0.025
+
+
+def test_motion_preload_follows_loaded_residual_and_handle_geometry():
+    observed = _pose(0.10, 0.20, 0.30)
+    loaded = _pose(0.12, 0.20, 0.30)
+    reinforced, preload = reinforce_loaded_contact_for_motion(
+        loaded,
+        observed,
+        [0.057, 0.083, 0.0212],
+        0,
+    )
+    assert preload == pytest.approx([0.006, 0.0, 0.0])
+    assert reinforced[:3] == pytest.approx([0.126, 0.20, 0.30])
+
+    bounded, bounded_preload = reinforce_loaded_contact_for_motion(
+        loaded,
+        observed,
+        [0.057, 0.008, 0.010],
+        0,
+    )
+    assert np.linalg.norm(bounded_preload) == pytest.approx(0.004)
+    assert bounded[0] == pytest.approx(0.124)
 
 
 def test_loaded_transport_reference_opposes_drift_without_becoming_observation():
