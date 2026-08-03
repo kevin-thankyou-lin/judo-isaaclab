@@ -1039,6 +1039,8 @@ def main() -> None:
         transport_reanchor_evaluation_steps = []
         transport_reanchor_signed_residuals_world_m = []
         transport_reanchor_rejections = []
+        transport_reference_left_contact_local = None
+        transport_reference_right_contact_local = None
         transverse_handle_axes = [
             axis for axis in range(3) if axis != target_parts.handle_axis
         ]
@@ -1285,8 +1287,11 @@ def main() -> None:
                 if transport_contact_reanchor_required(
                     trajectory,
                     step,
+                    sample["pot_pose"],
                     sample["left_eef_pose"],
                     sample["right_eef_pose"],
+                    transport_reference_left_contact_local,
+                    transport_reference_right_contact_local,
                     last_reanchor_step=(
                         transport_reanchor_evaluation_steps[-1]
                         if transport_reanchor_evaluation_steps
@@ -1295,6 +1300,13 @@ def main() -> None:
                     tracking_tolerance_m=transport_contact_tracking_tolerance_m,
                 ):
                     transport_reanchor_evaluation_steps.append(step)
+                    observed_pot_inverse = inverse_pose(sample["pot_pose"])
+                    observed_left_contact_local = compose_pose(
+                        observed_pot_inverse, sample["left_eef_pose"]
+                    )
+                    observed_right_contact_local = compose_pose(
+                        observed_pot_inverse, sample["right_eef_pose"]
+                    )
                     signed_residual = {
                         "step": step,
                         "left": (
@@ -1305,6 +1317,20 @@ def main() -> None:
                             trajectory.right_poses[step, :3]
                             - np.asarray(sample["right_eef_pose"])[:3]
                         ).tolist(),
+                        "contact_frame_local": {
+                            "left": (
+                                np.zeros(3, dtype=np.float64)
+                                if transport_reference_left_contact_local is None
+                                else observed_left_contact_local[:3]
+                                - transport_reference_left_contact_local[:3]
+                            ).tolist(),
+                            "right": (
+                                np.zeros(3, dtype=np.float64)
+                                if transport_reference_right_contact_local is None
+                                else observed_right_contact_local[:3]
+                                - transport_reference_right_contact_local[:3]
+                            ).tolist(),
+                        },
                     }
                     candidate_trajectory, observed_transport = (
                         reanchor_bimanual_transport_from_observation(
@@ -1328,6 +1354,12 @@ def main() -> None:
                     )
                     if candidate_maximum_step_m <= transport_reanchor_position_limit_m:
                         trajectory = candidate_trajectory
+                        transport_reference_left_contact_local = (
+                            observed_left_contact_local
+                        )
+                        transport_reference_right_contact_local = (
+                            observed_right_contact_local
+                        )
                         transport_reanchor_steps.append(step)
                         transport_reanchor_signed_residuals_world_m.append(
                             signed_residual

@@ -1251,8 +1251,11 @@ def reanchor_bimanual_transport_from_observation(
 def transport_contact_reanchor_required(
     trajectory: SkillTrajectory,
     step: int,
+    observed_pot_pose: Any,
     observed_left_pose: Any,
     observed_right_pose: Any,
+    reference_left_contact_local: Any | None,
+    reference_right_contact_local: Any | None,
     *,
     last_reanchor_step: int | None,
     tracking_tolerance_m: float,
@@ -1269,17 +1272,27 @@ def transport_contact_reanchor_required(
         return False
     if last_reanchor_step is None:
         return True
+    if reference_left_contact_local is None or reference_right_contact_local is None:
+        raise ValueError("accepted reanchor contact frames are required")
     if step - last_reanchor_step < minimum_interval_steps:
         return False
-    left_error = np.linalg.norm(
-        _pose(observed_left_pose, "observed_left_pose")[:3]
-        - trajectory.left_poses[step, :3]
+    pot_pose = _pose(observed_pot_pose, "observed_pot_pose")
+    inverse_pot = inverse_pose(pot_pose)
+    observed_left_contact = compose_pose(
+        inverse_pot, _pose(observed_left_pose, "observed_left_pose")
     )
-    right_error = np.linalg.norm(
-        _pose(observed_right_pose, "observed_right_pose")[:3]
-        - trajectory.right_poses[step, :3]
+    observed_right_contact = compose_pose(
+        inverse_pot, _pose(observed_right_pose, "observed_right_pose")
     )
-    return bool(max(left_error, right_error) > tracking_tolerance_m)
+    left_drift = np.linalg.norm(
+        observed_left_contact[:3]
+        - _pose(reference_left_contact_local, "reference_left_contact_local")[:3]
+    )
+    right_drift = np.linalg.norm(
+        observed_right_contact[:3]
+        - _pose(reference_right_contact_local, "reference_right_contact_local")[:3]
+    )
+    return bool(max(left_drift, right_drift) > tracking_tolerance_m)
 
 
 def reanchor_centered_lowering(

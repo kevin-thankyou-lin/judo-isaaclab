@@ -907,26 +907,36 @@ def test_transport_reanchor_repeats_only_after_measured_contact_drift():
     )
     trajectory = program.build()
     step = trajectory.waypoint_steps["right_handle_grasp"] + 2
+    observed_pot = _pose()
+    observed_left = _pose(0.2)
+    observed_right = _pose(0.2, 1.0)
+    left_contact = compose_pose(inverse_pose(observed_pot), observed_left)
+    right_contact = compose_pose(inverse_pose(observed_pot), observed_right)
     assert transport_contact_reanchor_required(
-        trajectory, step, trajectory.left_poses[step], trajectory.right_poses[step],
+        trajectory, step, observed_pot, observed_left, observed_right, None, None,
         last_reanchor_step=None, tracking_tolerance_m=0.01,
     )
-    drifted_right = trajectory.right_poses[step].copy()
+    drifted_right = observed_right.copy()
     drifted_right[1] += 0.012
     assert not transport_contact_reanchor_required(
-        trajectory, step, trajectory.left_poses[step], drifted_right,
+        trajectory, step, observed_pot, observed_left, drifted_right,
+        left_contact, right_contact,
         last_reanchor_step=step - 5, tracking_tolerance_m=0.01,
     )
     assert transport_contact_reanchor_required(
-        trajectory, step, trajectory.left_poses[step], drifted_right,
+        trajectory, step, observed_pot, observed_left, drifted_right,
+        left_contact, right_contact,
         last_reanchor_step=step - 10, tracking_tolerance_m=0.01,
     )
     transport_end = trajectory.waypoint_steps["smooth_transport"]
     assert not transport_contact_reanchor_required(
         trajectory,
         transport_end - 7,
-        trajectory.left_poses[transport_end - 7],
-        trajectory.right_poses[transport_end - 7],
+        observed_pot,
+        observed_left,
+        observed_right,
+        left_contact,
+        right_contact,
         last_reanchor_step=step,
         tracking_tolerance_m=0.01,
     )
