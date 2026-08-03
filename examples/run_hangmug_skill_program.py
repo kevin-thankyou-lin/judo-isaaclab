@@ -738,6 +738,8 @@ def main() -> None:
                 "left_release",
                 "tree_transport",
                 "branch_approach",
+                "branch_insert",
+                "branch_unload",
             )
             if trajectory is not None and any(
                 step == trajectory.waypoint_steps[name]
