@@ -32,6 +32,7 @@ from judo_isaaclab.put_pot import (
     support_aligned_pot_pose,
     track_bimanual_handle_targets,
     transfer_handle_approach_orientation,
+    transfer_handle_pose_through_contact_frames,
     transfer_handle_pose_preserving_surface_clearance,
     _linear_contact_feedback_poses,
 )
@@ -140,6 +141,32 @@ def test_handle_approach_and_grasp_share_one_contact_frame_rotation():
     )
     target_relative = quaternion_multiply(
         inverse_pose(transferred_pregrasp)[3:], transferred_grasp[3:]
+    )
+    assert target_relative == pytest.approx(source_relative, abs=1.0e-7)
+
+
+def test_handle_contact_transfer_preserves_complete_object_to_gripper_pose():
+    source_root = _pose(x=0.1, y=-0.2, z=0.3)
+    target_root = _pose(x=0.7, y=0.4, z=0.5)
+    source_contact = _pose(x=-0.18, y=0.02, z=0.06)
+    target_contact = _pose(x=-0.15, y=-0.03, z=0.04)
+    source_gripper = compose_pose(
+        compose_pose(source_root, source_contact),
+        np.asarray([0.04, -0.07, 0.09, 0.92387953, 0.0, 0.0, 0.38268343]),
+    )
+
+    target_gripper = transfer_handle_pose_through_contact_frames(
+        source_gripper,
+        source_root,
+        target_root,
+        source_contact,
+        target_contact,
+    )
+    source_relative = compose_pose(
+        inverse_pose(compose_pose(source_root, source_contact)), source_gripper
+    )
+    target_relative = compose_pose(
+        inverse_pose(compose_pose(target_root, target_contact)), target_gripper
     )
     assert target_relative == pytest.approx(source_relative, abs=1.0e-7)
 

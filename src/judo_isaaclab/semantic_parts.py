@@ -274,9 +274,19 @@ def infer_pot_handle_contact_frame(
     )
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     tangent = eigenvectors[:, int(np.argmax(eigenvalues))]
-    if tangent[2] < 0.0 or (
-        abs(tangent[2]) < 1.0e-8 and tangent[(axis + 1) % 2] < 0.0
-    ):
+    # PCA eigenvectors have arbitrary sign.  Canonicalize from the dominant
+    # in-plane handle direction instead of allowing a numerically tiny
+    # vertical component to choose a 180-degree wrist rotation.  Pot019's
+    # negative handle measured (transverse, vertical)=(-0.5783, +0.0045): the
+    # old vertical-first rule inverted its local correspondence even though
+    # the authored segment was overwhelmingly transverse.
+    transverse_axis = (axis + 1) % 2
+    canonical_axis = (
+        transverse_axis
+        if abs(tangent[transverse_axis]) >= abs(tangent[2])
+        else 2
+    )
+    if tangent[canonical_axis] < 0.0:
         tangent = -tangent
     outward = np.zeros(3, dtype=np.float64)
     outward[axis] = side

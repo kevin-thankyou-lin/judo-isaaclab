@@ -144,6 +144,30 @@ def transfer_handle_approach_orientation(
     return result
 
 
+def transfer_handle_pose_through_contact_frames(
+    pose: Any,
+    source_root: Any,
+    target_root: Any,
+    source_contact_frame: Any,
+    target_contact_frame: Any,
+) -> np.ndarray:
+    """Preserve the measured object-to-gripper transform at a local handle part.
+
+    Whole-handle bounds are useful for bootstrapping which authored collision
+    segment corresponds to the demonstrated contact.  They are not a stable
+    position frame for thin or strongly curved target handles.  Once the local
+    source and target segments are identified, transfer the complete pose
+    through those object-local frames so position and orientation use the same
+    correspondence.
+    """
+
+    return transfer_pose(
+        _pose(pose, "pose"),
+        compose_pose(_pose(source_root, "source_root"), source_contact_frame),
+        compose_pose(_pose(target_root, "target_root"), target_contact_frame),
+    )
+
+
 def expand_handle_pregrasp_clearance(
     pregrasp_pose: Any,
     grasp_pose: Any,
