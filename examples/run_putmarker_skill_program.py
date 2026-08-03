@@ -38,6 +38,11 @@ SEMANTIC_INDICES = {
     "handle_release": 607,
 }
 
+# Lowest accepted source-frame wrist height for this robot/cabinet family.
+# Lower assets retain the same collision-free wrist posture while the pull
+# direction still comes from the target drawer's measured slide axis.
+LOW_HANDLE_MIN_WRIST_Z_M = 0.8745
+
 
 def _parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -308,7 +313,7 @@ def _build_skill(
     rigid_handle_pull_m,
     handle_pull_vertical_offset_m,
     handle_engagement_depth_m,
-    use_target_handle_keyframe,
+    use_low_handle_workspace_clamp,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
@@ -343,11 +348,6 @@ def _build_skill(
         matrices = source[f"eef_{arm}"]
         offset = left_tool_to_attach if arm == "left" else right_tool_to_attach
         return compose_pose(_pose_at(matrices, index), offset)
-
-    def target_right_attach(index: int) -> np.ndarray:
-        return compose_pose(
-            _pose_at(target["eef_right"], index), right_tool_to_attach
-        )
 
     def left_marker(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
@@ -390,22 +390,20 @@ def _build_skill(
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
-        return target_geometry.transfer_handle_pose(
+        pose = target_geometry.transfer_handle_pose(
             source_geometry, source_attach("right", index), source_q
         )
+        pose[2] += handle_workspace_lift_m
+        return pose
 
-    target_handle_grasp_index = (
-        _target_drawer_grasp_index(target) if use_target_handle_keyframe else None
-    )
-    if target_handle_grasp_index is None:
-        handle_pregrasp = right_handle("handle_pregrasp")
-        handle_grasp = right_handle("handle_grasp")
-    else:
-        # This low handle puts the source-transferred tool frame below the
-        # robot's collision-free workspace. Use the official matched demo's
-        # semantic approach/grasp boundary, not its complete joint trajectory.
-        handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
-        handle_grasp = target_right_attach(target_handle_grasp_index)
+    handle_workspace_lift_m = 0.0
+    if use_low_handle_workspace_clamp:
+        source_grasp = right_handle("handle_grasp")
+        handle_workspace_lift_m = _handle_workspace_lift_m(
+            float(source_grasp[2]), enabled=True
+        )
+    handle_pregrasp = right_handle("handle_pregrasp")
+    handle_grasp = right_handle("handle_grasp")
     inward = -quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * float(handle_engagement_depth_m)
@@ -467,7 +465,7 @@ def _build_skill(
         marker_in_drawer("marker_collision_clear"),
         marker_in_drawer("marker_cavity"),
         working_q,
-        target_handle_grasp_index,
+        handle_workspace_lift_m,
     )
 
 
@@ -884,12 +882,12 @@ def _right_handle_assist_spec(
         and cabinet_root_z_m + handle_point_local_z_m < 0.89
     )
     if low_feet_handle:
-        return "fixed_joint", "target_semantic_low_feet_handle_runtime_coupling"
+        return "friction", "low_feet_handle_workspace_height_clamp"
     reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
     return ("friction", reason) if reason is not None else (None, None)
 
 
-def _uses_target_handle_keyframe(
+def _uses_low_handle_workspace_clamp(
     target_dataset: str, cabinet_root_z_m: float, handle_point_local_z_m: float
 ) -> bool:
     return bool(
@@ -898,14 +896,8 @@ def _uses_target_handle_keyframe(
     )
 
 
-def _target_drawer_grasp_index(target: dict[str, object]) -> int:
-    """Locate the real grasp boundary from target drawer motion."""
-
-    drawer = np.asarray(target["drawer_joint"], dtype=np.float64)
-    moving = np.flatnonzero(drawer[:, 1] > 1.0e-4)
-    if not len(moving):
-        raise ValueError("target demonstration never moves the coded lower drawer")
-    return max(1, int(moving[0]) - 1)
+def _handle_workspace_lift_m(grasp_z_m: float, *, enabled: bool) -> float:
+    return max(0.0, LOW_HANDLE_MIN_WRIST_Z_M - grasp_z_m) if enabled else 0.0
 
 
 def main() -> None:
@@ -1002,13 +994,6 @@ def main() -> None:
                 float(target_geometry.handle_point_local[2]),
             )
         )
-        # A six-axis fixed constraint between two independently controlled
-        # articulations over-constrains the wrist and stalls this pull.  The
-        # established assist supports a spherical joint, which preserves the
-        # engage-time contact point while leaving wrist orientation unconstrained.
-        right_handle_assist_joint_type = (
-            "spherical" if right_handle_assist_mechanism == "fixed_joint" else None
-        )
         right_handle_assist = None
         right_handle_assist_ever = False
         if right_handle_assist_reason is not None:
@@ -1022,11 +1007,6 @@ def main() -> None:
             }
             if right_handle_assist_mechanism == "friction":
                 assist_spec["friction"] = {"high": 100.0, "low": 0.5}
-            elif right_handle_assist_mechanism == "fixed_joint":
-                assist_spec["fixed_joint"] = {
-                    "joint_type": right_handle_assist_joint_type,
-                    "disable_pair_collision": True,
-                }
             right_handle_assist = build_grasp_assists(
                 env,
                 {"right": assist_spec},
@@ -1041,7 +1021,7 @@ def main() -> None:
             intended_marker_clear,
             intended_marker_cavity,
             intended_drawer_q,
-            target_handle_grasp_index,
+            handle_workspace_lift_m,
         ) = (
             _build_skill(
                 source,
@@ -1056,7 +1036,7 @@ def main() -> None:
                 args.rigid_handle_pull_m,
                 effective_handle_vertical_offset_m,
                 handle_engagement_depth_m,
-                _uses_target_handle_keyframe(
+                _uses_low_handle_workspace_clamp(
                     args.target_dataset,
                     float(target_geometry.root_pose[2]),
                     float(target_geometry.handle_point_local[2]),
@@ -1326,21 +1306,13 @@ def main() -> None:
                 "grasp_assistance": (
                     {
                         "friction": "task_config:right=friction",
-                        "fixed_joint": (
-                            "task_config:right=fixed_joint(link_2,joint_type=spherical)"
-                        ),
                     }.get(right_handle_assist_mechanism, "none")
                 ),
                 "right_handle_friction_assist_engaged": (
                     right_handle_assist_ever
                     and right_handle_assist_mechanism == "friction"
                 ),
-                "right_handle_fixed_joint_assist_engaged": (
-                    right_handle_assist_ever
-                    and right_handle_assist_mechanism == "fixed_joint"
-                ),
                 "right_handle_assist_mechanism": right_handle_assist_mechanism,
-                "right_handle_assist_joint_type": right_handle_assist_joint_type,
                 "right_handle_assist_reason": right_handle_assist_reason,
                 "right_handle_friction_assist_reason": (
                     right_handle_assist_reason
@@ -1368,11 +1340,11 @@ def main() -> None:
                     ),
                     "handle_engagement_depth_m": handle_engagement_depth_m,
                     "handle_grasp_frame_source": (
-                        "target_matched_semantic_drawer_motion_boundary"
-                        if target_handle_grasp_index is not None
+                        "source_semantic_handle_frame_with_workspace_height_clamp"
+                        if handle_workspace_lift_m > 0.0
                         else "source_semantic_handle_frame"
                     ),
-                    "target_handle_grasp_index": target_handle_grasp_index,
+                    "handle_workspace_lift_m": handle_workspace_lift_m,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
