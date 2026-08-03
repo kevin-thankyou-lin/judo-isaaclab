@@ -22,6 +22,7 @@ from run_hangmug_skill_program import (
     _add_right_handover_assist,
     _install_grasp_assist_config,
     _select_grasp_assist_config,
+    _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
 
@@ -144,6 +145,44 @@ def test_right_handover_assist_uses_zero_delay_contact_backed_joint():
         "grasp_delay_s": 0.0,
     }
     assert config.keys() == {"left"}
+
+
+def test_authored_boundaries_release_both_grasp_assists():
+    import torch
+
+    class Assist:
+        def __init__(self):
+            self.calls = []
+
+        def update(self, *, engage, disable):
+            self.calls.append((engage.tolist(), disable.tolist()))
+
+    left = Assist()
+    right = Assist()
+    env = SimpleNamespace(
+        robot=SimpleNamespace(
+            is_grasping=lambda: (
+                torch.tensor([True]),
+                torch.tensor([True]),
+            )
+        ),
+        grasp_assists={"left": left, "right": right},
+    )
+    trajectory = SimpleNamespace(
+        waypoint_steps={"left_release": 5, "branch_unload": 7}
+    )
+
+    _update_authored_assist_releases(env, trajectory, 4)
+    assert left.calls == []
+    assert right.calls[-1] == ([True], [False])
+
+    _update_authored_assist_releases(env, trajectory, 5)
+    assert left.calls[-1] == ([True], [True])
+    assert right.calls[-1] == ([True], [False])
+
+    _update_authored_assist_releases(env, trajectory, 8)
+    assert left.calls[-1] == ([True], [True])
+    assert right.calls[-1] == ([True], [True])
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():

@@ -239,6 +239,37 @@ def _validate_datagen_grasp_assists(env, expected_config) -> str:
     return "task_config:" + ",".join(entries)
 
 
+def _update_authored_assist_releases(env, trajectory, step: int) -> None:
+    """Release grasp assists at the coded handover and unload boundaries.
+
+    The task manager normally drops the left friction assist while both hands
+    overlap during handover.  Some valid geometries transition directly from
+    left to right contact without a simultaneous-grasp controller sample, so
+    that event alone is not a reliable release signal.  The semantic program's
+    left-release boundary is deterministic and already commands the left hand
+    open; use it as a fail-closed release signal without advancing the left
+    assist state machine twice during the grasp phase.
+    """
+    import torch
+
+    left_grasping, right_grasping = env.robot.is_grasping()
+    left_assist = env.grasp_assists.get("left")
+    releasing_left = step >= trajectory.waypoint_steps["left_release"]
+    if left_assist is not None and releasing_left:
+        left_assist.update(
+            engage=left_grasping,
+            disable=torch.ones_like(left_grasping, dtype=torch.bool),
+        )
+
+    right_assist = env.grasp_assists.get("right")
+    if right_assist is not None:
+        releasing_right = step > trajectory.waypoint_steps["branch_unload"]
+        right_assist.update(
+            engage=right_grasping,
+            disable=torch.full_like(right_grasping, releasing_right),
+        )
+
+
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
     from run_putmarker_skill_program import _eef_pose
@@ -740,14 +771,8 @@ def main() -> None:
                 )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
             observation, _, _, _, info = env.step(action)
-            right_assist = env.grasp_assists.get("right")
-            if right_assist is not None and trajectory is not None:
-                _, right_grasping = env.robot.is_grasping()
-                releasing_right = step > trajectory.waypoint_steps["branch_unload"]
-                right_assist.update(
-                    engage=right_grasping,
-                    disable=torch.full_like(right_grasping, releasing_right),
-                )
+            if trajectory is not None:
+                _update_authored_assist_releases(env, trajectory, step)
             sample = _sample(env, step, stage, info)
             demo_recorder.append(
                 action,
