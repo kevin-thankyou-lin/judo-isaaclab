@@ -1473,6 +1473,11 @@ def main() -> None:
                         else 0
                     )
                     if (
+                        arm == "left"
+                        and peer_single_contact_latch_step is not None
+                    ):
+                        continue
+                    if (
                         missing_finger_streaks[arm]
                         <= MISSING_FINGER_CONTACT_DELAY_STEPS
                     ):
@@ -1505,13 +1510,9 @@ def main() -> None:
                     else:
                         right_handle_contact = contact
 
-                left_contacting = (
-                    np.asarray(sample["left_finger_forces_n"]) >= 0.1
-                )
                 if (
                     peer_single_contact_latch_step is not None
                     and not bool(sample["left_grasp"])
-                    and int(np.sum(left_contacting)) == 0
                     and peer_contact_recovery_axis_local is not None
                     and peer_contact_recovery_target_signed_m is not None
                 ):
