@@ -508,6 +508,36 @@ def _build_skill(
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
     right_grasp = transfer_initial("right_handle_grasp", "right")
+    left_pregrasp = transfer_initial("left_pregrasp", "left")
+    right_pregrasp = transfer_initial("right_pregrasp", "right")
+    from judo_isaaclab.put_pot import (
+        geometry_conditioned_target_handle_symmetry,
+    )
+
+    if geometry_conditioned_target_handle_symmetry(
+        source_parts.negative_handle_size,
+        source_parts.positive_handle_size,
+        target_parts.negative_handle_size,
+        target_parts.positive_handle_size,
+        target_parts.handle_axis,
+    ):
+        right_handle_world = compose_pose(
+            target_initial.root_pose, handle(target_parts, right_side)
+        )
+        left_handle_world = compose_pose(
+            target_initial.root_pose, handle(target_parts, left_side)
+        )
+        left_grasp = transfer_pose(
+            right_grasp, right_handle_world, left_handle_world
+        )
+        left_pregrasp = transfer_pose(
+            right_pregrasp, right_handle_world, left_handle_world
+        )
+        grasp_poses["left"] = left_grasp.copy()
+        grasp_geometry["left"] = {
+            **grasp_geometry["right"],
+            "target_symmetric_contact_from": "right",
+        }
     # Anchor both contact transforms to the target pot at the transferred
     # grasp.  This makes the first smooth-transport sample continuous for every
     # asset scale instead of switching to a source-root convention.
@@ -574,8 +604,8 @@ def _build_skill(
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
-        transfer_initial("left_pregrasp", "left"),
-        transfer_initial("right_pregrasp", "right"),
+        left_pregrasp,
+        right_pregrasp,
         left_grasp,
         right_grasp,
         approach_steps=110,

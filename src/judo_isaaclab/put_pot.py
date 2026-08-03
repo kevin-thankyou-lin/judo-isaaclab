@@ -506,6 +506,46 @@ def geometry_conditioned_handle_balance_limit(
     return float(base_limit_m + extra)
 
 
+def geometry_conditioned_target_handle_symmetry(
+    source_negative_size: Any,
+    source_positive_size: Any,
+    target_negative_size: Any,
+    target_positive_size: Any,
+    handle_axis: int,
+    *,
+    symmetry_relative_tolerance: float = 0.02,
+) -> bool:
+    """Use one target-side contact relation for a thin measured-symmetric pair."""
+
+    values = [
+        np.asarray(value, dtype=np.float64)
+        for value in (
+            source_negative_size,
+            source_positive_size,
+            target_negative_size,
+            target_positive_size,
+        )
+    ]
+    if any(value.shape != (3,) or np.any(value <= 0.0) for value in values):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if not np.isfinite(symmetry_relative_tolerance) or symmetry_relative_tolerance < 0.0:
+        raise ValueError("symmetry_relative_tolerance must be finite and nonnegative")
+    source_negative, source_positive, target_negative, target_positive = values
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    retained_ratio = min(
+        min(float(target_negative[axis] / source_negative[axis]) for axis in transverse),
+        min(float(target_positive[axis] / source_positive[axis]) for axis in transverse),
+    )
+    scale = np.maximum(target_negative, target_positive)
+    symmetric = np.all(
+        np.abs(target_negative - target_positive)
+        <= symmetry_relative_tolerance * scale
+    )
+    return bool(retained_ratio < THIN_HANDLE_BALANCE_RATIO and symmetric)
+
+
 @dataclass(frozen=True)
 class SmoothBimanualTransport:
     """One sampled pot path and the two rigidly attached handle paths."""

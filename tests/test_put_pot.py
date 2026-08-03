@@ -20,6 +20,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
+    geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
@@ -312,6 +313,34 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
     assert geometry_conditioned_handle_balance_limit(
         source, [0.0666, 0.0657, 0.030], 0, 0.030
     ) == pytest.approx(0.003)
+
+
+def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
+    source_negative = [0.0594, 0.0858, 0.0405]
+    source_positive = [0.0594, 0.0858, 0.0405]
+    target_negative = [0.066588, 0.065714, 0.017064]
+    target_positive = [0.066586, 0.065714, 0.017060]
+    assert geometry_conditioned_target_handle_symmetry(
+        source_negative,
+        source_positive,
+        target_negative,
+        target_positive,
+        0,
+    )
+    assert not geometry_conditioned_target_handle_symmetry(
+        source_negative,
+        source_positive,
+        [0.066, 0.066, 0.030],
+        [0.066, 0.066, 0.030],
+        0,
+    )
+    assert not geometry_conditioned_target_handle_symmetry(
+        source_negative,
+        source_positive,
+        target_negative,
+        [0.080, 0.050, 0.020],
+        0,
+    )
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
