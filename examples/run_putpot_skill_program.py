@@ -1120,7 +1120,9 @@ def main() -> None:
         milestone_reanchor_accepted = None
         milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
-        milestone_peer_pad_axis_rotation_rad = None
+        peer_contact_transfer = False
+        peer_single_contact_latch_step = None
+        peer_single_contact_latch_local_m = None
         contact_hold_latch_step = None
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
@@ -1263,10 +1265,7 @@ def main() -> None:
             ):
                 from judo_isaaclab.put_pot import (
                     HANDLE_PAD_DEPTH_MARGIN_M,
-                    align_receiving_pad_axis_from_peer_contact,
-                    center_handle_between_finger_pads,
                     geometry_conditioned_peer_contact_transfer,
-                    handle_jaw_center_offset_m,
                     milestone_reanchor_within_authored_clearance,
                     mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
@@ -1308,23 +1307,6 @@ def main() -> None:
                             sample["pot_pose"],
                             target_left_handle_points,
                         )
-                    )
-                    candidate_left_world, milestone_peer_pad_axis_rotation_rad = (
-                        align_receiving_pad_axis_from_peer_contact(
-                            candidate_left_world,
-                            sample["right_pad_axes_world"],
-                            compose_pose(sample["pot_pose"], right_part_frame),
-                            sample["left_pad_axes_world"],
-                            compose_pose(sample["pot_pose"], left_part_frame),
-                        )
-                    )
-                    milestone_jaw_center_residual_m = handle_jaw_center_offset_m(
-                        candidate_left_world,
-                        sample["pot_pose"],
-                        target_left_handle_points,
-                    )
-                    candidate_left_world = center_handle_between_finger_pads(
-                        candidate_left_world, milestone_jaw_center_residual_m
                     )
                     candidate_left_contact = compose_pose(
                         inverse_pose(sample["pot_pose"]),
@@ -1373,8 +1355,7 @@ def main() -> None:
                     if milestone_reanchor_accepted
                     else original_left_contact
                 )
-                if not peer_contact_transfer:
-                    left_handle_contact[3:] = original_left_contact[3:]
+                left_handle_contact[3:] = original_left_contact[3:]
                 applied_left_world = compose_pose(
                     sample["pot_pose"], left_handle_contact
                 )
@@ -1405,8 +1386,25 @@ def main() -> None:
                     MISSING_FINGER_CONTACT_DELAY_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
+                    single_finger_contact_observed,
                     track_bimanual_handle_targets,
                 )
+
+                if (
+                    peer_contact_transfer
+                    and peer_single_contact_latch_step is None
+                    and single_finger_contact_observed(
+                        sample["left_finger_forces_n"]
+                    )
+                ):
+                    left_handle_contact = compose_pose(
+                        inverse_pose(sample["pot_pose"]),
+                        sample["left_eef_pose"],
+                    )
+                    peer_single_contact_latch_step = step
+                    peer_single_contact_latch_local_m = (
+                        left_handle_contact[:3].tolist()
+                    )
 
                 for arm in ("left", "right"):
                     if (
@@ -2060,8 +2058,9 @@ def main() -> None:
                 "milestone_translation_limit_m": milestone_translation_limit_m,
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "milestone_reanchor_source": milestone_reanchor_source,
-                "milestone_peer_pad_axis_rotation_rad": (
-                    milestone_peer_pad_axis_rotation_rad
+                "peer_single_contact_latch_step": peer_single_contact_latch_step,
+                "peer_single_contact_latch_local_m": (
+                    peer_single_contact_latch_local_m
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
                 "contact_hold_retention_local_m": (

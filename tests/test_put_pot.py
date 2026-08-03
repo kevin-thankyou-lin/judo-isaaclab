@@ -14,7 +14,6 @@ from judo_isaaclab.put_pot import (
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     balance_handle_contact_across_finger_pads,
-    align_receiving_pad_axis_from_peer_contact,
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
     center_handle_between_finger_pads,
@@ -46,6 +45,7 @@ from judo_isaaclab.put_pot import (
     reanchor_second_handle_grasp,
     reanchor_supported_center_slide,
     seat_handle_inside_finger_pads,
+    single_finger_contact_observed,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     support_boundary_staging_pose,
@@ -440,25 +440,11 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
     )
 
 
-def test_peer_pad_axis_alignment_uses_minimum_receiving_wrist_rotation():
-    receiving = _pose()
-    reference_handle = _pose()
-    receiving_handle = np.asarray(
-        [0.0, 0.0, 0.0, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)]
-    )
-    result, angle = align_receiving_pad_axis_from_peer_contact(
-        receiving,
-        [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
-        reference_handle,
-        [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
-        receiving_handle,
-    )
-
-    assert result[:3] == pytest.approx(receiving[:3])
-    assert angle == pytest.approx(np.pi / 2.0)
-    assert quaternion_rotate(result[3:], [1.0, 0.0, 0.0]) == pytest.approx(
-        [0.0, 1.0, 0.0], abs=1.0e-9
-    )
+def test_single_finger_contact_detection_is_exact_and_thresholded():
+    assert single_finger_contact_observed([0.0, 0.1])
+    assert single_finger_contact_observed([1.0, 0.0])
+    assert not single_finger_contact_observed([0.0, 0.0])
+    assert not single_finger_contact_observed([0.1, 0.1])
 
 
 def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():

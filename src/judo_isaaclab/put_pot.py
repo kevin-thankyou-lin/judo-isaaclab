@@ -456,55 +456,17 @@ def mirror_handle_position_in_receiving_jaw_frame(
     return center_handle_between_finger_pads(result, offset), offset
 
 
-def align_receiving_pad_axis_from_peer_contact(
-    receiving_pose: Any,
-    reference_pad_axes_world: Any,
-    reference_handle_frame: Any,
-    receiving_pad_axes_world: Any,
-    receiving_handle_frame: Any,
-) -> tuple[np.ndarray, float]:
-    """Align the receiving pads to a proven peer pad direction.
+def single_finger_contact_observed(
+    finger_forces_n: Any, *, contact_threshold_n: float = 0.1
+) -> bool:
+    """Return whether exactly one pad has measured target contact."""
 
-    Matching authored handle frames define the symmetry relation, while a
-    minimum world-frame rotation preserves as much of the receiving arm's
-    wrist orientation as possible.  This avoids copying a peer wrist pose that
-    may be kinematically inappropriate for the opposite arm.
-    """
-
-    pose = _pose(receiving_pose, "receiving_pose")
-    reference_axes = np.asarray(reference_pad_axes_world, dtype=np.float64)
-    receiving_axes = np.asarray(receiving_pad_axes_world, dtype=np.float64)
-    if reference_axes.shape != (2, 3) or receiving_axes.shape != (2, 3):
-        raise ValueError("pad axes must each have shape (2, 3)")
-    if not np.all(np.isfinite(reference_axes)) or not np.all(np.isfinite(receiving_axes)):
-        raise ValueError("pad axes must be finite")
-
-    reference_handle = _pose(reference_handle_frame, "reference_handle_frame")
-    receiving_handle = _pose(receiving_handle_frame, "receiving_handle_frame")
-    reference_local_rotation = inverse_pose(reference_handle)[3:]
-    target_world = quaternion_rotate(
-        receiving_handle[3:],
-        quaternion_rotate(reference_local_rotation, np.mean(reference_axes, axis=0)),
-    )
-    current_world = np.mean(receiving_axes, axis=0)
-    target_world /= np.linalg.norm(target_world)
-    current_world /= np.linalg.norm(current_world)
-    cosine = float(np.clip(np.dot(current_world, target_world), -1.0, 1.0))
-    angle = float(np.arccos(cosine))
-    if angle <= 1.0e-12:
-        return pose.copy(), 0.0
-    axis = np.cross(current_world, target_world)
-    norm = float(np.linalg.norm(axis))
-    if norm <= 1.0e-12:
-        basis = np.eye(3)[int(np.argmin(np.abs(current_world)))]
-        axis = np.cross(current_world, basis)
-        norm = float(np.linalg.norm(axis))
-    axis /= norm
-    delta = np.concatenate(([np.cos(0.5 * angle)], axis * np.sin(0.5 * angle)))
-    result = pose.copy()
-    result[3:] = quaternion_multiply(delta, pose[3:])
-    result[3:] /= np.linalg.norm(result[3:])
-    return result, angle
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if not np.isfinite(contact_threshold_n) or contact_threshold_n < 0.0:
+        raise ValueError("contact_threshold_n must be finite and nonnegative")
+    return bool(np.sum(forces >= contact_threshold_n) == 1)
 
 
 def reanchor_missing_finger_contact(
