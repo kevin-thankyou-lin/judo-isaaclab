@@ -467,6 +467,46 @@ def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
     assert result[3:] == pytest.approx(commanded[3:])
 
 
+def test_loaded_contact_residual_survives_object_local_hold_reanchor():
+    root = _pose(0.4, -0.2, 0.8)
+    observed = _pose(0.6, -0.1, 0.9)
+    commanded = _pose(0.63, -0.06, 0.9)
+    loaded, residual = preserve_loaded_contact_target(
+        observed,
+        commanded,
+        maximum_position_residual_m=0.025,
+    )
+    reference_local = compose_pose(inverse_pose(root), loaded)
+    retained_local, _ = compensate_retained_contact_tracking(
+        reference_local,
+        root,
+        observed,
+    )
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(0.1, 1.0),
+        _pose(x=0.2),
+        _pose(0.2, 1.0),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=2,
+        contact_hold_steps=2,
+    )
+    trajectory = program.build()
+    hold = reanchor_bimanual_contact_hold(
+        trajectory,
+        trajectory.waypoint_steps["left_handle_grasp"],
+        root,
+        retained_local,
+        compose_pose(inverse_pose(root), _pose(0.2, 1.0)),
+    )
+    first_hold = trajectory.waypoint_steps["left_handle_grasp"] + 1
+
+    assert np.linalg.norm(residual) == pytest.approx(0.025)
+    assert np.linalg.norm(hold.left_poses[first_hold, :3] - observed[:3]) > 0.025
+
+
 def test_jaw_twist_removes_limited_axis_without_changing_pad_tangent():
     pose = _pose()
     pads = np.asarray([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])

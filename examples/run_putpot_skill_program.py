@@ -1134,6 +1134,7 @@ def main() -> None:
         peer_contact_jaw_twist_rad = None
         peer_contact_recovery_residuals_m = []
         contact_hold_latch_step = None
+        contact_hold_loaded_residual_world_m = None
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
         reference_hold_left_contact_local = None
@@ -1572,15 +1573,25 @@ def main() -> None:
                     and sample["left_grasp"]
                     and sample["right_grasp"]
                 ):
+                    loaded_left_world, contact_hold_loaded_residual = (
+                        preserve_loaded_contact_target(
+                            sample["left_eef_pose"],
+                            trajectory.left_poses[step],
+                            maximum_position_residual_m=args.max_position_step,
+                        )
+                    )
                     reference_hold_left_contact_local = compose_pose(
                         inverse_pose(sample["pot_pose"]),
-                        sample["left_eef_pose"],
+                        loaded_left_world,
                     )
                     reference_hold_right_contact_local = compose_pose(
                         inverse_pose(sample["pot_pose"]),
                         sample["right_eef_pose"],
                     )
                     contact_hold_latch_step = step
+                    contact_hold_loaded_residual_world_m = (
+                        contact_hold_loaded_residual.tolist()
+                    )
                 if reference_hold_left_contact_local is not None:
                     (
                         retained_hold_left_contact_local,
@@ -2164,6 +2175,9 @@ def main() -> None:
                     peer_contact_recovery_residuals_m
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
+                "contact_hold_loaded_residual_world_m": (
+                    contact_hold_loaded_residual_world_m
+                ),
                 "contact_hold_retention_local_m": (
                     None
                     if contact_hold_retention_local_m is None
