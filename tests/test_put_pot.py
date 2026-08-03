@@ -21,7 +21,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
-    geometry_conditioned_left_first_close,
+    geometry_conditioned_right_first_close,
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
@@ -448,13 +448,13 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     assert signed == pytest.approx(0.012)
 
 
-def test_positive_imbalance_half_thickness_handle_closes_left_first():
+def test_positive_imbalance_half_thickness_handle_closes_proven_right_first():
     source = [0.059453, 0.085784, 0.040560]
     pot020 = [0.069219, 0.061195, 0.020012]
     pot019 = [0.0687, 0.0589, 0.0171]
-    assert geometry_conditioned_left_first_close(source, pot020, 0, 0.0375)
-    assert not geometry_conditioned_left_first_close(source, pot020, 0, -0.0375)
-    assert not geometry_conditioned_left_first_close(source, pot019, 0, 0.0375)
+    assert geometry_conditioned_right_first_close(source, pot020, 0, 0.0375)
+    assert not geometry_conditioned_right_first_close(source, pot020, 0, -0.0375)
+    assert not geometry_conditioned_right_first_close(source, pot019, 0, 0.0375)
 
 
 def test_missing_finger_pad_residual_scales_deterministic_seating():
@@ -691,20 +691,42 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
     assert early.left_poses[right_end] == pytest.approx(observed_left)
     assert early.right_poses[right_end] == pytest.approx(observed_right)
 
-    left_first = track_bimanual_handle_targets(
-        trajectory,
-        pregrasp_end,
+    right_first_program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0))
+    right_first_program.bimanual_handle_grasp(
+        _pose(0.1),
+        _pose(0.1, 1.0),
+        compose_pose(nominal, left_contact),
+        compose_pose(nominal, right_contact),
+        approach_steps=2,
+        left_close_steps=3,
+        right_close_steps=2,
+        right_first=True,
+    )
+    right_first_trajectory = right_first_program.build()
+    right_first_pregrasp = right_first_trajectory.waypoint_steps[
+        "bimanual_pregrasp"
+    ]
+    right_first_end = right_first_trajectory.waypoint_steps["right_handle_grasp"]
+    left_final_end = right_first_trajectory.waypoint_steps["left_handle_grasp"]
+    right_first = track_bimanual_handle_targets(
+        right_first_trajectory,
+        right_first_pregrasp,
         observed,
-        trajectory.left_poses[pregrasp_end],
-        trajectory.right_poses[pregrasp_end],
+        right_first_trajectory.left_poses[right_first_pregrasp],
+        right_first_trajectory.right_poses[right_first_pregrasp],
         left_contact,
         right_contact,
-        left_first_close=True,
+        right_first_close=True,
     )
-    assert left_first.right_poses[pregrasp_end + 1 : left_end + 1] == pytest.approx(
-        trajectory.right_poses[pregrasp_end + 1 : left_end + 1]
+    assert right_first.left_poses[
+        right_first_pregrasp + 1 : right_first_end + 1
+    ] == pytest.approx(
+        right_first_trajectory.left_poses[
+            right_first_pregrasp + 1 : right_first_end + 1
+        ]
     )
-    assert left_first.left_poses[left_end] == pytest.approx(observed_left)
+    assert right_first.right_poses[right_first_end] == pytest.approx(observed_right)
+    assert right_first.right_poses[left_final_end] == pytest.approx(observed_right)
 
     latched = track_bimanual_handle_targets(
         trajectory,

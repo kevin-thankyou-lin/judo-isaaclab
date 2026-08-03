@@ -637,23 +637,18 @@ def _build_skill(
     right_withdraw[1] -= 0.08
 
     from judo_isaaclab.put_pot import (
-        MISSING_FINGER_CONTACT_SETTLE_STEPS,
         geometry_conditioned_grasp_hold_steps,
-        geometry_conditioned_left_first_close,
+        geometry_conditioned_right_first_close,
         geometry_conditioned_transport_steps,
     )
 
-    left_first_close = geometry_conditioned_left_first_close(
+    right_first_close = geometry_conditioned_right_first_close(
         handle_size(source_parts, left_side),
         handle_size(target_parts, left_side),
         target_parts.handle_axis,
         grasp_geometry["left"]["predicted_pad_imbalance_m"],
     )
-    left_close_steps = max(
-        60,
-        MISSING_FINGER_CONTACT_SETTLE_STEPS if left_first_close else 0,
-    )
-    grasp_geometry["left"]["left_first_close"] = left_first_close
+    grasp_geometry["left"]["right_first_close"] = right_first_close
 
     grasp_hold_steps = max(
         geometry_conditioned_grasp_hold_steps(
@@ -684,9 +679,10 @@ def _build_skill(
         left_grasp,
         right_grasp,
         approach_steps=110,
-        left_close_steps=left_close_steps,
-        right_close_steps=grasp_hold_steps,
-        simultaneous=not left_first_close,
+        left_close_steps=grasp_hold_steps if right_first_close else 60,
+        right_close_steps=60 if right_first_close else grasp_hold_steps,
+        simultaneous=not right_first_close,
+        right_first=right_first_close,
     )
     transport = program.smooth_bimanual_transport_to_center(
         target_initial.root_pose,
@@ -711,7 +707,10 @@ def _build_skill(
     trajectory = program.build()
     from judo_isaaclab.put_pot import cartesian_smoothness_metrics
 
-    transport_start = trajectory.waypoint_steps["right_handle_grasp"] + 1
+    transport_start = max(
+        trajectory.waypoint_steps["left_handle_grasp"],
+        trajectory.waypoint_steps["right_handle_grasp"],
+    ) + 1
     transport_end = trajectory.waypoint_steps["smooth_transport"]
     plan_metrics = cartesian_smoothness_metrics(
         trajectory.left_poses[transport_start : transport_end + 1],
@@ -797,6 +796,18 @@ def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
         "bimanual_withdraw": (source_indices["stable_settle"], source_indices["stable_settle"]),
         "stable_settle": (source_indices["stable_settle"], source_indices["stable_settle"]),
     }
+    if (
+        trajectory.waypoint_steps["right_handle_grasp"]
+        < trajectory.waypoint_steps["left_handle_grasp"]
+    ):
+        mapping["right_handle_grasp"] = (
+            source_indices["left_pregrasp"],
+            source_indices["right_handle_grasp"],
+        )
+        mapping["left_handle_grasp"] = (
+            source_indices["left_handle_grasp"],
+            source_indices["right_handle_grasp"],
+        )
     parts = []
     previous = actions[0]
     previous_cursor = 0
@@ -952,7 +963,10 @@ def main() -> None:
         # rollout instead of falling back to the demonstration joint nominal.
         integrate_target_ik = trajectory is not None
         grasp_complete_step = (
-            trajectory.waypoint_steps["right_handle_grasp"]
+            max(
+                trajectory.waypoint_steps["left_handle_grasp"],
+                trajectory.waypoint_steps["right_handle_grasp"],
+            )
             if trajectory is not None else None
         )
         pregrasp_complete_step = (
@@ -961,6 +975,10 @@ def main() -> None:
         )
         left_grasp_step = (
             trajectory.waypoint_steps["left_handle_grasp"]
+            if trajectory is not None else None
+        )
+        right_grasp_step = (
+            trajectory.waypoint_steps["right_handle_grasp"]
             if trajectory is not None else None
         )
         if trajectory is not None:
@@ -972,7 +990,7 @@ def main() -> None:
             )
             right_handle_contact = compose_pose(
                 inverse_pose(target_geometry.root_pose),
-                trajectory.right_poses[grasp_complete_step],
+                trajectory.right_poses[right_grasp_step],
             )
         else:
             left_handle_contact = right_handle_contact = None
@@ -1116,9 +1134,9 @@ def main() -> None:
                     right_handle_contact,
                     left_contact_latched=bool(sample["left_grasp"]),
                     right_contact_latched=bool(sample["right_grasp"]),
-                    left_first_close=bool(
+                    right_first_close=bool(
                         handle_grasp_geometry["left"].get(
-                            "left_first_close", False
+                            "right_first_close", False
                         )
                     ),
                 )
@@ -1146,7 +1164,10 @@ def main() -> None:
                         collision_clearance_m=args.collision_clearance_m,
                     )
                 )
-                start = trajectory.waypoint_steps["right_handle_grasp"] + 1
+                start = max(
+                    trajectory.waypoint_steps["left_handle_grasp"],
+                    trajectory.waypoint_steps["right_handle_grasp"],
+                ) + 1
                 end = trajectory.waypoint_steps["smooth_transport"]
                 transport_plan = cartesian_smoothness_metrics(
                     trajectory.left_poses[start : end + 1],

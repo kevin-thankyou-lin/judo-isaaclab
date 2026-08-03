@@ -469,19 +469,21 @@ def reanchor_missing_finger_contact(
     return compose_pose(inverse_pose(root), world), updated
 
 
-def geometry_conditioned_left_first_close(
+def geometry_conditioned_right_first_close(
     source_handle_size: Any,
     target_handle_size: Any,
     handle_axis: int,
     predicted_imbalance_m: float,
 ) -> bool:
-    """Stage the positive-imbalance half-thickness handle before its peer.
+    """Stabilize a positive-imbalance half-thickness handle from its peer.
 
-    Pot020 attempts 001-011 consistently latched the right handle first.  Its
-    pull rotated the pot by more than 20 degrees while the positive-imbalance
-    left jaw still had only one pad in contact.  The signed failure is confined
-    to the 45-50% retained transverse-thickness band; thinner Pot019 has a
-    hash-verified simultaneous grasp and remains unchanged.
+    Pot020 attempts 001-011 consistently latched the right handle while the
+    positive-imbalance left jaw still had only one pad in contact.  Attempt 012
+    proved that closing the left jaw first merely pushes and rotates the free
+    pot.  Close the proven right jaw first so its bimanual contact milestone
+    stabilizes the pot for left seating.  The signed failure is confined to the
+    45-50% retained transverse-thickness band; thinner Pot019 has a hash-
+    verified simultaneous grasp and remains unchanged.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)
@@ -976,7 +978,7 @@ def track_bimanual_handle_targets(
     *,
     left_contact_latched: bool = False,
     right_contact_latched: bool = False,
-    left_first_close: bool = False,
+    right_first_close: bool = False,
 ) -> SkillTrajectory:
     """Track both fixed local handle contacts during simultaneous closing.
 
@@ -991,40 +993,40 @@ def track_bimanual_handle_targets(
     right_end = steps.get("right_handle_grasp")
     if pregrasp_end is None or left_end is None or right_end is None:
         raise ValueError("handle trajectory is missing grasp waypoints")
-    if current_step < pregrasp_end or current_step >= right_end:
+    grasp_end = max(left_end, right_end)
+    if current_step < pregrasp_end or current_step >= grasp_end:
         raise ValueError("current_step is outside the contact-closing window")
     start = current_step + 1
-    remaining = right_end - current_step
+    remaining = grasp_end - current_step
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
-    if left_first_close and current_step < left_end:
-        left_target = compose_pose(observed_pot_pose, left_contact_local)
-        left_remaining = left_end - current_step
-        left[start : left_end + 1] = _linear_contact_feedback_poses(
-            observed_left_pose, left_target, left_remaining
+    if right_first_close and current_step < right_end:
+        right_target = compose_pose(observed_pot_pose, right_contact_local)
+        right_remaining = right_end - current_step
+        right[start : right_end + 1] = _linear_contact_feedback_poses(
+            observed_right_pose, right_target, right_remaining
         )
-        left[left_end + 1 : right_end + 1] = left_target
-        # Keep the right arm at its authored pregrasp until the left contact
-        # milestone.  This prevents the proven right jaw from rotating the pot
-        # out from under a still-seating left jaw.
+        right[right_end + 1 : grasp_end + 1] = right_target
+        # Keep the left arm at its authored pregrasp until the proven right
+        # contact milestone stabilizes the free pot.
     elif left_contact_latched and right_contact_latched:
-        left[start : right_end + 1] = _pose(
+        left[start : grasp_end + 1] = _pose(
             observed_left_pose, "observed_left_pose"
         )
-        right[start : right_end + 1] = _pose(
+        right[start : grasp_end + 1] = _pose(
             observed_right_pose, "observed_right_pose"
         )
     else:
         left_target = compose_pose(observed_pot_pose, left_contact_local)
         right_target = compose_pose(observed_pot_pose, right_contact_local)
-        left[start : right_end + 1] = (
+        left[start : grasp_end + 1] = (
             _pose(observed_left_pose, "observed_left_pose")
             if left_contact_latched
             else _linear_contact_feedback_poses(
                 observed_left_pose, left_target, remaining
             )
         )
-        right[start : right_end + 1] = (
+        right[start : grasp_end + 1] = (
             _pose(observed_right_pose, "observed_right_pose")
             if right_contact_latched
             else _linear_contact_feedback_poses(
@@ -1076,7 +1078,7 @@ def reanchor_bimanual_transport_from_observation(
         max(float(transport_clearance_m), float(collision_clearance_m))
         + TRANSPORT_PLANNING_MARGIN_M
     )
-    start = steps["right_handle_grasp"] + 1
+    start = max(steps["left_handle_grasp"], steps["right_handle_grasp"]) + 1
     transport_end = steps["smooth_transport"]
     transport = smooth_collision_aware_bimanual_transport(
         pot_pose,
@@ -1552,7 +1554,10 @@ class PutPotSkillProgram:
         right_close_steps: int,
         closed: float = 0.0,
         simultaneous: bool = False,
+        right_first: bool = False,
     ) -> None:
+        if simultaneous and right_first:
+            raise ValueError("simultaneous and right_first are mutually exclusive")
         self._append(
             "bimanual_pregrasp",
             "bimanual_handle_grasp",
@@ -1574,6 +1579,21 @@ class PutPotSkillProgram:
                 "right_handle_grasp",
                 "bimanual_handle_grasp",
                 right_close_steps,
+            )
+        elif right_first:
+            self._append(
+                "right_handle_grasp",
+                "bimanual_handle_grasp",
+                right_close_steps,
+                right_pose=right_grasp,
+                right_gripper=closed,
+            )
+            self._append(
+                "left_handle_grasp",
+                "bimanual_handle_grasp",
+                left_close_steps,
+                left_pose=left_grasp,
+                left_gripper=closed,
             )
         else:
             self._append(
