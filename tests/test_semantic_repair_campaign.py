@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -162,6 +164,44 @@ def test_inaccessible_provenance_reuses_matching_hash_verified_demo(
             {},
             fallback={"path": str(preserved), "sha256": "same"},
         )
+
+
+def test_result_record_rebases_missing_artifacts_to_hash_identical_siblings(tmp_path):
+    module = _module()
+    payloads = {
+        "skill.mp4": b"video",
+        "skill_trace.npz": b"trace",
+        "skill_demo.hdf5": b"demo",
+    }
+    for name, payload in payloads.items():
+        (tmp_path / name).write_bytes(payload)
+
+    def receipt(name):
+        return {
+            "path": f"/home/gear/results/missing/{name}",
+            "sha256": hashlib.sha256(payloads[name]).hexdigest(),
+        }
+
+    result_path = tmp_path / "skill_result.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "video": receipt("skill.mp4"),
+                "provenance": {
+                    "trace": receipt("skill_trace.npz"),
+                    "demonstration": receipt("skill_demo.hdf5"),
+                },
+            }
+        )
+    )
+    record = module._result_record(result_path, "semantic_repair")
+    assert record is not None
+    assert record["published_artifacts_rebased"] is True
+    assert record["video_path"] == str((tmp_path / "skill.mp4").resolve())
+    assert record["trace_path"] == str((tmp_path / "skill_trace.npz").resolve())
+    assert record["demonstration"]["path"] == str(
+        (tmp_path / "skill_demo.hdf5").resolve()
+    )
 
 
 def test_fail_fast_lane_stops_only_after_a_failed_attempt():
