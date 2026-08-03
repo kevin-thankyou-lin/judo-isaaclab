@@ -14,6 +14,8 @@ from .put_marker import (
     compose_pose,
     interpolate_poses,
     inverse_pose,
+    pose_from_matrix,
+    quaternion_rotate,
     transfer_pose,
 )
 
@@ -83,14 +85,42 @@ def geometry_conditioned_hang_pose(
             / source_parts.handle_outer_size[2],
         ),
     )
-    # The source demonstration proposes the supported branch and the handle's
-    # rotation around it, but its branch-relative translation is not a valid
-    # target clearance contract.  In particular, scaling that translation for
-    # a shallow target handle can put the branch against the handle rim even
-    # though the nominal root pose looks plausible.  Seat the authored target
-    # handle-hole center on the authored target branch support point.  This is
-    # deterministic object-local geometry; the transferred rotation above
-    # still resolves the handle/branch orientation from the semantic source.
+    # The source demonstration proposes the supported branch and resolves the
+    # handle roll/sign, but its branch-relative translation and residual axis
+    # error are not a target clearance contract.  A shallow target handle can
+    # otherwise place the branch against the rim even when the nominal root
+    # pose looks plausible.  Project the transferred handle x axis onto the
+    # plane normal to the authored branch tangent, then rebuild a right-handed
+    # handle frame whose y (hole) axis is exactly that tangent.  The projection
+    # selects the closest roll to the semantic source without an asset ID or a
+    # sampled candidate.
+    branch_tangent_world = quaternion_rotate(
+        target_branch_world[3:], [1.0, 0.0, 0.0]
+    )
+    transferred_handle_x = quaternion_rotate(
+        target_handle_world[3:], [1.0, 0.0, 0.0]
+    )
+    handle_x = transferred_handle_x - (
+        np.dot(transferred_handle_x, branch_tangent_world) * branch_tangent_world
+    )
+    handle_x_norm = np.linalg.norm(handle_x)
+    if handle_x_norm < 1.0e-8:
+        transferred_handle_z = quaternion_rotate(
+            target_handle_world[3:], [0.0, 0.0, 1.0]
+        )
+        handle_x = np.cross(branch_tangent_world, transferred_handle_z)
+        handle_x_norm = np.linalg.norm(handle_x)
+    if handle_x_norm < 1.0e-8:
+        raise ValueError("cannot resolve handle roll around the target branch")
+    handle_x /= handle_x_norm
+    handle_z = np.cross(handle_x, branch_tangent_world)
+    aligned_handle_matrix = np.eye(4, dtype=np.float64)
+    aligned_handle_matrix[:3, :3] = np.column_stack(
+        (handle_x, branch_tangent_world, handle_z)
+    )
+    target_handle_world[3:] = pose_from_matrix(aligned_handle_matrix)[3:]
+    # Seat the authored target handle-hole center on the authored branch
+    # support point after aligning the opening axis.
     target_handle_world[:3] = target_branch_world[:3]
     return (
         compose_pose(target_handle_world, inverse_pose(target_parts.handle_hole_frame)),

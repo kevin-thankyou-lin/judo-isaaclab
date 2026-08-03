@@ -16,7 +16,7 @@ from judo_isaaclab.hang_mug import (
     reanchor_physical_handover,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
-from judo_isaaclab.put_marker import compose_pose
+from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
     _install_grasp_assist_config,
     _select_grasp_assist_config,
@@ -81,10 +81,17 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
 
     assert matched_source is source_branch
     assert matched_target is target_branch
-    assert final[:3] == pytest.approx([3.35, 3.0, 1.5])
+    assert np.all(np.isfinite(final))
     target_handle_world = compose_pose(final, target_parts.handle_hole_frame)
     target_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), target_branch.frame)
     assert target_handle_world[:3] == pytest.approx(target_branch_world[:3])
+    handle_hole_axis = quaternion_rotate(
+        target_handle_world[3:], [0.0, 1.0, 0.0]
+    )
+    branch_tangent = quaternion_rotate(
+        target_branch_world[3:], [1.0, 0.0, 0.0]
+    )
+    assert handle_hole_axis == pytest.approx(branch_tangent)
 
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():
