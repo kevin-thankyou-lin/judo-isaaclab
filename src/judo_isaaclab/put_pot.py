@@ -59,7 +59,7 @@ THIN_HANDLE_BALANCE_RATIO = 0.50
 # Pot019 geometry where it produced a hash-verified bimanual success.
 THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
-HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.015
+HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.005
 MISSING_FINGER_CONTACT_STEP_M = 0.001
 # Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
 # contact at -0.043 of the authored 68.1 mm YAM pad axis: 2.93 mm tip-side.
@@ -416,6 +416,7 @@ def reanchor_missing_finger_contact(
     contact_local: Any,
     observed_root_pose: Any,
     finger_forces_n: Any,
+    finger_pad_centers_world: Any,
     signed_correction_m: float,
     *,
     contact_threshold_n: float = 0.1,
@@ -425,15 +426,18 @@ def reanchor_missing_finger_contact(
     """Move a fixed contact frame toward the finger missing target contact.
 
     This is deterministic contact feedback, not candidate search: one
-    contacting finger fixes the signed direction along the authored YAM jaw
+    contacting finger fixes the signed direction along the observed pad-center
     axis, while two or zero contacts leave the object-to-gripper frame intact.
     """
 
     local = _pose(contact_local, "contact_local")
     root = _pose(observed_root_pose, "observed_root_pose")
     forces = np.asarray(finger_forces_n, dtype=np.float64)
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
     if forces.shape != (2,) or not np.all(np.isfinite(forces)):
         raise ValueError("finger_forces_n must contain two finite values")
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
     if not np.isfinite(signed_correction_m):
         raise ValueError("signed_correction_m must be finite")
     if not np.isfinite(contact_threshold_n) or contact_threshold_n < 0.0:
@@ -451,10 +455,11 @@ def reanchor_missing_finger_contact(
     )
     delta = updated - float(signed_correction_m)
     world = compose_pose(root, local)
-    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
-    jaw_axis[2] = 0.0
-    jaw_axis /= np.linalg.norm(jaw_axis)
-    world[:3] += delta * quaternion_rotate(world[3:], jaw_axis)
+    jaw_axis = centers[1] - centers[0]
+    jaw_norm = float(np.linalg.norm(jaw_axis))
+    if jaw_norm <= 1.0e-9:
+        raise ValueError("observed finger pad centers must be distinct")
+    world[:3] += delta * jaw_axis / jaw_norm
     return compose_pose(inverse_pose(root), world), updated
 
 
@@ -641,9 +646,9 @@ def geometry_conditioned_handle_balance_limit(
 
     Pot019 attempt_004 and Pot020 attempts 005-009 held the opposite arm while
     this arm's finger 0 remained tip-side.  Preserve Pot019's proven 5 mm cap.
-    In the separate 45-50% retained-thickness band, bound the +37.5 mm authored
-    imbalance at 15 mm after translation and duration corrections left the
-    signed pad residual unchanged.
+    In the separate 45-50% retained-thickness band, attempt 010 showed that a
+    15 mm pivot removed contact entirely, so retain the proven 5 mm bound and
+    handle lateral seating from the observed pad-center axis instead.
     """
 
     source = np.asarray(source_handle_size, dtype=np.float64)

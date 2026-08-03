@@ -329,7 +329,7 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
         [0.069219, 0.061195, 0.020012],
         0,
         0.0375,
-    ) == pytest.approx(0.015)
+    ) == pytest.approx(0.005)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
@@ -407,24 +407,30 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     contact = _pose()
     root = _pose()
     toward_finger_zero, signed = reanchor_missing_finger_contact(
-        contact, root, [0.0, 2.0], 0.0
+        contact,
+        root,
+        [0.0, 2.0],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        0.0,
     )
-    jaw_axis = YAM_FINGER_SEPARATION_LOCAL_M.copy()
-    jaw_axis[2] = 0.0
-    jaw_axis /= np.linalg.norm(jaw_axis)
-    assert toward_finger_zero[:3] == pytest.approx(0.001 * jaw_axis)
+    assert toward_finger_zero[:3] == pytest.approx([0.001, 0.0, 0.0])
     assert signed == pytest.approx(0.001)
 
     toward_finger_one, signed = reanchor_missing_finger_contact(
-        contact, root, [2.0, 0.0], 0.0
+        contact,
+        root,
+        [2.0, 0.0],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        0.0,
     )
-    assert toward_finger_one[:3] == pytest.approx(-0.001 * jaw_axis)
+    assert toward_finger_one[:3] == pytest.approx([-0.001, 0.0, 0.0])
     assert signed == pytest.approx(-0.001)
 
     unchanged, signed = reanchor_missing_finger_contact(
         contact,
         root,
         [0.0, 2.0],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
         MISSING_FINGER_CONTACT_LIMIT_M,
     )
     assert unchanged == pytest.approx(contact)

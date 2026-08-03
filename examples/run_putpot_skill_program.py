@@ -162,10 +162,12 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
 
     def finger_evidence(
         arm_name: str,
-    ) -> tuple[list[float], list[float], list[list[float]]]:
+    ) -> tuple[
+        list[float], list[float], list[list[float]], list[list[float]]
+    ]:
         gripper = env.robot.arms[arm_name].end_effector
         arm = env.scene[arm_name]
-        forces, pad_fractions, pad_axes_world = [], [], []
+        forces, pad_fractions, pad_axes_world, pad_centers_world = [], [], [], []
         for finger in gripper.fingers:
             forces.append(
                 float(finger.contact_force(gripper.default_target, env_ids)[0].item())
@@ -178,19 +180,32 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
             )
             body_idx = arm.data.body_names.index(finger.link)
             finger_pose = arm.data.body_link_pose_w[env_ids, body_idx, :]
-            _, axis_unit, _ = finger._tip_base_axis(env.device)
+            tip, axis_unit, axis_length = finger._tip_base_axis(env.device)
             axis_world = quat_apply(
                 finger_pose[:, 3:], axis_unit.expand(len(env_ids), -1)
             )[0]
             pad_axes_world.append(axis_world.detach().cpu().numpy().tolist())
-        return forces, pad_fractions, pad_axes_world
+            center_local = tip + 0.5 * axis_length * axis_unit
+            center_world = finger_pose[0, :3] + quat_apply(
+                finger_pose[:, 3:], center_local.expand(len(env_ids), -1)
+            )[0]
+            pad_centers_world.append(
+                center_world.detach().cpu().numpy().tolist()
+            )
+        return forces, pad_fractions, pad_axes_world, pad_centers_world
 
-    left_finger_forces, left_pad_fractions, left_pad_axes = finger_evidence(
-        "left_arm"
-    )
-    right_finger_forces, right_pad_fractions, right_pad_axes = finger_evidence(
-        "right_arm"
-    )
+    (
+        left_finger_forces,
+        left_pad_fractions,
+        left_pad_axes,
+        left_pad_centers,
+    ) = finger_evidence("left_arm")
+    (
+        right_finger_forces,
+        right_pad_fractions,
+        right_pad_axes,
+        right_pad_centers,
+    ) = finger_evidence("right_arm")
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     pot = env.scene["pot"]
     cooktop = env.scene["cooktop"]
@@ -222,9 +237,11 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "left_finger_forces_n": left_finger_forces,
         "left_pad_fractions": left_pad_fractions,
         "left_pad_axes_world": left_pad_axes,
+        "left_pad_centers_world": left_pad_centers,
         "right_finger_forces_n": right_finger_forces,
         "right_pad_fractions": right_pad_fractions,
         "right_pad_axes_world": right_pad_axes,
+        "right_pad_centers_world": right_pad_centers,
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
         "task_success": task_success,
@@ -1056,6 +1073,7 @@ def main() -> None:
                             contact,
                             sample["pot_pose"],
                             sample[f"{arm}_finger_forces_n"],
+                            sample[f"{arm}_pad_centers_world"],
                             missing_finger_corrections[arm],
                         )
                     )
@@ -1253,6 +1271,14 @@ def main() -> None:
             ),
             right_pad_axes_world=np.asarray(
                 [sample["right_pad_axes_world"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            left_pad_centers_world=np.asarray(
+                [sample["left_pad_centers_world"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            right_pad_centers_world=np.asarray(
+                [sample["right_pad_centers_world"] for sample in samples[1:]],
                 dtype=np.float32,
             ),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
