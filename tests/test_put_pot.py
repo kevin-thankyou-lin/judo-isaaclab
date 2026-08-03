@@ -73,6 +73,7 @@ from judo_isaaclab.put_marker import (
     inverse_pose,
     quaternion_multiply,
     quaternion_rotate,
+    transfer_pose,
 )
 
 
@@ -341,6 +342,19 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
         [0.080, 0.050, 0.020],
         0,
     )
+
+
+def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
+    right_handle = _pose(x=0.16)
+    left_handle = np.asarray([-0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    right_pose = np.asarray([0.21, -0.04, 0.08, 0.92387953, 0.0, 0.0, 0.38268343])
+    left_pose = np.asarray([-0.18, 0.03, 0.09, 0.70710678, 0.70710678, 0.0, 0.0])
+    mirrored = transfer_pose(right_pose, right_handle, left_handle)
+    result = left_pose.copy()
+    result[:3] = mirrored[:3]
+
+    assert result[:3] == pytest.approx(mirrored[:3])
+    assert result[3:] == pytest.approx(left_pose[3:])
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():

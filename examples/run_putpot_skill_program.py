@@ -527,17 +527,16 @@ def _build_skill(
         left_handle_world = compose_pose(
             target_initial.root_pose, handle(target_parts, left_side)
         )
-        left_grasp = transfer_pose(
+        mirrored_left_grasp = transfer_pose(
             right_grasp, right_handle_world, left_handle_world
         )
-        left_pregrasp = transfer_pose(
+        mirrored_left_pregrasp = transfer_pose(
             right_pregrasp, right_handle_world, left_handle_world
         )
+        left_grasp[:3] = mirrored_left_grasp[:3]
+        left_pregrasp[:3] = mirrored_left_pregrasp[:3]
         grasp_poses["left"] = left_grasp.copy()
-        grasp_geometry["left"] = {
-            **grasp_geometry["right"],
-            "target_symmetric_contact_from": "right",
-        }
+        grasp_geometry["left"]["target_symmetric_position_from"] = "right"
     # Anchor both contact transforms to the target pot at the transferred
     # grasp.  This makes the first smooth-transport sample continuous for every
     # asset scale instead of switching to a source-root convention.
