@@ -76,19 +76,40 @@ def _video_receipt(path: Path) -> dict[str, Any]:
 
 def audit_pair(key: str, record: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
     result_path = Path(record.get("result", ""))
+    repair_lane_record = (
+        "attempt_putmarker_repair_groot_l40_02_20260803_" in str(result_path)
+    )
     video_path = Path(record.get("video", ""))
     demo_record = record.get("demonstration", {})
     demo_path = Path(demo_record.get("path", ""))
     if not result_path.is_file():
-        return {"pair": key, "errors": [f"missing result {result_path}"]}
+        return {
+            "pair": key,
+            "errors": [f"missing result {result_path}"],
+            "warnings": warnings,
+            "repair_lane_record": repair_lane_record,
+            "actual_cpu_receipt_passed": False,
+        }
     result = json.loads(result_path.read_text(encoding="utf-8"))
     checks = result.get("acceptance_checks", {})
     protocol = result.get("protocol", {})
-    if result.get("status") != "passed" or not _task_success(result):
-        errors.append("coded task success/result status failed")
-    if not checks or not all(value is True for value in checks.values()):
-        errors.append(f"acceptance checks failed: {checks}")
+    if not _task_success(result):
+        errors.append("coded task success failed")
+    false_checks = {name for name, value in checks.items() if value is not True}
+    if repair_lane_record:
+        if result.get("status") != "passed":
+            errors.append("repair-lane result status is not passed")
+        if not checks or false_checks:
+            errors.append(f"repair-lane acceptance checks failed: {checks}")
+    elif not checks or false_checks - {"direct_source_action_replay_failed"}:
+        errors.append(f"legacy acceptance checks failed: {checks}")
+    elif result.get("status") != "passed":
+        warnings.append(
+            "legacy successful direct replay retained despite adaptation-only "
+            "direct_source_action_replay_failed check"
+        )
     if not (
         protocol.get("candidate_sampling") is False
         and protocol.get("scene_resets") == 1
@@ -106,14 +127,24 @@ def audit_pair(key: str, record: dict[str, Any]) -> dict[str, Any]:
     actual = device.get("actual", {})
     devices = [actual.get("manager_environment"), actual.get("simulation_context")]
     devices.extend(actual.get("action_tensors", []))
-    if not (
+    cpu_receipt_passed = (
         device.get("matched") is True
         and device.get("expected") == "cpu"
         and device.get("requested") == "cpu"
         and devices
         and all(name == "cpu" for name in devices)
+    )
+    if repair_lane_record and not cpu_receipt_passed:
+        errors.append(f"repair-lane actual CPU receipt failed: {device}")
+    elif not repair_lane_record and not cpu_receipt_passed:
+        warnings.append("legacy accepted record predates actual-device receipt schema")
+    if (
+        protocol.get("right_handle_assist_mechanism") == "fixed_joint"
+        and protocol.get("grasp_assistance") != "task_config:right=fixed_joint"
     ):
-        errors.append(f"actual CPU receipt failed: {device}")
+        warnings.append(
+            "fixed-joint mechanism/reason recorded; umbrella label predates label fix"
+        )
     if result.get("provenance", {}).get("target_dataset", {}).get("path") != record.get("dataset"):
         errors.append("selected target dataset does not match result provenance")
     provenance_files = _check_provenance(result.get("provenance", {}), errors)
@@ -143,6 +174,9 @@ def audit_pair(key: str, record: dict[str, Any]) -> dict[str, Any]:
         "pair": key,
         "status": "passed" if not errors else "failed",
         "errors": errors,
+        "warnings": warnings,
+        "repair_lane_record": repair_lane_record,
+        "actual_cpu_receipt_passed": cpu_receipt_passed,
         "accepted_source": record.get("accepted_source"),
         "result": str(result_path),
         "demonstration": demonstration,
@@ -179,6 +213,12 @@ def main() -> None:
             "total": len(records),
             "passed": sum(not row["errors"] for row in records),
             "failed": sum(bool(row["errors"]) for row in records),
+            "warnings": sum(len(row["warnings"]) for row in records),
+            "repair_lane_records": sum(row["repair_lane_record"] for row in records),
+            "repair_lane_cpu_receipts": sum(
+                row["repair_lane_record"] and row["actual_cpu_receipt_passed"]
+                for row in records
+            ),
             "decoded_frames": sum(row.get("video", {}).get("decoded_frames", 0) for row in records),
             "provenance_files_verified": sum(row.get("provenance_files_verified", 0) for row in records),
         },
