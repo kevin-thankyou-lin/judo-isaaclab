@@ -318,6 +318,7 @@ def _build_skill(
         offset_handle_pull_pose,
         quaternion_rotate,
         reorient_pose_about_point,
+        slerp_quaternion,
         transfer_pose,
     )
 
@@ -404,6 +405,12 @@ def _build_skill(
         handle_point = target_geometry.handle_frame(0.0)[:3]
         target_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
         target_grasp = target_right_attach(target_handle_grasp_index)
+        target_pregrasp[3:] = slerp_quaternion(
+            handle_pregrasp[3:], target_pregrasp[3:], 3.0
+        )
+        target_grasp[3:] = slerp_quaternion(
+            handle_grasp[3:], target_grasp[3:], 3.0
+        )
         handle_pregrasp = reorient_pose_about_point(
             handle_pregrasp, target_pregrasp[3:], handle_point
         )
@@ -1356,6 +1363,9 @@ def main() -> None:
                         else "source_semantic_handle_frame"
                     ),
                     "target_handle_grasp_index": target_handle_grasp_index,
+                    "target_handle_orientation_extrapolation": (
+                        3.0 if target_handle_grasp_index is not None else None
+                    ),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,

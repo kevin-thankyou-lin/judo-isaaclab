@@ -15,6 +15,7 @@ from judo_isaaclab.put_marker import (
     reanchor_marker_placement,
     reorient_pose_about_point,
     retarget_drawer_local_pose,
+    slerp_quaternion,
     transfer_pose,
 )
 
@@ -65,6 +66,17 @@ def test_reorient_pose_about_point_preserves_tool_local_contact():
     assert result[:3] + quaternion_rotate(
         result[3:], local_contact
     ) == pytest.approx(point)
+
+
+def test_slerp_quaternion_supports_deterministic_extrapolation():
+    half = np.sqrt(0.5)
+
+    extrapolated = slerp_quaternion(
+        [1.0, 0.0, 0.0, 0.0], [half, half, 0.0, 0.0], 2.0
+    )
+
+    assert abs(extrapolated[0]) < 1.0e-7
+    assert abs(extrapolated[1]) == pytest.approx(1.0)
 
 
 def test_marker_pose_is_centered_in_measured_cavity_frame():

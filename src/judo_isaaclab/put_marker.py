@@ -172,6 +172,16 @@ def _slerp(left: np.ndarray, right: np.ndarray, fraction: np.ndarray) -> np.ndar
     ) / denominator
 
 
+def slerp_quaternion(left: Any, right: Any, fraction: float) -> np.ndarray:
+    """Interpolate or extrapolate one scalar-first orientation."""
+
+    return _slerp(
+        np.asarray(left, dtype=np.float64),
+        np.asarray(right, dtype=np.float64),
+        np.asarray([float(fraction)], dtype=np.float64),
+    )[0]
+
+
 def interpolate_poses(start: Any, target: Any, steps: int) -> np.ndarray:
     """Quintic Cartesian interpolation including the target, excluding the start."""
     if steps < 1:
