@@ -1149,6 +1149,8 @@ def main() -> None:
         peer_contact_latch_jaw_residual_m = None
         peer_contact_jaw_twist_rad = None
         peer_contact_jaw_twist_fraction = None
+        peer_contact_pre_twist_jaw_residual_m = None
+        peer_contact_authored_jaw_center_locked = False
         peer_contact_gripper_retime = None
         peer_contact_position_locked = False
         peer_contact_pad_center_tracking = []
@@ -1461,10 +1463,29 @@ def main() -> None:
                             maximum_position_residual_m=args.max_position_step,
                         )
                     )
+                    from judo_isaaclab.put_pot import (
+                        HANDLE_PAD_GEOMETRIC_MARGIN_M,
+                        handle_jaw_center_offset_m,
+                    )
+
+                    peer_contact_pre_twist_jaw_residual_m = (
+                        handle_jaw_center_offset_m(
+                            loaded_left_world,
+                            sample["pot_pose"],
+                            target_left_handle_points,
+                        )
+                    )
+                    peer_contact_authored_jaw_center_locked = bool(
+                        abs(peer_contact_pre_twist_jaw_residual_m)
+                        <= HANDLE_PAD_GEOMETRIC_MARGIN_M
+                    )
                     peer_contact_jaw_twist_fraction = (
                         geometry_conditioned_loaded_jaw_rotation_fraction(
                             sample["left_finger_forces_n"],
                             sample["left_pad_fractions"],
+                            jaw_center_residual_m=(
+                                peer_contact_pre_twist_jaw_residual_m
+                            ),
                         )
                     )
                     (
@@ -1478,6 +1499,10 @@ def main() -> None:
                         sample["left_pad_centers_world"],
                         sample["left_pad_axes_world"],
                         peer_contact_jaw_twist_fraction,
+                    )
+                    peer_contact_position_locked = bool(
+                        peer_contact_position_locked
+                        or peer_contact_authored_jaw_center_locked
                     )
                     retained_residual = (
                         loaded_left_world[:3]
@@ -2521,6 +2546,12 @@ def main() -> None:
                 "peer_contact_jaw_twist_rad": peer_contact_jaw_twist_rad,
                 "peer_contact_jaw_twist_fraction": (
                     peer_contact_jaw_twist_fraction
+                ),
+                "peer_contact_pre_twist_jaw_residual_m": (
+                    peer_contact_pre_twist_jaw_residual_m
+                ),
+                "peer_contact_authored_jaw_center_locked": (
+                    peer_contact_authored_jaw_center_locked
                 ),
                 "peer_contact_gripper_retime": peer_contact_gripper_retime,
                 "peer_contact_position_locked": peer_contact_position_locked,

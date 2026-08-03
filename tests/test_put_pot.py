@@ -425,6 +425,12 @@ def test_loaded_jaw_twist_scales_only_from_retained_pad_base_residual():
     assert geometry_conditioned_loaded_jaw_rotation_fraction(
         [8.0, 8.0], [0.2, 0.8]
     ) == pytest.approx(LOADED_JAW_REACH_AVOIDANCE_FRACTION)
+    assert geometry_conditioned_loaded_jaw_rotation_fraction(
+        [0.0, 8.0], [np.nan, 0.734], jaw_center_residual_m=0.002
+    ) == pytest.approx(0.0)
+    assert geometry_conditioned_loaded_jaw_rotation_fraction(
+        [0.0, 8.0], [np.nan, 0.734], jaw_center_residual_m=0.004
+    ) > LOADED_JAW_REACH_AVOIDANCE_FRACTION
 
 
 def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():

@@ -628,6 +628,8 @@ def geometry_conditioned_loaded_jaw_rotation_fraction(
     base_fraction: float = LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     target_pad_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
     contact_threshold_n: float = 0.1,
+    jaw_center_residual_m: float | None = None,
+    jaw_center_tolerance_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
 ) -> float:
     """Scale reach-avoidance twist by the retained pad's baseward residual."""
 
@@ -644,6 +646,13 @@ def geometry_conditioned_loaded_jaw_rotation_fraction(
         or not 0.0 <= target_pad_fraction < 0.5
     ):
         raise ValueError("target_pad_fraction must be finite and in [0, 0.5)")
+    if not np.isfinite(jaw_center_tolerance_m) or jaw_center_tolerance_m < 0.0:
+        raise ValueError("jaw_center_tolerance_m must be finite and nonnegative")
+    if jaw_center_residual_m is not None:
+        if not np.isfinite(jaw_center_residual_m):
+            raise ValueError("jaw_center_residual_m must be finite when provided")
+        if abs(jaw_center_residual_m) <= jaw_center_tolerance_m:
+            return 0.0
     contacting = forces >= contact_threshold_n
     if int(np.sum(contacting)) != 1:
         return float(base_fraction)
