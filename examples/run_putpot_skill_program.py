@@ -374,8 +374,9 @@ def _build_skill(
         left_grasp,
         right_grasp,
         approach_steps=110,
-        left_close_steps=45,
-        right_close_steps=90,
+        left_close_steps=60,
+        right_close_steps=30,
+        simultaneous=True,
     )
     transport = program.smooth_bimanual_transport_to_center(
         target_initial.root_pose,
@@ -738,11 +739,20 @@ def main() -> None:
                     trajectory,
                     step,
                     sample["pot_pose"],
+                    sample["left_eef_pose"],
                     sample["right_eef_pose"],
                     left_handle_contact,
                     right_handle_contact,
+                    contacts_latched=bool(
+                        sample["left_grasp"] and sample["right_grasp"]
+                    ),
                 )
-            if trajectory is not None and step == grasp_complete_step:
+            if (
+                trajectory is not None
+                and step == grasp_complete_step
+                and sample["left_grasp"]
+                and sample["right_grasp"]
+            ):
                 from judo_isaaclab.put_pot import (
                     cartesian_smoothness_metrics,
                     reanchor_bimanual_transport_from_observation,

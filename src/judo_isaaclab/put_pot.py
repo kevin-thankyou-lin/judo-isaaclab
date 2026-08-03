@@ -228,9 +228,12 @@ def track_bimanual_handle_targets(
     trajectory: SkillTrajectory,
     current_step: int,
     observed_pot_pose: Any,
+    observed_left_pose: Any,
     observed_right_pose: Any,
     left_contact_local: Any,
     right_contact_local: Any,
+    *,
+    contacts_latched: bool = False,
 ) -> SkillTrajectory:
     """Track both fixed local handle contacts during the second-arm approach."""
 
@@ -242,14 +245,22 @@ def track_bimanual_handle_targets(
     if current_step < left_end or current_step >= right_end:
         raise ValueError("current_step is outside the second-handle approach")
     start = current_step + 1
-    left_target = compose_pose(observed_pot_pose, left_contact_local)
-    right_target = compose_pose(observed_pot_pose, right_contact_local)
     left = trajectory.left_poses.copy()
     right = trajectory.right_poses.copy()
-    left[start : right_end + 1] = left_target
-    right[start : right_end + 1] = interpolate_poses(
-        observed_right_pose, right_target, right_end - current_step
-    )
+    if contacts_latched:
+        left[start : right_end + 1] = _pose(
+            observed_left_pose, "observed_left_pose"
+        )
+        right[start : right_end + 1] = _pose(
+            observed_right_pose, "observed_right_pose"
+        )
+    else:
+        left_target = compose_pose(observed_pot_pose, left_contact_local)
+        right_target = compose_pose(observed_pot_pose, right_contact_local)
+        left[start : right_end + 1] = left_target
+        right[start : right_end + 1] = interpolate_poses(
+            observed_right_pose, right_target, right_end - current_step
+        )
     return SkillTrajectory(
         left_poses=left,
         right_poses=right,
@@ -770,6 +781,7 @@ class PutPotSkillProgram:
         left_close_steps: int,
         right_close_steps: int,
         closed: float = 0.0,
+        simultaneous: bool = False,
     ) -> None:
         self._append(
             "bimanual_pregrasp",
@@ -778,20 +790,36 @@ class PutPotSkillProgram:
             left_pose=left_pregrasp,
             right_pose=right_pregrasp,
         )
-        self._append(
-            "left_handle_grasp",
-            "bimanual_handle_grasp",
-            left_close_steps,
-            left_pose=left_grasp,
-            left_gripper=closed,
-        )
-        self._append(
-            "right_handle_grasp",
-            "bimanual_handle_grasp",
-            right_close_steps,
-            right_pose=right_grasp,
-            right_gripper=closed,
-        )
+        if simultaneous:
+            self._append(
+                "left_handle_grasp",
+                "bimanual_handle_grasp",
+                left_close_steps,
+                left_pose=left_grasp,
+                right_pose=right_grasp,
+                left_gripper=closed,
+                right_gripper=closed,
+            )
+            self._append(
+                "right_handle_grasp",
+                "bimanual_handle_grasp",
+                right_close_steps,
+            )
+        else:
+            self._append(
+                "left_handle_grasp",
+                "bimanual_handle_grasp",
+                left_close_steps,
+                left_pose=left_grasp,
+                left_gripper=closed,
+            )
+            self._append(
+                "right_handle_grasp",
+                "bimanual_handle_grasp",
+                right_close_steps,
+                right_pose=right_grasp,
+                right_gripper=closed,
+            )
 
     def lift_and_transport(
         self,

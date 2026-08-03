@@ -251,12 +251,30 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         trajectory,
         left_end,
         observed,
+        observed_left,
         trajectory.right_poses[left_end],
         left_contact,
         right_contact,
     )
     assert tracked.left_poses[left_end + 1] == pytest.approx(observed_left)
     assert tracked.right_poses[right_end] == pytest.approx(observed_right)
+
+    latched = track_bimanual_handle_targets(
+        trajectory,
+        left_end,
+        observed,
+        observed_left,
+        observed_right,
+        left_contact,
+        right_contact,
+        contacts_latched=True,
+    )
+    assert latched.left_poses[left_end + 1 : right_end + 1] == pytest.approx(
+        np.broadcast_to(observed_left, (right_end - left_end, 7))
+    )
+    assert latched.right_poses[left_end + 1 : right_end + 1] == pytest.approx(
+        np.broadcast_to(observed_right, (right_end - left_end, 7))
+    )
 
     corrected, transport = reanchor_bimanual_transport_from_observation(
         grasp,
@@ -409,6 +427,25 @@ def test_center_feedback_reanchors_only_support_lowering_and_release():
     )
     assert release_corrected.left_poses[release_end, :2] == pytest.approx(
         corrected.left_poses[release_end, :2] + [0.002, -0.003]
+    )
+
+
+def test_simultaneous_bimanual_close_reaches_both_handles_before_hold():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1), _pose(0.1, 1.0), _pose(0.2), _pose(0.2, 1.0),
+        approach_steps=2, left_close_steps=3, right_close_steps=2,
+        simultaneous=True,
+    )
+    trajectory = program.build()
+    first_close = trajectory.waypoint_steps["left_handle_grasp"]
+    hold = trajectory.waypoint_steps["right_handle_grasp"]
+    assert trajectory.grippers[first_close] == pytest.approx([0.0, 0.0])
+    assert trajectory.left_poses[first_close: hold + 1] == pytest.approx(
+        np.broadcast_to(_pose(0.2), (hold - first_close + 1, 7))
+    )
+    assert trajectory.right_poses[first_close: hold + 1] == pytest.approx(
+        np.broadcast_to(_pose(0.2, 1.0), (hold - first_close + 1, 7))
     )
 
 
