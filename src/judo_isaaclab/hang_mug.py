@@ -206,6 +206,38 @@ def ensure_pick_latch_clearance(
     return handover
 
 
+def reanchor_right_grasp_from_observed_mug(
+    trajectory: SkillTrajectory,
+    nominal_right_contact: Any,
+    observed_mug_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Recompute the close path from the mug observed at handover pregrasp."""
+
+    required = ("handover_pregrasp", "right_grasp", "left_release")
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    start = steps["handover_pregrasp"] + 1
+    grasp_end = steps["right_grasp"]
+    release_end = steps["left_release"]
+    nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[start : grasp_end + 1] = interpolate_poses(
+        observed_right_pose, corrected_grasp, grasp_end - start + 1
+    )
+    right[grasp_end + 1 : release_end + 1] = corrected_grasp
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
     planned_right_contact: Any,

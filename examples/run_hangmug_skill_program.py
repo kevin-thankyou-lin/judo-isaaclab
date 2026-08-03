@@ -767,6 +767,20 @@ def main() -> None:
                     sample["mug_pose"],
                     sample["right_eef_pose"],
                 )
+            if (
+                trajectory is not None
+                and step == trajectory.waypoint_steps["handover_pregrasp"]
+            ):
+                from judo_isaaclab.hang_mug import (
+                    reanchor_right_grasp_from_observed_mug,
+                )
+
+                trajectory = reanchor_right_grasp_from_observed_mug(
+                    trajectory,
+                    nominal_right_contact,
+                    sample["mug_pose"],
+                    sample["right_eef_pose"],
+                )
             reanchor_waypoints = (
                 "left_release",
                 "tree_transport",

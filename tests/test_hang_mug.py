@@ -14,6 +14,7 @@ from judo_isaaclab.hang_mug import (
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
+    reanchor_right_grasp_from_observed_mug,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
@@ -313,4 +314,39 @@ def test_branch_transport_reanchors_observed_right_contact():
     )
     assert readjusted.right_poses[:second_start] == pytest.approx(
         adjusted.right_poses[:second_start]
+    )
+
+
+def test_handover_pregrasp_reanchors_close_to_observed_mug():
+    program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    program.semantic_left_grasp(
+        _pose(0.1, z=1), _pose(0.2, z=1), _pose(0.3, z=1),
+        approach_steps=2, close_steps=2, lift_steps=2,
+    )
+    program.physical_handover(
+        _pose(0.3, z=1), _pose(0.3, -0.1, 1), _pose(0.3, -0.2, 1),
+        _pose(0.3, 0.1, 1), approach_steps=2, close_steps=2, release_steps=2,
+    )
+    program.handle_to_branch_insert(
+        _pose(0.5, -0.2, 1.1), _pose(0.6, -0.3, 1.0),
+        _pose(0.7, -0.4, 0.9), transport_steps=2, approach_steps=2,
+        insert_steps=2,
+    )
+    trajectory = program.build()
+    nominal_contact = _pose(0.05, -0.02, 0.03)
+    observed_mug = _pose(0.4, 0.2, 0.8)
+    observed_right = _pose(0.47, 0.16, 0.85)
+    adjusted = reanchor_right_grasp_from_observed_mug(
+        trajectory, nominal_contact, observed_mug, observed_right
+    )
+    start = trajectory.waypoint_steps["handover_pregrasp"] + 1
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    release_end = trajectory.waypoint_steps["left_release"]
+    corrected = compose_pose(observed_mug, nominal_contact)
+    assert adjusted.right_poses[start - 1] == pytest.approx(
+        trajectory.right_poses[start - 1]
+    )
+    assert adjusted.right_poses[grasp_end] == pytest.approx(corrected)
+    assert adjusted.right_poses[grasp_end + 1 : release_end + 1] == pytest.approx(
+        np.repeat(corrected[None], release_end - grasp_end, axis=0)
     )
