@@ -62,13 +62,7 @@ THIN_HANDLE_BALANCE_RATIO = 0.50
 THIN_HANDLE_SYMMETRY_RATIO = 0.45
 THIN_HANDLE_POSITIVE_BALANCE_EXTRA_M = 0.002
 HALF_THIN_HANDLE_POSITIVE_BALANCE_LIMIT_M = 0.005
-# Pot023 attempt_001 retained finger 1 at pad fraction 0.85 throughout the
-# grasp window, but its +57.42 mm authored depth imbalance left finger 0 clear.
-# PutPot021 succeeds with the common 3 mm pivot at +48.83 mm.  Give geometry
-# beyond 50 mm one additional common-pivot increment; the already-contacting
-# finger remains fixed by ``balance_handle_contact_across_finger_pads``.
-HIGH_POSITIVE_HANDLE_IMBALANCE_M = 0.050
-HIGH_POSITIVE_HANDLE_BALANCE_EXTRA_M = 0.003
+SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION = 0.25
 MISSING_FINGER_CONTACT_STEP_M = 0.001
 MISSING_FINGER_JAW_AXIS_MIN_M = 0.050
 # Pot020 attempt_004 reached the former 40 mm cap with the missing finger's
@@ -908,6 +902,75 @@ def reanchor_missing_finger_pad_depth(
     return compose_pose(inverse_pose(root), world), float(depth_correction_m + delta)
 
 
+def reanchor_single_contact_pad_fraction(
+    contact_local: Any,
+    observed_root_pose: Any,
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    pad_axes_world: Any,
+    depth_correction_m: float,
+    *,
+    contact_threshold_n: float = 0.1,
+    step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
+    target_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
+) -> tuple[np.ndarray, float, float]:
+    """Reseat a retained single contact from the pad base toward its tip.
+
+    PutPot023 attempts 001-002 retained one finger near fraction 0.84 while the
+    successful PutPot021 contact occupied fractions 0.21-0.24.  This feedback
+    follows the measured pad tangent in one deterministic direction.  Its
+    total authority is bounded by the authored support interval between the
+    single-contact latch margins.
+    """
+
+    local = _pose(contact_local, "contact_local")
+    root = _pose(observed_root_pose, "observed_root_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    axes = np.asarray(pad_axes_world, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
+    if axes.shape != (2, 3) or not np.all(np.isfinite(axes)):
+        raise ValueError("pad_axes_world must contain two finite 3D axes")
+    if not np.isfinite(depth_correction_m) or depth_correction_m < 0.0:
+        raise ValueError("depth_correction_m must be finite and nonnegative")
+    if not np.isfinite(step_m) or step_m <= 0.0:
+        raise ValueError("step_m must be finite and positive")
+    if not np.isfinite(target_fraction) or not 0.0 <= target_fraction < 0.5:
+        raise ValueError("target_fraction must be finite and in [0, 0.5)")
+    contacting = forces >= contact_threshold_n
+    if int(np.sum(contacting)) != 1:
+        return local.copy(), float(depth_correction_m), 0.0
+    contact_index = int(np.flatnonzero(contacting)[0])
+    fraction = float(fractions[contact_index])
+    if not np.isfinite(fraction) or fraction <= target_fraction:
+        return local.copy(), float(depth_correction_m), 0.0
+    limit_m = (
+        1.0 - 2.0 * SINGLE_FINGER_CONTACT_LATCH_FRACTION
+    ) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    measured_residual_m = (
+        fraction - target_fraction
+    ) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    delta = min(step_m, measured_residual_m, limit_m - depth_correction_m)
+    if delta <= 0.0:
+        return local.copy(), float(depth_correction_m), measured_residual_m
+    axis = axes[contact_index]
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1.0e-9:
+        raise ValueError("contacting finger pad axis must be nonzero")
+    world = compose_pose(root, local)
+    # The pad axis points tip-to-base.  Moving the wrist with that axis moves a
+    # fixed object contact toward the tip and decreases its signed fraction.
+    world[:3] += delta * axis / norm
+    return (
+        compose_pose(inverse_pose(root), world),
+        float(depth_correction_m + delta),
+        measured_residual_m,
+    )
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 
@@ -1067,8 +1130,6 @@ def geometry_conditioned_handle_balance_limit(
         and predicted_imbalance_m > 0.0
         else 0.0
     )
-    if predicted_imbalance_m > HIGH_POSITIVE_HANDLE_IMBALANCE_M:
-        extra = max(extra, HIGH_POSITIVE_HANDLE_BALANCE_EXTRA_M)
     return float(base_limit_m + extra)
 
 

@@ -13,6 +13,7 @@ from judo_isaaclab.put_pot import (
     PutPotSkillProgram,
     RigidSupportGeometry,
     YAM_FINGER_SEPARATION_LOCAL_M,
+    YAM_FINGER_PAD_AXIS_LENGTH_M,
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     balance_handle_contact_across_finger_pads,
@@ -43,6 +44,7 @@ from judo_isaaclab.put_pot import (
     compensate_retained_contact_tracking,
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
+    reanchor_single_contact_pad_fraction,
     reanchor_centered_support,
     reanchor_centered_unload,
     reanchor_handle_jaw_center_step,
@@ -366,17 +368,6 @@ def test_severely_thin_positive_imbalance_gets_measured_extra_pivot_only():
     assert geometry_conditioned_handle_balance_limit(
         source, target, 0, -0.038
     ) == pytest.approx(0.003)
-
-
-def test_high_positive_imbalance_deepens_only_the_missing_pad():
-    source = [0.059453, 0.085784, 0.040560]
-    target = [0.070727, 0.085979, 0.025874]
-    assert geometry_conditioned_handle_balance_limit(
-        source, target, 0, 0.057418
-    ) == pytest.approx(0.006)
-    assert geometry_conditioned_handle_balance_limit(
-        source, target, 0, 0.048826
-    ) == pytest.approx(0.003)
     assert geometry_conditioned_handle_balance_limit(
         source, [0.0666, 0.0657, 0.030], 0, 0.030
     ) == pytest.approx(0.003)
@@ -386,6 +377,35 @@ def test_high_positive_imbalance_deepens_only_the_missing_pad():
         0,
         0.0375,
     ) == pytest.approx(0.005)
+
+
+def test_single_contact_reseats_from_measured_pad_base_residual():
+    contact = _pose()
+    reseated, cumulative, residual = reanchor_single_contact_pad_fraction(
+        contact,
+        _pose(),
+        [0.0, 2.0],
+        [np.nan, 0.84],
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+        0.0,
+    )
+    assert residual == pytest.approx(
+        (0.84 - 0.25) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    )
+    assert cumulative == pytest.approx(0.001)
+    assert reseated[:3] == pytest.approx([0.0, 0.001, 0.0])
+
+    unchanged, cumulative, residual = reanchor_single_contact_pad_fraction(
+        contact,
+        _pose(),
+        [0.0, 2.0],
+        [np.nan, 0.22],
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+        0.0,
+    )
+    assert unchanged == pytest.approx(contact)
+    assert cumulative == pytest.approx(0.0)
+    assert residual == pytest.approx(0.0)
 
 
 def test_only_thin_measured_symmetric_target_handles_share_contact_relation():

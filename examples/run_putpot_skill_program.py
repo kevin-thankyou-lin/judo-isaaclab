@@ -1149,6 +1149,8 @@ def main() -> None:
         peer_contact_latch_jaw_residual_m = None
         peer_contact_jaw_twist_rad = None
         peer_contact_recovery_residuals_m = []
+        peer_contact_pad_reseat_m = 0.0
+        peer_contact_pad_reseat_residuals_m = []
         contact_hold_latch_step = None
         contact_hold_loaded_residual_world_m = None
         contact_hold_retention_local_m = None
@@ -1418,6 +1420,7 @@ def main() -> None:
                     SINGLE_FINGER_CONTACT_LATCH_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
+                    reanchor_single_contact_pad_fraction,
                     preserve_loaded_contact_target,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
@@ -1542,6 +1545,26 @@ def main() -> None:
                 ):
                     from judo_isaaclab.put_pot import (
                         reanchor_handle_jaw_center_step,
+                    )
+
+                    (
+                        left_handle_contact,
+                        peer_contact_pad_reseat_m,
+                        pad_reseat_residual_m,
+                    ) = reanchor_single_contact_pad_fraction(
+                        left_handle_contact,
+                        sample["pot_pose"],
+                        sample["left_finger_forces_n"],
+                        sample["left_pad_fractions"],
+                        sample["left_pad_axes_world"],
+                        peer_contact_pad_reseat_m,
+                    )
+                    peer_contact_pad_reseat_residuals_m.append(
+                        {
+                            "step": step,
+                            "signed_residual_m": pad_reseat_residual_m,
+                            "cumulative_applied_m": peer_contact_pad_reseat_m,
+                        }
                     )
 
                     (
@@ -2398,6 +2421,10 @@ def main() -> None:
                 "peer_contact_jaw_twist_rad": peer_contact_jaw_twist_rad,
                 "peer_contact_recovery_residuals_m": (
                     peer_contact_recovery_residuals_m
+                ),
+                "peer_contact_pad_reseat_m": peer_contact_pad_reseat_m,
+                "peer_contact_pad_reseat_residuals_m": (
+                    peer_contact_pad_reseat_residuals_m
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
                 "contact_hold_loaded_residual_world_m": (
