@@ -1140,6 +1140,7 @@ def main() -> None:
         milestone_reanchor_accepted = None
         milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
+        milestone_reanchor_step = None
         milestone_gripper_hold_steps = None
         milestone_gripper_close_start_step = None
         milestone_open_pad_reseat_m = 0.0
@@ -1416,6 +1417,7 @@ def main() -> None:
                         )
                     ),
                 )
+                milestone_reanchor_step = step
                 if peer_contact_transfer:
                     trajectory, milestone_gripper_hold_steps = (
                         retime_loaded_gripper_close_for_pad_reseat(
@@ -1451,6 +1453,7 @@ def main() -> None:
                     track_bimanual_handle_targets,
                     track_loaded_pad_center_from_observation,
                     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+                    single_contact_pad_reseat_saturated,
                 )
 
                 if (
@@ -1459,6 +1462,7 @@ def main() -> None:
                     and milestone_gripper_close_start_step is not None
                     and step < milestone_gripper_close_start_step
                 ):
+                    previous_open_pad_reseat_m = milestone_open_pad_reseat_m
                     (
                         left_handle_contact,
                         milestone_open_pad_reseat_m,
@@ -1480,6 +1484,28 @@ def main() -> None:
                             ),
                         }
                     )
+                    if (
+                        single_contact_pad_reseat_saturated(
+                            previous_open_pad_reseat_m,
+                            milestone_open_pad_reseat_m,
+                            open_pad_reseat_residual_m,
+                        )
+                        and single_finger_contact_observed(
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                        )
+                    ):
+                        trajectory, _ = (
+                            retime_loaded_gripper_close_for_pad_reseat(
+                                trajectory,
+                                step,
+                                0.0,
+                            )
+                        )
+                        milestone_gripper_close_start_step = step
+                        milestone_gripper_hold_steps = (
+                            step - milestone_reanchor_step
+                        )
 
                 supported_peer_contact = bool(
                     peer_contact_transfer
@@ -2579,6 +2605,7 @@ def main() -> None:
                 "milestone_translation_limit_m": milestone_translation_limit_m,
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "milestone_reanchor_source": milestone_reanchor_source,
+                "milestone_reanchor_step": milestone_reanchor_step,
                 "milestone_gripper_hold_steps": milestone_gripper_hold_steps,
                 "milestone_gripper_close_start_step": (
                     milestone_gripper_close_start_step

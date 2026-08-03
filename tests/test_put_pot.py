@@ -59,6 +59,7 @@ from judo_isaaclab.put_pot import (
     select_geometry_conditioned_milestone_reanchor,
     single_finger_contact_observed,
     single_contact_pad_base_residual_m,
+    single_contact_pad_reseat_saturated,
     smooth_collision_aware_bimanual_transport,
     support_aligned_pot_pose,
     support_boundary_staging_pose,
@@ -431,6 +432,17 @@ def test_loaded_jaw_twist_scales_only_from_retained_pad_base_residual():
     assert geometry_conditioned_loaded_jaw_rotation_fraction(
         [0.0, 8.0], [np.nan, 0.734], jaw_center_residual_m=0.004
     ) > LOADED_JAW_REACH_AVOIDANCE_FRACTION
+
+
+def test_pad_reseat_saturation_starts_close_only_after_authority_is_spent():
+    limit = 0.04083968658057993
+    assert not single_contact_pad_reseat_saturated(
+        limit - 0.001, limit, 0.02933932340273547
+    )
+    assert single_contact_pad_reseat_saturated(
+        limit, limit, 0.02933932340273547
+    )
+    assert not single_contact_pad_reseat_saturated(limit, limit, 0.0)
 
 
 def test_loaded_gripper_close_holds_for_measured_reseat_then_closes():

@@ -689,6 +689,25 @@ def single_contact_pad_base_residual_m(
     )
 
 
+def single_contact_pad_reseat_saturated(
+    previous_applied_m: float,
+    current_applied_m: float,
+    signed_residual_m: float,
+) -> bool:
+    """Detect a positive pad residual after bounded reseat authority is spent."""
+
+    values = np.asarray(
+        [previous_applied_m, current_applied_m, signed_residual_m],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(values)) or np.any(values[:2] < 0.0):
+        raise ValueError("pad reseat saturation values must be finite and nonnegative")
+    return bool(
+        signed_residual_m > 0.0
+        and current_applied_m <= previous_applied_m + 1.0e-12
+    )
+
+
 def twist_loaded_jaw_about_observed_contact(
     observed_pose: Any,
     loaded_target_pose: Any,
