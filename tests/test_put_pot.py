@@ -17,6 +17,7 @@ from judo_isaaclab.put_pot import (
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_handle_pad_depth,
+    geometry_conditioned_transport_steps,
     handle_finger_pad_depth_imbalance,
     handle_axial_contact_scale,
     reanchor_bimanual_transport_from_observation,
@@ -173,10 +174,22 @@ def test_handle_pad_depth_adds_measured_transverse_cross_section_loss():
         [0.0, 0.6, 0.8],
     )
     projected = 0.6 * 0.0269 + 0.8 * 0.0133
-    assert depth == pytest.approx(0.016 + projected)
+    assert depth == pytest.approx(0.016 + 0.5 * (projected + 0.0269))
     assert geometry_conditioned_handle_pad_depth(
         [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0, [0.0, 0.8, 0.6]
     ) == pytest.approx(HANDLE_PAD_DEPTH_MARGIN_M)
+
+
+def test_transport_duration_scales_with_measured_handle_cross_section():
+    assert geometry_conditioned_transport_steps(
+        180,
+        [0.0594, 0.0858, 0.0405],
+        [0.0687, 0.0589, 0.0272],
+        0,
+    ) == 263
+    assert geometry_conditioned_transport_steps(
+        180, [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0
+    ) == 180
 
 
 def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():

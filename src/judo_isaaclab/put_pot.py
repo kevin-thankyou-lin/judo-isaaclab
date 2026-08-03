@@ -216,8 +216,31 @@ def geometry_conditioned_handle_pad_depth(
     maximum_loss = max(
         0.0, max(float(source[axis] - target[axis]) for axis in transverse)
     )
-    cross_section_loss = min(projected_loss, maximum_loss)
+    cross_section_loss = 0.5 * (min(projected_loss, maximum_loss) + maximum_loss)
     return float(base_depth_m + cross_section_loss)
+
+
+def geometry_conditioned_transport_steps(
+    base_steps: int,
+    source_handle_size: Any,
+    target_handle_size: Any,
+    handle_axis: int,
+) -> int:
+    """Slow continuous transport in proportion to handle cross-section loss."""
+
+    source = np.asarray(source_handle_size, dtype=np.float64)
+    target = np.asarray(target_handle_size, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or np.any(source <= 0.0) or np.any(target <= 0.0):
+        raise ValueError("handle sizes must contain three positive values")
+    if handle_axis not in (0, 1):
+        raise ValueError("handle_axis must be horizontal")
+    if base_steps < 1:
+        raise ValueError("base_steps must be positive")
+    transverse = [axis for axis in range(3) if axis != handle_axis]
+    retained_ratio = min(
+        1.0, max(float(target[axis] / source[axis]) for axis in transverse)
+    )
+    return int(np.ceil(base_steps / retained_ratio))
 
 
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
