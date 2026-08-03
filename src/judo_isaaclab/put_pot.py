@@ -20,6 +20,7 @@ from .put_marker import (
     compose_pose,
     inverse_pose,
     interpolate_poses,
+    quaternion_multiply,
     quaternion_rotate,
     transfer_pose,
 )
@@ -29,6 +30,9 @@ CENTERED_ON_COOKTOP_TOLERANCE_M = 0.03
 TRANSPORT_PLANNING_MARGIN_M = 1.0e-4
 CONTACT_FEEDBACK_HORIZON_STEPS = 10
 HANDLE_PAD_DEPTH_MARGIN_M = 0.003
+YAM_LEFT_FINGER_PIVOT_LOCAL_M = np.asarray([-0.045060, 0.024000, 0.054560])
+YAM_FINGER_SEPARATION_LOCAL_M = np.asarray([0.090120, -0.048000, 0.0])
+HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 
 
 def _linear_contact_feedback_poses(start: Any, target: Any, steps: int) -> np.ndarray:
@@ -111,6 +115,35 @@ def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarra
     result = grasp.copy()
     result[:3] += float(depth_m) * quaternion_rotate(
         result[3:], np.asarray([0.0, 0.0, 1.0])
+    )
+    return result
+
+
+def balance_handle_contact_across_finger_pads(
+    grasp_pose: Any,
+    relative_depth_m: float = HANDLE_PAD_RELATIVE_DEPTH_M,
+) -> np.ndarray:
+    """Tilt about the left-finger pivot to deepen only the right-pad contact."""
+
+    grasp = _pose(grasp_pose, "grasp_pose")
+    separation = YAM_FINGER_SEPARATION_LOCAL_M
+    span = float(np.linalg.norm(separation))
+    if not np.isfinite(relative_depth_m) or not 0.0 <= relative_depth_m < span:
+        raise ValueError("relative_depth_m must be finite and smaller than finger span")
+    axis = np.asarray([separation[1], -separation[0], 0.0], dtype=np.float64)
+    axis /= np.linalg.norm(axis)
+    angle = float(np.arcsin(relative_depth_m / span))
+    delta = np.concatenate(
+        ([np.cos(0.5 * angle)], axis * np.sin(0.5 * angle))
+    )
+    result = grasp.copy()
+    pivot_world = grasp[:3] + quaternion_rotate(
+        grasp[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    )
+    result[3:] = quaternion_multiply(grasp[3:], delta)
+    result[3:] /= np.linalg.norm(result[3:])
+    result[:3] = pivot_world - quaternion_rotate(
+        result[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
     )
     return result
 

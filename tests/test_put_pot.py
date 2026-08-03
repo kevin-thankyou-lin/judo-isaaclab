@@ -7,6 +7,9 @@ from judo_isaaclab.put_pot import (
     CONTACT_FEEDBACK_HORIZON_STEPS,
     PutPotSkillProgram,
     RigidSupportGeometry,
+    YAM_FINGER_SEPARATION_LOCAL_M,
+    YAM_LEFT_FINGER_PIVOT_LOCAL_M,
+    balance_handle_contact_across_finger_pads,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
     handle_axial_contact_scale,
@@ -50,7 +53,12 @@ def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
     )
 
 
-from judo_isaaclab.put_marker import compose_pose, interpolate_poses, inverse_pose
+from judo_isaaclab.put_marker import (
+    compose_pose,
+    interpolate_poses,
+    inverse_pose,
+    quaternion_rotate,
+)
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -109,6 +117,22 @@ def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():
     deepened = seat_handle_inside_finger_pads(grasp, 0.003)
     assert deepened[:3] == pytest.approx([0.07, 0.02, 0.043])
     assert deepened[3:] == pytest.approx(grasp[3:])
+
+
+def test_handle_pad_balance_keeps_left_pivot_and_deepens_right_finger():
+    grasp = _pose(x=0.07, y=0.02, z=0.04)
+    balanced = balance_handle_contact_across_finger_pads(grasp)
+    left_before = grasp[:3] + YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    left_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    )
+    right_before = left_before + YAM_FINGER_SEPARATION_LOCAL_M
+    right_after = balanced[:3] + quaternion_rotate(
+        balanced[3:],
+        YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_FINGER_SEPARATION_LOCAL_M,
+    )
+    assert left_after == pytest.approx(left_before)
+    assert right_after[2] - right_before[2] == pytest.approx(0.003, abs=2.0e-6)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
