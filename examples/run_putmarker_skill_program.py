@@ -44,6 +44,7 @@ SEMANTIC_INDICES = {
 TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.050
 TARGET_HANDLE_PULL_LIFT_M = 0.050
 TARGET_HANDLE_GRIPPER_CLOSED_POSITION = -0.020
+TARGET_HANDLE_MIN_LATERAL_OFFSET_M = 0.028
 # Keep collision-limited lower-drawer geometry outside both the authored table
 # surface and the millimetre-scale contact skin used by CPU PhysX.
 CABINET_TABLE_COLLISION_CLEARANCE_M = 0.002
@@ -442,11 +443,26 @@ def _build_skill(
         handle_grasp = right_handle("handle_grasp")
         handle_close = right_handle("drawer_closed")
         handle_release = right_handle("handle_release")
+        target_handle_lateral_correction_m = 0.0
     else:
         handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
         handle_grasp = target_right_attach(target_handle_grasp_index)
         handle_pregrasp[2] += TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
         handle_grasp[2] += TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
+        grasp_in_handle = compose_pose(
+            inverse_pose(target_geometry.handle_frame(target_geometry.lower_limit_m)),
+            handle_grasp,
+        )
+        target_handle_lateral_correction_m = max(
+            0.0,
+            TARGET_HANDLE_MIN_LATERAL_OFFSET_M - float(grasp_in_handle[1]),
+        )
+        lateral = quaternion_rotate(
+            target_geometry.root_pose[3:],
+            [0.0, target_handle_lateral_correction_m, 0.0],
+        )
+        handle_pregrasp[:3] += lateral
+        handle_grasp[:3] += lateral
         handle_close = handle_grasp.copy()
         handle_release = handle_pregrasp.copy()
     inward = -quaternion_rotate(
@@ -518,6 +534,7 @@ def _build_skill(
         marker_in_drawer("marker_cavity"),
         working_q,
         target_handle_grasp_index,
+        target_handle_lateral_correction_m,
     )
 
 
@@ -1123,6 +1140,7 @@ def main() -> None:
             intended_marker_cavity,
             intended_drawer_q,
             target_handle_grasp_index,
+            target_handle_lateral_correction_m,
         ) = (
             _build_skill(
                 source,
@@ -1139,7 +1157,7 @@ def main() -> None:
                 handle_engagement_depth_m,
                 low_handle_target,
             )
-            if args.mode == "skill" else (None, None, None, None, None)
+            if args.mode == "skill" else (None, None, None, None, None, None)
         )
         joint_nominal = (
             _extend_joint_nominal(
@@ -1449,6 +1467,14 @@ def main() -> None:
                         TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
                         if target_handle_grasp_index is not None
                         else 0.0
+                    ),
+                    "target_handle_min_lateral_offset_m": (
+                        TARGET_HANDLE_MIN_LATERAL_OFFSET_M
+                        if target_handle_grasp_index is not None
+                        else 0.0
+                    ),
+                    "target_handle_lateral_correction_m": (
+                        target_handle_lateral_correction_m
                     ),
                     "target_handle_pull_lift_m": (
                         TARGET_HANDLE_PULL_LIFT_M

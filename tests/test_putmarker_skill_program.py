@@ -70,6 +70,7 @@ def test_low_feet_handle_uses_corrected_target_semantic_frame_and_friction():
     assert module.TARGET_HANDLE_RUNTIME_Z_CORRECTION_M == pytest.approx(-0.050)
     assert module.TARGET_HANDLE_PULL_LIFT_M == pytest.approx(0.050)
     assert module.TARGET_HANDLE_GRIPPER_CLOSED_POSITION == pytest.approx(-0.020)
+    assert module.TARGET_HANDLE_MIN_LATERAL_OFFSET_M == pytest.approx(0.028)
     assert module._right_handle_assist_spec(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_008.hdf5",
         1.0601,
