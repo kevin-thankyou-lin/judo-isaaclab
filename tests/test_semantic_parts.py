@@ -6,6 +6,7 @@ from judo_isaaclab.semantic_parts import (
     corresponding_branch,
     infer_mug_parts,
     infer_open_drawer_cavity,
+    infer_pot_handle_contact_frame,
     infer_pot_parts,
     infer_tree_branches,
 )
@@ -61,6 +62,29 @@ def test_infer_pot_parts_uses_handle_overhang_not_asset_id():
         [-0.16, 0.0, 0.04],
         [0.16, 0.0, 0.04],
     ) == (-1, 1)
+
+
+def test_pot_handle_contact_frame_uses_nearest_authored_segment_tangent():
+    negative = _rod((-0.12, -0.02, 0.01), (-0.19, 0.03, 0.06), radius=0.004)
+    positive = _rod((0.12, 0.02, 0.01), (0.19, -0.03, 0.06), radius=0.004)
+    components = [
+        _box((-0.12, -0.11, -0.08), (0.12, 0.11, -0.07)),
+        _box((-0.12, -0.11, -0.07), (0.12, 0.11, 0.08)),
+        negative,
+        positive,
+    ]
+    parts = infer_pot_parts(components)
+    frame = infer_pot_handle_contact_frame(
+        components, parts, -1, [-0.22, 0.04, 0.08]
+    )
+
+    from judo_isaaclab.put_marker import quaternion_rotate
+
+    inferred_tangent = quaternion_rotate(frame[3:], [1.0, 0.0, 0.0])
+    authored_tangent = negative[-1] - negative[0]
+    authored_tangent /= np.linalg.norm(authored_tangent)
+    assert abs(float(np.dot(inferred_tangent, authored_tangent))) > 0.9
+    assert frame[0] < parts.body_xy_min[0]
 
 
 def test_infer_mug_parts_separates_body_footprint_and_handle_hole():

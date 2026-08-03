@@ -157,6 +157,25 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     from run_putmarker_skill_program import _eef_pose
 
     left_grasp, right_grasp = env.robot.is_grasping()
+    env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
+
+    def finger_evidence(arm_name: str) -> tuple[list[float], list[float]]:
+        gripper = env.robot.arms[arm_name].end_effector
+        forces, pad_fractions = [], []
+        for finger in gripper.fingers:
+            forces.append(
+                float(finger.contact_force(gripper.default_target, env_ids)[0].item())
+            )
+            fraction, valid = finger.contact_pad_fraction(
+                gripper.default_target, env_ids
+            )
+            pad_fractions.append(
+                float(fraction[0].item()) if bool(valid[0].item()) else float("nan")
+            )
+        return forces, pad_fractions
+
+    left_finger_forces, left_pad_fractions = finger_evidence("left_arm")
+    right_finger_forces, right_pad_fractions = finger_evidence("right_arm")
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     pot = env.scene["pot"]
     cooktop = env.scene["cooktop"]
@@ -185,6 +204,10 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "program_stage": stage,
         "left_grasp": bool(left_grasp[0].item()),
         "right_grasp": bool(right_grasp[0].item()),
+        "left_finger_forces_n": left_finger_forces,
+        "left_pad_fractions": left_pad_fractions,
+        "right_finger_forces_n": right_finger_forces,
+        "right_pad_fractions": right_pad_fractions,
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
         "task_success": task_success,
@@ -285,11 +308,13 @@ def _build_skill(
     target_geometry,
     source_parts,
     target_parts,
+    source_components,
+    target_components,
     left_start,
     right_start,
     args,
 ):
-    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose, transfer_pose
     from judo_isaaclab.put_pot import (
         TRANSPORT_PLANNING_MARGIN_M,
         PutPotSkillProgram,
@@ -332,7 +357,7 @@ def _build_skill(
             transfer_handle_pose_preserving_surface_clearance,
         )
 
-        return transfer_handle_pose_preserving_surface_clearance(
+        surface_pose = transfer_handle_pose_preserving_surface_clearance(
             frame[f"{arm}_eef_pose"],
             source_frame,
             target_frame,
@@ -340,6 +365,27 @@ def _build_skill(
             handle_size(target_parts, side),
             target_parts.handle_axis,
         )
+        from judo_isaaclab.semantic_parts import infer_pot_handle_contact_frame
+
+        source_reference = compose_pose(
+            inverse_pose(frame["pot_pose"]), frame[f"{arm}_eef_pose"]
+        )
+        target_reference = compose_pose(
+            inverse_pose(target_initial.root_pose), surface_pose
+        )
+        source_contact = infer_pot_handle_contact_frame(
+            source_components, source_parts, side, source_reference[:3]
+        )
+        target_contact = infer_pot_handle_contact_frame(
+            target_components, target_parts, side, target_reference[:3]
+        )
+        oriented_pose = transfer_pose(
+            frame[f"{arm}_eef_pose"],
+            compose_pose(frame["pot_pose"], source_contact),
+            compose_pose(target_initial.root_pose, target_contact),
+        )
+        surface_pose[3:] = oriented_pose[3:]
+        return surface_pose
 
     left_grasp = transfer_initial("left_handle_grasp", "left")
     right_grasp = transfer_initial("right_handle_grasp", "right")
@@ -621,8 +667,10 @@ def main() -> None:
         env.reset_success_check(env_ids)
         source_geometry = _geometry(source_assets["pot"], source["pot_pose"][0])
         target_geometry = _geometry(target_assets["pot"], target["pot_pose"][0])
-        from semantic_asset_geometry import jsonable, pot_parts
+        from semantic_asset_geometry import collision_components, jsonable, pot_parts
 
+        source_components = collision_components(source_assets["pot"])
+        target_components = collision_components(target_assets["pot"])
         source_parts = pot_parts(source_assets["pot"])
         target_parts = pot_parts(target_assets["pot"])
         target_cooktop_geometry = _geometry(
@@ -638,6 +686,8 @@ def main() -> None:
                 target_geometry,
                 source_parts,
                 target_parts,
+                source_components,
+                target_components,
                 _eef_pose(env, "left_arm"),
                 _eef_pose(env, "right_arm"),
                 args,
@@ -905,6 +955,22 @@ def main() -> None:
             right_eef_poses=np.asarray(right_eef, dtype=np.float32),
             desired_left_eef_poses=np.asarray(desired_left, dtype=np.float32),
             desired_right_eef_poses=np.asarray(desired_right, dtype=np.float32),
+            left_finger_forces_n=np.asarray(
+                [sample["left_finger_forces_n"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            left_pad_fractions=np.asarray(
+                [sample["left_pad_fractions"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            right_finger_forces_n=np.asarray(
+                [sample["right_finger_forces_n"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            right_pad_fractions=np.asarray(
+                [sample["right_pad_fractions"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
             program_stages=np.asarray(
                 trajectory.stage_names

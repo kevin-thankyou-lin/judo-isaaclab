@@ -227,6 +227,50 @@ def infer_pot_parts(values: Iterable[object]) -> PotParts:
     )
 
 
+def infer_pot_handle_contact_frame(
+    values: Iterable[object],
+    parts: PotParts,
+    side: int,
+    reference_point: object,
+) -> np.ndarray:
+    """Infer the nearest authored handle-segment frame and principal tangent."""
+
+    components = _components(values)
+    if side not in (-1, 1):
+        raise ValueError("handle side must be -1 or 1")
+    reference = np.asarray(reference_point, dtype=np.float64)
+    if reference.shape != (3,) or not np.all(np.isfinite(reference)):
+        raise ValueError("reference_point must contain three finite values")
+    axis = parts.handle_axis
+    boundary = parts.body_xy_min[axis] if side < 0 else parts.body_xy_max[axis]
+    candidates = []
+    for points in components:
+        reaches_handle = (
+            np.min(points[:, axis]) < boundary - 1.0e-4
+            if side < 0
+            else np.max(points[:, axis]) > boundary + 1.0e-4
+        )
+        if reaches_handle:
+            candidates.append(points)
+    if not candidates:
+        raise ValueError("no collision component reaches the selected pot handle")
+    component = min(
+        candidates,
+        key=lambda points: float(np.min(np.linalg.norm(points - reference, axis=1))),
+    )
+    nearest = component[np.argmin(np.linalg.norm(component - reference, axis=1))]
+    covariance = np.cov(component - component.mean(axis=0), rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    tangent = eigenvectors[:, int(np.argmax(eigenvalues))]
+    if tangent[2] < 0.0 or (
+        abs(tangent[2]) < 1.0e-8 and tangent[(axis + 1) % 2] < 0.0
+    ):
+        tangent = -tangent
+    outward = np.zeros(3, dtype=np.float64)
+    outward[axis] = side
+    return _frame(nearest, tangent, outward)
+
+
 def bimanual_handle_sides(
     pot_root_pose: object,
     parts: PotParts,
