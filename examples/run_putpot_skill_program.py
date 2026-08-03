@@ -1595,21 +1595,11 @@ def main() -> None:
                                 target_left_handle_points,
                             )
                         )
-                        milestone_feedback_horizon_steps = max(
-                            1,
-                            int(
-                                np.ceil(
-                                    peer_contact_latch_centering_translation_m
-                                    / 0.002
-                                )
-                            ),
-                            int(
-                                np.ceil(
-                                    abs(peer_contact_handle_center_rotation_rad)
-                                    / 0.05
-                                )
-                            ),
-                        )
+                        # The target already pivots about the measured loaded
+                        # pad.  Apply that contact frame directly: repeatedly
+                        # replanning a long interpolation horizon moves the
+                        # pad before the jaw can finish rotating.
+                        milestone_feedback_horizon_steps = 1
                         peer_contact_pad_reseat_m = (
                             milestone_open_pad_reseat_m
                         )
@@ -1657,11 +1647,18 @@ def main() -> None:
                     )
                     effective_pad_reseat_residual_m = (
                         0.0
-                        if peer_contact_position_locked
+                        if (
+                            peer_contact_position_locked
+                            or peer_contact_handle_center_rotation_rad
+                            is not None
+                        )
                         else initial_pad_reseat_residual_m
                     )
                     gripper_retime_step_m = 0.001
-                    if peer_contact_latch_centering_translation_m > 0.0:
+                    if (
+                        peer_contact_latch_centering_translation_m > 0.0
+                        and peer_contact_handle_center_rotation_rad is None
+                    ):
                         effective_pad_reseat_residual_m = max(
                             effective_pad_reseat_residual_m,
                             peer_contact_latch_centering_translation_m,
@@ -1887,7 +1884,7 @@ def main() -> None:
                     np.asarray(sample["left_finger_forces_n"]) >= 0.1
                 )
                 if (
-                    peer_contact_position_locked
+                    peer_single_contact_latch_step is not None
                     and not bool(sample["left_grasp"])
                     and int(np.sum(left_contacting)) == 1
                 ):
