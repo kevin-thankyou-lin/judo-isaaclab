@@ -880,6 +880,7 @@ def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
         "bimanual_pregrasp": (source_indices["left_pregrasp"], source_indices["right_pregrasp"]),
         "left_handle_grasp": (source_indices["left_handle_grasp"], source_indices["right_pregrasp"]),
         "right_handle_grasp": (source_indices["right_handle_grasp"], source_indices["right_handle_grasp"]),
+        "bimanual_contact_hold": (source_indices["left_handle_grasp"], source_indices["right_handle_grasp"]),
         "smooth_transport": (source_indices["support_align"], source_indices["support_align"]),
         "pot_lift": (source_indices["pot_lift"], source_indices["pot_lift"]),
         "pot_transport": (source_indices["pot_transport"], source_indices["pot_transport"]),

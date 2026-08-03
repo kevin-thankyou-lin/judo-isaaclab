@@ -56,7 +56,7 @@ from judo_isaaclab.put_pot import (
     _linear_contact_feedback_poses,
 )
 
-from run_putpot_skill_program import _build_center_repair
+from run_putpot_skill_program import _build_center_repair, _sparse_joint_nominal
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
@@ -542,6 +542,35 @@ def test_right_first_peer_grasp_holds_closed_contact_before_transport():
     assert latched.right_poses[left_end + 1 : hold_end + 1] == pytest.approx(
         np.broadcast_to(observed_right, (3, 7))
     )
+
+    class Actions:
+        def __init__(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self.value
+
+    keyframes = {
+        "semantic_indices": {
+            "left_pregrasp": 1,
+            "right_pregrasp": 2,
+            "left_handle_grasp": 3,
+            "right_handle_grasp": 4,
+            "pot_lift": 5,
+            "pot_transport": 6,
+            "support_align": 7,
+            "support_lower": 8,
+            "pot_release": 9,
+            "stable_settle": 10,
+        }
+    }
+    nominal = _sparse_joint_nominal(
+        {"actions": Actions(np.zeros((11, 14)))}, trajectory, keyframes
+    )
+    assert nominal.shape == (trajectory.steps, 14)
 
 
 def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():
