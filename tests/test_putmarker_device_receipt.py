@@ -27,3 +27,11 @@ def test_actual_device_receipt_fails_closed_on_device_drift():
         _runner_module()._actual_device_receipt(
             "cpu", "cpu", "cuda:0", ["cpu"]
         )
+
+
+def test_left_ik_defaults_to_sparse_anchor_and_integrates_only_when_requested():
+    module = _runner_module()
+
+    assert module._integrate_left_ik(False, module.SEMANTIC_INDICES["marker_grasp"] + 1) is False
+    assert module._integrate_left_ik(True, module.SEMANTIC_INDICES["marker_grasp"] - 1) is False
+    assert module._integrate_left_ik(True, module.SEMANTIC_INDICES["marker_grasp"]) is True

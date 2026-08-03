@@ -69,6 +69,14 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
     parser.add_argument("--rigid-handle-pull-m", type=float, default=0.10)
+    parser.add_argument(
+        "--integrate-left-ik",
+        action="store_true",
+        help=(
+            "Integrate left-arm IK from measured joints after marker contact. "
+            "The default sparse semantic anchor preserves the demonstrated grasp."
+        ),
+    )
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--draw-coordinate-axes", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -120,6 +128,12 @@ def _actual_device_receipt(
     if not matched:
         raise RuntimeError(f"actual device receipt mismatch: {receipt}")
     return receipt
+
+
+def _integrate_left_ik(enabled: bool, step: int) -> bool:
+    """Enable the optional cumulative left correction only after marker contact."""
+
+    return bool(enabled and step >= SEMANTIC_INDICES["marker_grasp"])
 
 
 def _json_attr(value: object) -> dict[str, str]:
@@ -948,7 +962,7 @@ def main() -> None:
                     args,
                     right_dls_gain=right_dls_gain,
                     integrate_right_ik=integrate_right_ik,
-                    integrate_left_ik=step >= SEMANTIC_INDICES["marker_grasp"],
+                    integrate_left_ik=_integrate_left_ik(args.integrate_left_ik, step),
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
@@ -1138,6 +1152,11 @@ def main() -> None:
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
                     "marker_xy_centered_on_measured_cavity": trajectory is not None,
+                    "left_ik_anchor": (
+                        "integrated_measured_joint"
+                        if args.integrate_left_ik
+                        else "sparse_semantic_nominal"
+                    ),
                 },
             },
             "provenance": {
