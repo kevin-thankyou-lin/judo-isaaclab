@@ -12,6 +12,7 @@ from judo_isaaclab.hang_mug import (
     RigidAssetGeometry,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
+    inset_pose_toward,
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
@@ -38,6 +39,20 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
     target = RigidAssetGeometry(_pose(4.0, 5.0, 6.0), [0.4, 0.15, 0.24])
     transferred = target.transfer_pose_from(source, _pose(1.05, 2.04, 3.1))
     assert transferred[:3] == pytest.approx([4.1, 5.06, 6.08])
+
+
+def test_contact_inset_uses_exact_authored_direction_and_distance():
+    contact = _pose(-0.05277942, -0.02890474, 0.14122032)
+    body = _pose(-0.02007394, -0.00029933, -0.00004495)
+    thickness = 0.012015256
+    inset = inset_pose_toward(contact, body, thickness)
+    direction = body[:3] - contact[:3]
+    expected = contact[:3] + thickness * direction / np.linalg.norm(direction)
+    assert inset[:3] == pytest.approx(expected)
+    assert np.linalg.norm(inset[:3] - contact[:3]) == pytest.approx(thickness)
+    assert inset[3:] == pytest.approx(contact[3:])
+    with pytest.raises(ValueError, match="nonnegative"):
+        inset_pose_toward(contact, body, -0.001)
 
 
 def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():

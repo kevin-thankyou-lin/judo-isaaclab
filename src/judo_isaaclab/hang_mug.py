@@ -216,6 +216,36 @@ def ensure_pick_latch_clearance(
     return handover
 
 
+def inset_pose_toward(
+    pose: Any,
+    target_pose: Any,
+    distance_m: float,
+) -> np.ndarray:
+    """Move a contact pose toward an authored target by an exact distance.
+
+    This is used to compensate for a thick handle preventing the receiving
+    gripper from reaching the source-proposed contact.  The direction comes
+    from the authored handle/body geometry and the magnitude is expressed in
+    measured handle thicknesses; no contact threshold or sampled candidate is
+    involved.
+    """
+
+    result = _pose(pose, "pose").copy()
+    target = _pose(target_pose, "target_pose")
+    distance = float(distance_m)
+    if not np.isfinite(distance) or distance < 0.0:
+        raise ValueError("distance_m must be finite and nonnegative")
+    direction = target[:3] - result[:3]
+    norm = float(np.linalg.norm(direction))
+    if distance > 0.0 and norm < 1.0e-8:
+        raise ValueError("cannot inset a pose whose target is coincident")
+    if distance > norm:
+        raise ValueError("distance_m cannot move the pose beyond its target")
+    if distance > 0.0:
+        result[:3] += direction * (distance / norm)
+    return result
+
+
 def reanchor_right_grasp_from_observed_mug(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,
