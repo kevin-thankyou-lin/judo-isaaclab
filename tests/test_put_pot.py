@@ -261,10 +261,16 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.0594, 0.0858, 0.0405],
         [0.0687, 0.0589, 0.0272],
         0,
-    ) == 263
+    ) == 269
     assert geometry_conditioned_transport_steps(
         180, [0.06, 0.08, 0.03], [0.07, 0.09, 0.04], 0
     ) == 180
+    assert geometry_conditioned_transport_steps(
+        180,
+        [0.059453, 0.085784, 0.040560],
+        [0.069219, 0.061195, 0.020012],
+        0,
+    ) == 365
 
 
 def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():
@@ -566,10 +572,13 @@ def test_bimanual_position_step_limit_is_measured_per_arm():
 
 def test_transport_reanchor_step_limit_respects_handle_retention_geometry():
     assert transport_reanchor_position_step_limit_m(0.025, 0.010) == pytest.approx(
-        0.010
+        0.005
     )
     assert transport_reanchor_position_step_limit_m(0.008, 0.010) == pytest.approx(
-        0.008
+        0.005
+    )
+    assert transport_reanchor_position_step_limit_m(0.004, 0.010) == pytest.approx(
+        0.004
     )
 
 

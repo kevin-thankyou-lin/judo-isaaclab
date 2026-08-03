@@ -301,7 +301,7 @@ def geometry_conditioned_transport_steps(
         raise ValueError("base_steps must be positive")
     transverse = [axis for axis in range(3) if axis != handle_axis]
     retained_ratio = min(
-        1.0, max(float(target[axis] / source[axis]) for axis in transverse)
+        1.0, min(float(target[axis] / source[axis]) for axis in transverse)
     )
     return int(np.ceil(base_steps / retained_ratio))
 
@@ -1018,7 +1018,7 @@ def transport_reanchor_position_step_limit_m(
     )
     if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
         raise ValueError("transport reanchor step limits must be positive and finite")
-    return float(np.min(values))
+    return float(min(values[0], 0.5 * values[1]))
 
 
 def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
