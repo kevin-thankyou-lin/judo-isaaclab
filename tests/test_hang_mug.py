@@ -21,6 +21,7 @@ from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
     _add_right_handover_assist,
     _install_grasp_assist_config,
+    _requires_observed_handover_reanchor,
     _schema_aware_success_acceptance,
     _select_grasp_assist_config,
     _update_authored_assist_releases,
@@ -208,6 +209,19 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
 
     skill = _schema_aware_success_acceptance(checks, coded_skill=True)
     assert skill["right_grasp_assist_engaged"] is False
+
+
+def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
+    assert _requires_observed_handover_reanchor(
+        SimpleNamespace(body_size=np.asarray([0.08, 0.081, 0.107]))
+    )
+    assert not _requires_observed_handover_reanchor(
+        SimpleNamespace(body_size=np.asarray([0.088, 0.090, 0.077]))
+    )
+    with pytest.raises(ValueError, match="three positive"):
+        _requires_observed_handover_reanchor(
+            SimpleNamespace(body_size=np.asarray([0.08, -0.01, 0.10]))
+        )
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():

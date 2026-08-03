@@ -286,6 +286,14 @@ def _schema_aware_success_acceptance(
     return acceptance
 
 
+def _requires_observed_handover_reanchor(mug_parts) -> bool:
+    """Use live handover feedback for mugs taller than both lateral spans."""
+    size = np.asarray(mug_parts.body_size, dtype=np.float64)
+    if size.shape != (3,) or np.any(size <= 0.0):
+        raise ValueError("mug body size must contain three positive values")
+    return bool(size[2] > max(size[0], size[1]))
+
+
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
     from run_putmarker_skill_program import _eef_pose
@@ -758,6 +766,10 @@ def main() -> None:
             if keyframes is not None else (None, None, None, None, None, None)
         )
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
+        observed_handover_reanchor = bool(
+            trajectory is not None
+            and _requires_observed_handover_reanchor(target_parts)
+        )
         total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
@@ -798,6 +810,34 @@ def main() -> None:
             )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if (
+                observed_handover_reanchor
+                and step == trajectory.waypoint_steps["left_lift"]
+                and sample["left_grasp"]
+            ):
+                from judo_isaaclab.hang_mug import reanchor_physical_handover
+
+                trajectory = reanchor_physical_handover(
+                    trajectory,
+                    nominal_pick_latch_mug,
+                    sample["mug_pose"],
+                    sample["right_eef_pose"],
+                )
+            if (
+                observed_handover_reanchor
+                and step == trajectory.waypoint_steps["handover_pregrasp"]
+                and sample["left_grasp"]
+            ):
+                from judo_isaaclab.hang_mug import (
+                    reanchor_right_grasp_from_observed_mug,
+                )
+
+                trajectory = reanchor_right_grasp_from_observed_mug(
+                    trajectory,
+                    nominal_right_contact,
+                    sample["mug_pose"],
+                    sample["right_eef_pose"],
+                )
             reanchor_waypoints = (
                 "left_release",
                 "tree_transport",
@@ -947,7 +987,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_latch_then_handover_descent": trajectory is not None, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_latch_then_handover_descent": trajectory is not None, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),
