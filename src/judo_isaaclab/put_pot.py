@@ -32,10 +32,11 @@ CONTACT_FEEDBACK_HORIZON_STEPS = 10
 HANDLE_PAD_GEOMETRIC_MARGIN_M = 0.003
 # PutPot012 attempt_011 finished its simultaneous close 7 mm shallow along
 # the commanded local pad axis.  After switching to the local authored handle
-# tangent, attempt_013 left only 0.42 mm of physical pad-tip residual; add 2 mm
-# of commanded depth for the measured controller under-tracking while staying
+# tangent, attempt_014 began transport at only 0.0006 normalized pad depth and
+# drifted below the tip.  Its preceding 2 mm command produced +0.024 normalized
+# response, so another 4 mm gives a measured transport margin while remaining
 # well inside the 68 mm pad.
-HANDLE_PAD_TRACKING_COMPENSATION_M = 0.009
+HANDLE_PAD_TRACKING_COMPENSATION_M = 0.013
 HANDLE_PAD_DEPTH_MARGIN_M = (
     HANDLE_PAD_GEOMETRIC_MARGIN_M + HANDLE_PAD_TRACKING_COMPENSATION_M
 )
