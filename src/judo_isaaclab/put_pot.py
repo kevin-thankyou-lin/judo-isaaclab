@@ -751,6 +751,101 @@ def twist_loaded_jaw_about_observed_contact(
     return twisted, angle, True
 
 
+def orient_loaded_jaw_around_authored_handle(
+    observed_pose: Any,
+    loaded_target_pose: Any,
+    pot_root_pose: Any,
+    handle_points_local: Any,
+    finger_forces_n: Any,
+    finger_pad_centers_world: Any,
+    pad_axes_world: Any,
+) -> tuple[np.ndarray, float, float]:
+    """Center a loaded jaw by closed-form rotation about its contacting pad."""
+
+    observed = _pose(observed_pose, "observed_pose")
+    target = _pose(loaded_target_pose, "loaded_target_pose")
+    root = _pose(pot_root_pose, "pot_root_pose")
+    points = np.asarray(handle_points_local, dtype=np.float64)
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
+    pads = np.asarray(pad_axes_world, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
+        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("handle_points_local must be finite")
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
+    if pads.shape != (2, 3) or not np.all(np.isfinite(pads)):
+        raise ValueError("pad_axes_world must contain two finite 3D axes")
+    contacting = forces >= 0.1
+    if int(np.sum(contacting)) != 1:
+        raise ValueError("handle-centered jaw orientation requires one loaded finger")
+
+    pad_axis = np.mean(pads, axis=0)
+    pad_axis /= np.linalg.norm(pad_axis)
+    jaw_local = YAM_FINGER_SEPARATION_LOCAL_M.copy()
+    jaw_local[2] = 0.0
+    jaw_local /= np.linalg.norm(jaw_local)
+    jaw_world = quaternion_rotate(target[3:], jaw_local)
+    jaw_world -= pad_axis * np.dot(jaw_world, pad_axis)
+    jaw_world /= np.linalg.norm(jaw_world)
+    handle_center_world = compose_pose(
+        root, [*np.mean(points, axis=0), 1.0, 0.0, 0.0, 0.0]
+    )[:3]
+    radial = handle_center_world - observed[:3]
+    radial -= pad_axis * np.dot(radial, pad_axis)
+    radial_norm = float(np.linalg.norm(radial))
+    if radial_norm <= 1.0e-9:
+        raise ValueError("handle center must not lie on the loaded pad tangent")
+    radial_unit = radial / radial_norm
+    tangent_unit = np.cross(pad_axis, radial_unit)
+    tangent_unit /= np.linalg.norm(tangent_unit)
+    finger_center = 0.5 * (
+        YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
+    required_projection = float(np.dot(finger_center, jaw_local))
+    projection_fraction = float(
+        np.clip(required_projection / radial_norm, -1.0, 1.0)
+    )
+    transverse_fraction = float(
+        np.sqrt(max(0.0, 1.0 - projection_fraction**2))
+    )
+    candidates = (
+        projection_fraction * radial_unit + transverse_fraction * tangent_unit,
+        projection_fraction * radial_unit - transverse_fraction * tangent_unit,
+    )
+    desired_jaw = max(candidates, key=lambda value: float(np.dot(value, jaw_world)))
+    desired_jaw /= np.linalg.norm(desired_jaw)
+    angle = float(
+        np.arctan2(
+            np.dot(pad_axis, np.cross(jaw_world, desired_jaw)),
+            np.dot(jaw_world, desired_jaw),
+        )
+    )
+    delta = np.concatenate(
+        ([np.cos(0.5 * angle)], pad_axis * np.sin(0.5 * angle))
+    )
+    oriented = target.copy()
+    oriented[3:] = quaternion_multiply(delta, target[3:])
+    oriented[3:] /= np.linalg.norm(oriented[3:])
+    loaded_center = centers[int(np.flatnonzero(contacting)[0])]
+    pivot_local = quaternion_rotate(
+        inverse_pose(observed)[3:], loaded_center - observed[:3]
+    )
+    oriented[:3] = loaded_center - quaternion_rotate(
+        oriented[3:], pivot_local
+    )
+    residual = handle_jaw_center_offset_m(oriented, root, points)
+    centered = center_handle_between_finger_pads(
+        oriented,
+        residual,
+        maximum_correction_m=abs(residual),
+    )
+    return centered, angle, residual
+
+
 def retime_loaded_gripper_close_for_pad_reseat(
     trajectory: SkillTrajectory,
     current_step: int,

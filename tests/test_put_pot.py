@@ -38,6 +38,7 @@ from judo_isaaclab.put_pot import (
     maximum_bimanual_position_step_m,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
+    orient_loaded_jaw_around_authored_handle,
     preserve_loaded_contact_target,
     reinforce_loaded_contact_for_motion,
     reanchor_authored_handle_in_observed_jaw,
@@ -568,6 +569,38 @@ def test_high_reach_avoidance_twist_pivots_about_observed_contact():
     )
     assert not did_pivot
     assert wrist_twisted == pytest.approx(expected)
+
+
+def test_loaded_jaw_orientation_centers_handle_around_contacting_pad():
+    observed = _pose()
+    loaded = _pose()
+    handle_points = np.asarray(
+        [
+            [0.09, 0.09, -0.01],
+            [0.11, 0.09, -0.01],
+            [0.09, 0.11, 0.01],
+            [0.11, 0.11, 0.01],
+        ]
+    )
+    pad_centers = [[0.0, -0.04, 0.0], [0.0, 0.04, 0.0]]
+    centered, angle, pivot_residual = (
+        orient_loaded_jaw_around_authored_handle(
+            observed,
+            loaded,
+            _pose(),
+            handle_points,
+            [0.0, 8.0],
+            pad_centers,
+            [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        )
+    )
+    assert abs(angle) > 0.1
+    assert abs(pivot_residual) < abs(
+        handle_jaw_center_offset_m(loaded, _pose(), handle_points)
+    )
+    assert handle_jaw_center_offset_m(
+        centered, _pose(), handle_points
+    ) == pytest.approx(0.0, abs=1.0e-12)
 
 
 def test_loaded_pad_tracking_reanchors_only_next_left_wrist_target():
