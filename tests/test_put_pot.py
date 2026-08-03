@@ -8,6 +8,7 @@ from judo_isaaclab.put_pot import (
     HANDLE_PAD_DEPTH_MARGIN_M,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
     MISSING_FINGER_CONTACT_LIMIT_M,
+    SINGLE_FINGER_CONTACT_LATCH_STEPS,
     PutPotSkillProgram,
     RigidSupportGeometry,
     YAM_FINGER_SEPARATION_LOCAL_M,
@@ -441,6 +442,7 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
 
 
 def test_single_finger_contact_detection_is_exact_and_thresholded():
+    assert SINGLE_FINGER_CONTACT_LATCH_STEPS == CONTACT_FEEDBACK_HORIZON_STEPS
     assert single_finger_contact_observed([0.0, 0.1], [np.nan, 0.2])
     assert single_finger_contact_observed([1.0, 0.0], [0.5, np.nan])
     assert not single_finger_contact_observed([0.0, 0.0], [np.nan, np.nan])

@@ -1121,7 +1121,9 @@ def main() -> None:
         milestone_reanchor_source = None
         milestone_feedback_horizon_steps = None
         peer_contact_transfer = False
+        peer_supported_contact_streak = 0
         peer_single_contact_latch_step = None
+        peer_single_contact_latch_support_frames = None
         peer_single_contact_latch_local_m = None
         contact_hold_latch_step = None
         contact_hold_retention_local_m = None
@@ -1384,19 +1386,32 @@ def main() -> None:
                 from judo_isaaclab.put_pot import (
                     CONTACT_FEEDBACK_HORIZON_STEPS,
                     MISSING_FINGER_CONTACT_DELAY_STEPS,
+                    SINGLE_FINGER_CONTACT_LATCH_STEPS,
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
                 )
 
-                if (
+                supported_peer_contact = bool(
                     peer_contact_transfer
-                    and peer_single_contact_latch_step is None
                     and single_finger_contact_observed(
                         sample["left_finger_forces_n"],
                         sample["left_pad_fractions"],
                     )
+                )
+                peer_single_contact_latch_support_frames = (
+                    SINGLE_FINGER_CONTACT_LATCH_STEPS
+                )
+                peer_supported_contact_streak = (
+                    peer_supported_contact_streak + 1
+                    if supported_peer_contact
+                    else 0
+                )
+                if (
+                    peer_single_contact_latch_step is None
+                    and peer_supported_contact_streak
+                    >= SINGLE_FINGER_CONTACT_LATCH_STEPS
                 ):
                     left_handle_contact = compose_pose(
                         inverse_pose(sample["pot_pose"]),
@@ -2060,6 +2075,9 @@ def main() -> None:
                 "milestone_reanchor_accepted": milestone_reanchor_accepted,
                 "milestone_reanchor_source": milestone_reanchor_source,
                 "peer_single_contact_latch_step": peer_single_contact_latch_step,
+                "peer_single_contact_latch_support_frames": (
+                    peer_single_contact_latch_support_frames
+                ),
                 "peer_single_contact_latch_local_m": (
                     peer_single_contact_latch_local_m
                 ),
