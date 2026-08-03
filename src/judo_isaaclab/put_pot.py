@@ -989,6 +989,25 @@ def cartesian_smoothness_metrics(
     }
 
 
+def maximum_bimanual_position_step_m(
+    left_poses: Any, right_poses: Any
+) -> float:
+    """Measure the largest per-arm Cartesian position increment."""
+
+    left = np.asarray(left_poses, dtype=np.float64)
+    right = np.asarray(right_poses, dtype=np.float64)
+    if left.ndim != 2 or right.shape != left.shape or left.shape[1] != 7:
+        raise ValueError("left_poses and right_poses must have matching (N, 7) shapes")
+    if len(left) < 2:
+        return 0.0
+    return float(
+        max(
+            np.max(np.linalg.norm(np.diff(left[:, :3], axis=0), axis=1)),
+            np.max(np.linalg.norm(np.diff(right[:, :3], axis=0), axis=1)),
+        )
+    )
+
+
 def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:
     """Return planar root-center error for the pot and cooktop."""
     pot = _pose(pot_pose, "pot_pose")
