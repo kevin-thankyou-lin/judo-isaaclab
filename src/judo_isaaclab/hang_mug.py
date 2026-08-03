@@ -148,6 +148,53 @@ def reanchor_physical_handover(
     )
 
 
+def ensure_pick_latch_clearance(
+    handover_body_pose: Any,
+    initial_body_pose: Any,
+    body_height_m: float,
+    *,
+    pick_threshold_m: float = 0.05,
+) -> np.ndarray:
+    """Keep a frictionally carried mug safely above the coded pick threshold."""
+
+    handover = _pose(handover_body_pose, "handover_body_pose").copy()
+    initial = _pose(initial_body_pose, "initial_body_pose")
+    if body_height_m <= 0.0:
+        raise ValueError("body_height_m must be positive")
+    handover[2] = max(
+        handover[2], initial[2] + float(pick_threshold_m) + float(body_height_m)
+    )
+    return handover
+
+
+def reanchor_branch_transport_contact(
+    trajectory: SkillTrajectory,
+    nominal_right_contact: Any,
+    observed_mug_pose: Any,
+    observed_right_pose: Any,
+) -> SkillTrajectory:
+    """Use the right-hand contact actually measured after physical handover."""
+
+    if "left_release" not in trajectory.waypoint_steps:
+        raise ValueError("trajectory is missing left_release waypoint")
+    nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    observed_contact = compose_pose(
+        inverse_pose(observed_mug_pose), observed_right_pose
+    )
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    start = trajectory.waypoint_steps["left_release"] + 1
+    for index in range(start, len(right)):
+        intended_mug = compose_pose(right[index], inverse_pose(nominal_contact))
+        right[index] = compose_pose(intended_mug, observed_contact)
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 

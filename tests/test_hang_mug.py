@@ -10,7 +10,9 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
+    reanchor_branch_transport_contact,
     reanchor_physical_handover,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
@@ -212,3 +214,48 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     )
     assert adjusted.left_poses == pytest.approx(trajectory.left_poses)
     assert adjusted.grippers == pytest.approx(trajectory.grippers)
+
+
+def test_pick_clearance_uses_measured_mug_height():
+    initial = _pose(0.0, 0.0, 0.80)
+    shallow = _pose(0.2, 0.1, 0.86)
+    adjusted = ensure_pick_latch_clearance(shallow, initial, 0.07)
+    assert adjusted[:2] == pytest.approx(shallow[:2])
+    assert adjusted[2] == pytest.approx(0.92)
+
+
+def test_branch_transport_reanchors_observed_right_contact():
+    program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    program.semantic_left_grasp(
+        _pose(0.1, z=1), _pose(0.2, z=1), _pose(0.3, z=1),
+        approach_steps=2, close_steps=2, lift_steps=2,
+    )
+    program.physical_handover(
+        _pose(0.3, z=1), _pose(0.3, -0.1, 1), _pose(0.3, -0.2, 1),
+        _pose(0.3, 0.1, 1), approach_steps=2, close_steps=2, release_steps=2,
+    )
+    program.handle_to_branch_insert(
+        _pose(0.5, -0.2, 1.1), _pose(0.6, -0.3, 1.0),
+        _pose(0.7, -0.4, 0.9), transport_steps=2, approach_steps=2,
+        insert_steps=2,
+    )
+    trajectory = program.build()
+    nominal_contact = _pose(0.05, -0.02, 0.03)
+    observed_mug = _pose(0.4, 0.2, 0.8)
+    observed_right = _pose(0.47, 0.16, 0.85)
+    adjusted = reanchor_branch_transport_contact(
+        trajectory, nominal_contact, observed_mug, observed_right
+    )
+    start = trajectory.waypoint_steps["left_release"] + 1
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    observed_contact = compose_pose(inverse_pose(observed_mug), observed_right)
+    intended_mug = compose_pose(
+        trajectory.right_poses[start], inverse_pose(nominal_contact)
+    )
+    assert adjusted.right_poses[start] == pytest.approx(
+        compose_pose(intended_mug, observed_contact)
+    )
+    assert adjusted.right_poses[:start] == pytest.approx(
+        trajectory.right_poses[:start]
+    )
