@@ -21,6 +21,7 @@ from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
     _add_right_handover_assist,
     _install_grasp_assist_config,
+    _schema_aware_success_acceptance,
     _select_grasp_assist_config,
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
@@ -187,6 +188,26 @@ def test_authored_boundaries_release_both_grasp_assists():
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [True])
+
+
+def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
+    checks = {
+        "coded_task_success": True,
+        "right_handover_observed": True,
+        "stable_hang_window": True,
+        "physics_device_cpu": True,
+        "right_grasp_assist_engaged": False,
+        "right_grasp_assist_released": True,
+    }
+
+    replay = _schema_aware_success_acceptance(checks, coded_skill=False)
+    assert "right_grasp_assist_engaged" not in replay
+    assert replay["right_handover_observed"] is True
+    assert replay["stable_hang_window"] is True
+    assert replay["physics_device_cpu"] is True
+
+    skill = _schema_aware_success_acceptance(checks, coded_skill=True)
+    assert skill["right_grasp_assist_engaged"] is False
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():

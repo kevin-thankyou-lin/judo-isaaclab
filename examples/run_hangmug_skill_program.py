@@ -270,6 +270,22 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
         )
 
 
+def _schema_aware_success_acceptance(
+    checks: dict[str, bool], *, coded_skill: bool
+) -> dict[str, bool]:
+    """Select only mechanism-relevant checks without weakening task success.
+
+    Direct action replay does not drive the skill runner's receiving-hand
+    fixed-joint state machine.  Its physical right grasp and handover remain
+    mandatory through ``right_handover_observed``, while the skill-only assist
+    engagement bit is inapplicable.
+    """
+    acceptance = dict(checks)
+    if not coded_skill:
+        acceptance.pop("right_grasp_assist_engaged", None)
+    return acceptance
+
+
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
     from run_putmarker_skill_program import _eef_pose
@@ -896,7 +912,9 @@ def main() -> None:
             acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
             acceptance["expected_coded_task_failure"] = not final["task_success"]
         else:
-            acceptance = checks
+            acceptance = _schema_aware_success_acceptance(
+                checks, coded_skill=trajectory is not None
+            )
             if direct_replay is not None and _sha256(args.source_dataset) != _sha256(args.target_dataset):
                 acceptance = dict(acceptance)
                 acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
