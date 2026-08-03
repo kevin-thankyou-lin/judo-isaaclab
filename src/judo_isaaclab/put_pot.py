@@ -1458,8 +1458,10 @@ def reanchor_bimanual_transport_from_observation(
     transport_clearance_m: float,
     collision_clearance_m: float,
     current_step: int | None = None,
+    left_contact_local: Any | None = None,
+    right_contact_local: Any | None = None,
 ) -> tuple[SkillTrajectory, SmoothBimanualTransport]:
-    """Rebuild the transport tail from measured contacts after both closes."""
+    """Rebuild transport from measured or explicitly retained local contacts."""
 
     steps = trajectory.waypoint_steps
     required = (
@@ -1476,8 +1478,16 @@ def reanchor_bimanual_transport_from_observation(
     final_pose = _pose(final_pot_pose, "final_pot_pose")
     left_pose = _pose(observed_left_pose, "observed_left_pose")
     right_pose = _pose(observed_right_pose, "observed_right_pose")
-    left_contact = compose_pose(inverse_pose(pot_pose), left_pose)
-    right_contact = compose_pose(inverse_pose(pot_pose), right_pose)
+    left_contact = (
+        compose_pose(inverse_pose(pot_pose), left_pose)
+        if left_contact_local is None
+        else _pose(left_contact_local, "left_contact_local")
+    )
+    right_contact = (
+        compose_pose(inverse_pose(pot_pose), right_pose)
+        if right_contact_local is None
+        else _pose(right_contact_local, "right_contact_local")
+    )
     transport_target = final_pose.copy()
     transport_target[2] += (
         max(float(transport_clearance_m), float(collision_clearance_m))

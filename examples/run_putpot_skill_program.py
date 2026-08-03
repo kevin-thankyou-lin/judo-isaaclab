@@ -1564,8 +1564,11 @@ def main() -> None:
                 and contact_close_complete_step <= step < grasp_complete_step
             ):
                 from judo_isaaclab.put_pot import (
+                    cartesian_smoothness_metrics,
                     compensate_retained_contact_tracking,
+                    maximum_bimanual_position_step_m,
                     reanchor_bimanual_contact_hold,
+                    reanchor_bimanual_transport_from_observation,
                 )
 
                 if (
@@ -1614,6 +1617,61 @@ def main() -> None:
                         retained_hold_left_contact_local,
                         reference_hold_right_contact_local,
                     )
+                    if step + 1 == grasp_complete_step:
+                        trajectory, retained_transport = (
+                            reanchor_bimanual_transport_from_observation(
+                                trajectory,
+                                sample["pot_pose"],
+                                sample["left_eef_pose"],
+                                sample["right_eef_pose"],
+                                transport_final_pot,
+                                target_geometry.size,
+                                target_cooktop_geometry,
+                                transport_clearance_m=args.transport_clearance_m,
+                                collision_clearance_m=args.collision_clearance_m,
+                                current_step=step,
+                                left_contact_local=(
+                                    retained_hold_left_contact_local
+                                ),
+                                right_contact_local=(
+                                    reference_hold_right_contact_local
+                                ),
+                            )
+                        )
+                        transport_reference_left_contact_local = (
+                            retained_hold_left_contact_local
+                        )
+                        transport_reference_right_contact_local = (
+                            reference_hold_right_contact_local
+                        )
+                        transport_reanchor_evaluation_steps.append(step)
+                        transport_reanchor_steps.append(step)
+                        start = step + 1
+                        end = trajectory.waypoint_steps["smooth_transport"]
+                        maximum_step_m = maximum_bimanual_position_step_m(
+                            trajectory.left_poses[start : end + 1],
+                            trajectory.right_poses[start : end + 1],
+                        )
+                        transport_plan = cartesian_smoothness_metrics(
+                            trajectory.left_poses[start : end + 1],
+                            trajectory.right_poses[start : end + 1],
+                        )
+                        transport_plan.update(
+                            {
+                                "start_step": start,
+                                "end_step": end,
+                                "maximum_per_arm_step_m": maximum_step_m,
+                                "minimum_cooktop_clearance_m": (
+                                    retained_transport.minimum_cooktop_clearance_m
+                                ),
+                                "cooktop_overlap_samples": (
+                                    retained_transport.cooktop_overlap_samples
+                                ),
+                                "initial_clearance_recovery_m": (
+                                    retained_transport.initial_clearance_recovery_m
+                                ),
+                            }
+                        )
             if (
                 trajectory is not None
                 and grasp_complete_step <= step

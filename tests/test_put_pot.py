@@ -1137,6 +1137,28 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         compose_pose(final, left_contact)
     )
 
+    loaded_left_contact = left_contact.copy()
+    loaded_left_contact[0] += 0.025
+    loaded, loaded_transport = reanchor_bimanual_transport_from_observation(
+        grasp,
+        observed,
+        observed_left,
+        observed_right,
+        final,
+        pot_size,
+        cooktop,
+        transport_clearance_m=0.025,
+        collision_clearance_m=0.025,
+        left_contact_local=loaded_left_contact,
+        right_contact_local=right_contact,
+    )
+    assert compose_pose(
+        inverse_pose(loaded_transport.pot_poses[0]), loaded.left_poses[start]
+    ) == pytest.approx(loaded_left_contact)
+    assert loaded.left_poses[lower_end] == pytest.approx(
+        compose_pose(final, loaded_left_contact)
+    )
+
     late_step = start + 2
     late, late_transport = reanchor_bimanual_transport_from_observation(
         trajectory,
