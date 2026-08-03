@@ -51,16 +51,28 @@ def test_low_feet_cabinet_handle_uses_horizontal_collision_clear_pull():
     ) == -0.04
 
 
-def test_low_feet_handle_escalates_from_friction_to_labeled_fixed_joint():
+def test_low_feet_handle_uses_target_semantic_frame_and_labeled_friction():
     module = _module()
 
     assert module._right_handle_assist_spec(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_009.hdf5",
         1.0048,
         -0.1311,
-    ) == ("fixed_joint", "low_feet_handle_friction_retention_failed")
+    ) == ("friction", "target_semantic_low_feet_handle")
+    assert module._uses_target_handle_keyframe(
+        "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_009.hdf5",
+        1.0048,
+        -0.1311,
+    )
     assert module._right_handle_assist_spec(
         "/dataset/annotated_cabinet_with_feet/annotated_drawer_with_feet_008.hdf5",
         1.0601,
         -0.1258,
     ) == ("friction", "official_cabinet_with_feet_workspace")
+
+
+def test_target_handle_grasp_index_comes_from_lower_drawer_motion():
+    module = _module()
+    drawer = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0002], [0.0, 0.01]]
+
+    assert module._target_drawer_grasp_index({"drawer_joint": drawer}) == 1

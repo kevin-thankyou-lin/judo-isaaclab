@@ -308,6 +308,7 @@ def _build_skill(
     rigid_handle_pull_m,
     handle_pull_vertical_offset_m,
     handle_engagement_depth_m,
+    use_target_handle_keyframe,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
@@ -342,6 +343,11 @@ def _build_skill(
         matrices = source[f"eef_{arm}"]
         offset = left_tool_to_attach if arm == "left" else right_tool_to_attach
         return compose_pose(_pose_at(matrices, index), offset)
+
+    def target_right_attach(index: int) -> np.ndarray:
+        return compose_pose(
+            _pose_at(target["eef_right"], index), right_tool_to_attach
+        )
 
     def left_marker(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
@@ -388,8 +394,15 @@ def _build_skill(
             source_geometry, source_attach("right", index), source_q
         )
 
-    handle_pregrasp = right_handle("handle_pregrasp")
-    handle_grasp = right_handle("handle_grasp")
+    target_handle_grasp_index = (
+        _target_drawer_grasp_index(target) if use_target_handle_keyframe else None
+    )
+    if target_handle_grasp_index is None:
+        handle_pregrasp = right_handle("handle_pregrasp")
+        handle_grasp = right_handle("handle_grasp")
+    else:
+        handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
+        handle_grasp = target_right_attach(target_handle_grasp_index)
     inward = -quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * float(handle_engagement_depth_m)
@@ -451,6 +464,7 @@ def _build_skill(
         marker_in_drawer("marker_collision_clear"),
         marker_in_drawer("marker_cavity"),
         working_q,
+        target_handle_grasp_index,
     )
 
 
@@ -867,9 +881,28 @@ def _right_handle_assist_spec(
         and cabinet_root_z_m + handle_point_local_z_m < 0.89
     )
     if low_feet_handle:
-        return "fixed_joint", "low_feet_handle_friction_retention_failed"
+        return "friction", "target_semantic_low_feet_handle"
     reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
     return ("friction", reason) if reason is not None else (None, None)
+
+
+def _uses_target_handle_keyframe(
+    target_dataset: str, cabinet_root_z_m: float, handle_point_local_z_m: float
+) -> bool:
+    return bool(
+        Path(target_dataset).parent.name == "annotated_cabinet_with_feet"
+        and cabinet_root_z_m + handle_point_local_z_m < 0.89
+    )
+
+
+def _target_drawer_grasp_index(target: dict[str, object]) -> int:
+    """Locate the real grasp boundary from target drawer motion."""
+
+    drawer = np.asarray(target["drawer_joint"], dtype=np.float64)
+    moving = np.flatnonzero(drawer[:, 1] > 1.0e-4)
+    if not len(moving):
+        raise ValueError("target demonstration never moves the coded lower drawer")
+    return max(1, int(moving[0]) - 1)
 
 
 def main() -> None:
@@ -972,18 +1005,12 @@ def main() -> None:
             from dc_study.utils.grasp import build_grasp_assists
 
             assist_spec = {
-                "mechanism": right_handle_assist_mechanism,
+                "mechanism": "friction",
                 "arm": "right_arm",
                 "target": {"object": "obj_1", "link": "link_2"},
                 "grasp_delay_s": 0.0,
+                "friction": {"high": 100.0, "low": 0.5},
             }
-            if right_handle_assist_mechanism == "friction":
-                assist_spec["friction"] = {"high": 100.0, "low": 0.5}
-            elif right_handle_assist_mechanism == "fixed_joint":
-                assist_spec["fixed_joint"] = {
-                    "joint_type": "fixed",
-                    "disable_pair_collision": True,
-                }
             right_handle_assist = build_grasp_assists(
                 env,
                 {"right": assist_spec},
@@ -993,7 +1020,13 @@ def main() -> None:
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
         integrated_target_handle_ik = True
-        trajectory, intended_marker_clear, intended_marker_cavity, intended_drawer_q = (
+        (
+            trajectory,
+            intended_marker_clear,
+            intended_marker_cavity,
+            intended_drawer_q,
+            target_handle_grasp_index,
+        ) = (
             _build_skill(
                 source,
                 target,
@@ -1007,8 +1040,13 @@ def main() -> None:
                 args.rigid_handle_pull_m,
                 effective_handle_vertical_offset_m,
                 handle_engagement_depth_m,
+                _uses_target_handle_keyframe(
+                    args.target_dataset,
+                    float(target_geometry.root_pose[2]),
+                    float(target_geometry.handle_point_local[2]),
+                ),
             )
-            if args.mode == "skill" else (None, None, None, None)
+            if args.mode == "skill" else (None, None, None, None, None)
         )
         joint_nominal = (
             _sparse_joint_nominal(source, args.handle_pull_joint_extension)
@@ -1272,16 +1310,11 @@ def main() -> None:
                 "grasp_assistance": (
                     {
                         "friction": "task_config:right=friction",
-                        "fixed_joint": "task_config:right=fixed_joint(link_2)",
                     }.get(right_handle_assist_mechanism, "none")
                 ),
                 "right_handle_friction_assist_engaged": (
                     right_handle_assist_ever
                     and right_handle_assist_mechanism == "friction"
-                ),
-                "right_handle_fixed_joint_assist_engaged": (
-                    right_handle_assist_ever
-                    and right_handle_assist_mechanism == "fixed_joint"
                 ),
                 "right_handle_assist_mechanism": right_handle_assist_mechanism,
                 "right_handle_assist_reason": right_handle_assist_reason,
@@ -1310,6 +1343,12 @@ def main() -> None:
                         effective_handle_vertical_offset_m
                     ),
                     "handle_engagement_depth_m": handle_engagement_depth_m,
+                    "handle_grasp_frame_source": (
+                        "target_matched_semantic_drawer_motion_boundary"
+                        if target_handle_grasp_index is not None
+                        else "source_semantic_handle_frame"
+                    ),
+                    "target_handle_grasp_index": target_handle_grasp_index,
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
