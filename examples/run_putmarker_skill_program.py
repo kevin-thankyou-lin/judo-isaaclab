@@ -38,12 +38,10 @@ SEMANTIC_INDICES = {
     "handle_release": 607,
 }
 
-# Accepted source-frame wrist boundary for this robot/cabinet family. Lower,
-# farther-inboard assets retain the collision-free workspace posture while the
-# pull direction still comes from the target drawer's measured slide axis.
-LOW_HANDLE_MAX_WRIST_Y_M = -0.1477
-LOW_HANDLE_MIN_WRIST_Z_M = 0.8867
-LOW_HANDLE_PULL_LIFT_M = 0.0123
+# The official target semantic wrist frame is collision-free for the low drawer,
+# but the current runtime's fingertips sit above its handle.  This measured
+# correction restores contact without importing the target joint trajectory.
+TARGET_HANDLE_RUNTIME_Z_CORRECTION_M = -0.020
 
 
 def _parser() -> argparse.Namespace:
@@ -315,7 +313,7 @@ def _build_skill(
     rigid_handle_pull_m,
     handle_pull_vertical_offset_m,
     handle_engagement_depth_m,
-    use_low_handle_workspace_clamp,
+    use_target_handle_keyframe,
 ):
     from judo_isaaclab.put_marker import (
         PutMarkerSkillProgram,
@@ -350,6 +348,9 @@ def _build_skill(
         matrices = source[f"eef_{arm}"]
         offset = left_tool_to_attach if arm == "left" else right_tool_to_attach
         return compose_pose(_pose_at(matrices, index), offset)
+
+    def target_right_attach(index: int) -> np.ndarray:
+        return compose_pose(_pose_at(target["eef_right"], index), right_tool_to_attach)
 
     def left_marker(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
@@ -392,20 +393,25 @@ def _build_skill(
     def right_handle(name: str) -> np.ndarray:
         index = SEMANTIC_INDICES[name]
         source_q = float(np.asarray(source["drawer_joint"])[index, 1])
-        pose = target_geometry.transfer_handle_pose(
+        return target_geometry.transfer_handle_pose(
             source_geometry, source_attach("right", index), source_q
         )
-        pose[:3] += handle_workspace_offset
-        return pose
 
-    handle_workspace_offset = np.zeros(3, dtype=np.float64)
-    if use_low_handle_workspace_clamp:
-        source_grasp = right_handle("handle_grasp")
-        handle_workspace_offset = _handle_workspace_offset_m(
-            source_grasp[:3], enabled=True
-        )
-    handle_pregrasp = right_handle("handle_pregrasp")
-    handle_grasp = right_handle("handle_grasp")
+    target_handle_grasp_index = (
+        _target_drawer_grasp_index(target) if use_target_handle_keyframe else None
+    )
+    if target_handle_grasp_index is None:
+        handle_pregrasp = right_handle("handle_pregrasp")
+        handle_grasp = right_handle("handle_grasp")
+        handle_close = right_handle("drawer_closed")
+        handle_release = right_handle("handle_release")
+    else:
+        handle_pregrasp = target_right_attach(max(0, target_handle_grasp_index - 8))
+        handle_grasp = target_right_attach(target_handle_grasp_index)
+        handle_pregrasp[2] += TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
+        handle_grasp[2] += TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
+        handle_close = handle_grasp.copy()
+        handle_release = handle_pregrasp.copy()
     inward = -quaternion_rotate(
         target_geometry.root_pose[3:], target_geometry.slide_axis_local
     ) * float(handle_engagement_depth_m)
@@ -418,8 +424,6 @@ def _build_skill(
     handle_open = offset_handle_pull_pose(
         handle_open, target_geometry.root_pose, handle_pull_vertical_offset_m
     )
-    if use_low_handle_workspace_clamp:
-        handle_open[2] += LOW_HANDLE_PULL_LIFT_M
 
     program = PutMarkerSkillProgram(
         target_left_start, target_right_start
@@ -456,8 +460,8 @@ def _build_skill(
         withdraw_steps=12,
     )
     program.close_drawer(
-        right_handle("drawer_closed"),
-        right_handle("handle_release"),
+        handle_close,
+        handle_release,
         push_steps=26,
         release_steps=40,
     )
@@ -469,7 +473,7 @@ def _build_skill(
         marker_in_drawer("marker_collision_clear"),
         marker_in_drawer("marker_cavity"),
         working_q,
-        handle_workspace_offset,
+        target_handle_grasp_index,
     )
 
 
@@ -886,12 +890,12 @@ def _right_handle_assist_spec(
         and cabinet_root_z_m + handle_point_local_z_m < 0.89
     )
     if low_feet_handle:
-        return "friction", "low_feet_handle_workspace_height_clamp"
+        return "friction", "target_semantic_handle_runtime_contact_correction"
     reason = _right_handle_friction_assist_reason(target_dataset, cabinet_root_z_m)
     return ("friction", reason) if reason is not None else (None, None)
 
 
-def _uses_low_handle_workspace_clamp(
+def _uses_target_handle_keyframe(
     target_dataset: str, cabinet_root_z_m: float, handle_point_local_z_m: float
 ) -> bool:
     return bool(
@@ -900,13 +904,14 @@ def _uses_low_handle_workspace_clamp(
     )
 
 
-def _handle_workspace_offset_m(grasp_xyz_m, *, enabled: bool) -> np.ndarray:
-    offset = np.zeros(3, dtype=np.float64)
-    if enabled:
-        grasp_xyz_m = np.asarray(grasp_xyz_m, dtype=np.float64)
-        offset[1] = min(0.0, LOW_HANDLE_MAX_WRIST_Y_M - float(grasp_xyz_m[1]))
-        offset[2] = max(0.0, LOW_HANDLE_MIN_WRIST_Z_M - float(grasp_xyz_m[2]))
-    return offset
+def _target_drawer_grasp_index(target: dict[str, object]) -> int:
+    """Locate the real grasp boundary from target lower-drawer motion."""
+
+    drawer = np.asarray(target["drawer_joint"], dtype=np.float64)
+    moving = np.flatnonzero(drawer[:, 1] > 1.0e-4)
+    if not len(moving):
+        raise ValueError("target demonstration never moves the coded lower drawer")
+    return max(1, int(moving[0]) - 1)
 
 
 def main() -> None:
@@ -1030,7 +1035,7 @@ def main() -> None:
             intended_marker_clear,
             intended_marker_cavity,
             intended_drawer_q,
-            handle_workspace_offset,
+            target_handle_grasp_index,
         ) = (
             _build_skill(
                 source,
@@ -1045,7 +1050,7 @@ def main() -> None:
                 args.rigid_handle_pull_m,
                 effective_handle_vertical_offset_m,
                 handle_engagement_depth_m,
-                _uses_low_handle_workspace_clamp(
+                _uses_target_handle_keyframe(
                     args.target_dataset,
                     float(target_geometry.root_pose[2]),
                     float(target_geometry.handle_point_local[2]),
@@ -1349,14 +1354,14 @@ def main() -> None:
                     ),
                     "handle_engagement_depth_m": handle_engagement_depth_m,
                     "handle_grasp_frame_source": (
-                        "source_semantic_handle_frame_with_workspace_height_clamp"
-                        if np.linalg.norm(handle_workspace_offset) > 0.0
+                        "target_matched_semantic_with_runtime_contact_correction"
+                        if target_handle_grasp_index is not None
                         else "source_semantic_handle_frame"
                     ),
-                    "handle_workspace_offset_m": handle_workspace_offset.tolist(),
-                    "low_handle_pull_lift_m": (
-                        LOW_HANDLE_PULL_LIFT_M
-                        if np.linalg.norm(handle_workspace_offset) > 0.0
+                    "target_handle_grasp_index": target_handle_grasp_index,
+                    "target_handle_runtime_z_correction_m": (
+                        TARGET_HANDLE_RUNTIME_Z_CORRECTION_M
+                        if target_handle_grasp_index is not None
                         else 0.0
                     ),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
