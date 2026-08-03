@@ -773,7 +773,11 @@ def track_loaded_pad_center_from_observation(
     finger_pad_centers_world: Any,
     retained_orientation_pose: Any,
 ) -> tuple[SkillTrajectory, np.ndarray]:
-    """Recompose only the next wrist target about its observed loaded pad."""
+    """Recompose the next wrist target about its observed loaded pad.
+
+    Anticipate the loaded pad's inward motion from the next symmetric jaw-close
+    command so that closing does not unload the contact on the following step.
+    """
 
     step = int(current_step)
     grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
@@ -790,12 +794,24 @@ def track_loaded_pad_center_from_observation(
     contacting = forces >= 0.1
     if int(np.sum(contacting)) != 1:
         raise ValueError("loaded pad tracking requires one contacting finger")
-    center = centers[int(np.flatnonzero(contacting)[0])]
+    loaded_index = int(np.flatnonzero(contacting)[0])
+    missing_index = 1 - loaded_index
+    center = centers[loaded_index]
     pivot_local = quaternion_rotate(
         inverse_pose(observed)[3:], center - observed[:3]
     )
     target = retained.copy()
     target[:3] = center - quaternion_rotate(target[3:], pivot_local)
+    closure_m = max(
+        float(trajectory.grippers[step + 1, 0] - trajectory.grippers[step, 0]),
+        0.0,
+    )
+    jaw_span = center - centers[missing_index]
+    jaw_span_norm = float(np.linalg.norm(jaw_span))
+    if closure_m > 0.0:
+        if jaw_span_norm <= 1.0e-9:
+            raise ValueError("finger pad centers must define a jaw axis")
+        target[:3] += closure_m * jaw_span / jaw_span_norm
     left = trajectory.left_poses.copy()
     correction = target[:3] - left[step + 1, :3]
     left[step + 1] = target
