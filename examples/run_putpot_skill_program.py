@@ -1156,6 +1156,7 @@ def main() -> None:
         peer_contact_jaw_twist_fraction = None
         peer_contact_pre_twist_jaw_residual_m = None
         peer_contact_authored_jaw_center_locked = False
+        peer_contact_latch_centering_applied_m = 0.0
         peer_contact_gripper_retime = None
         peer_contact_position_locked = False
         peer_contact_pad_center_tracking = []
@@ -1540,6 +1541,7 @@ def main() -> None:
                     )
                     from judo_isaaclab.put_pot import (
                         HANDLE_PAD_GEOMETRIC_MARGIN_M,
+                        center_handle_between_finger_pads,
                         handle_jaw_center_offset_m,
                     )
 
@@ -1554,12 +1556,47 @@ def main() -> None:
                         abs(peer_contact_pre_twist_jaw_residual_m)
                         <= HANDLE_PAD_GEOMETRIC_MARGIN_M
                     )
+                    jaw_residual_for_twist_m = (
+                        peer_contact_pre_twist_jaw_residual_m
+                    )
+                    if not peer_contact_authored_jaw_center_locked:
+                        loaded_left_world = center_handle_between_finger_pads(
+                            loaded_left_world,
+                            peer_contact_pre_twist_jaw_residual_m,
+                            maximum_correction_m=abs(
+                                peer_contact_pre_twist_jaw_residual_m
+                            ),
+                        )
+                        peer_contact_latch_centering_applied_m = (
+                            peer_contact_pre_twist_jaw_residual_m
+                        )
+                        jaw_residual_for_twist_m = (
+                            handle_jaw_center_offset_m(
+                                loaded_left_world,
+                                sample["pot_pose"],
+                                target_left_handle_points,
+                            )
+                        )
+                        milestone_feedback_horizon_steps = max(
+                            1,
+                            int(
+                                np.ceil(
+                                    abs(peer_contact_pre_twist_jaw_residual_m)
+                                    / 0.002
+                                )
+                            ),
+                        )
+                        peer_contact_pad_reseat_m = (
+                            milestone_open_pad_reseat_m
+                        )
+                    else:
+                        milestone_feedback_horizon_steps = 1
                     peer_contact_jaw_twist_fraction = (
                         geometry_conditioned_loaded_jaw_rotation_fraction(
                             sample["left_finger_forces_n"],
                             sample["left_pad_fractions"],
                             jaw_center_residual_m=(
-                                peer_contact_pre_twist_jaw_residual_m
+                                jaw_residual_for_twist_m
                             ),
                         )
                     )
@@ -1635,7 +1672,6 @@ def main() -> None:
                             target_left_handle_points,
                         )
                     )
-                    milestone_feedback_horizon_steps = 1
 
                 for arm in ("left", "right"):
                     if (
@@ -2636,6 +2672,9 @@ def main() -> None:
                 ),
                 "peer_contact_authored_jaw_center_locked": (
                     peer_contact_authored_jaw_center_locked
+                ),
+                "peer_contact_latch_centering_applied_m": (
+                    peer_contact_latch_centering_applied_m
                 ),
                 "peer_contact_gripper_retime": peer_contact_gripper_retime,
                 "peer_contact_position_locked": peer_contact_position_locked,

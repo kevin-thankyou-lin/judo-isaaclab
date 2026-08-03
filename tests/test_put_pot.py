@@ -688,6 +688,26 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
     )
 
 
+def test_full_signed_jaw_residual_can_recenter_latch_target():
+    handle_points = np.asarray(
+        [
+            [-0.20, -0.03, -0.02],
+            [-0.20, -0.03, 0.02],
+            [-0.14, 0.01, -0.02],
+            [-0.14, 0.01, 0.02],
+        ]
+    )
+    grasp = _pose(0.08, -0.06, 0.04)
+    residual = handle_jaw_center_offset_m(grasp, _pose(), handle_points)
+    centered = center_handle_between_finger_pads(
+        grasp, residual, maximum_correction_m=abs(residual)
+    )
+    assert abs(residual) > 0.04
+    assert handle_jaw_center_offset_m(
+        centered, _pose(), handle_points
+    ) == pytest.approx(0.0, abs=1.0e-9)
+
+
 def test_single_finger_contact_detection_is_exact_and_thresholded():
     assert SINGLE_FINGER_CONTACT_LATCH_STEPS == CONTACT_FEEDBACK_HORIZON_STEPS
     assert single_finger_contact_observed([0.0, 0.1], [np.nan, 0.2])
