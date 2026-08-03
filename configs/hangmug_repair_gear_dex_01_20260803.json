@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "policy": "target-direct deterministic HangMug semantic repair on gear-dex-01; no MPC, sampling, threshold weakening, teleport, or inter-stage reset",
+  "tasks": [
+    {
+      "name": "hangmug",
+      "expected_pairs": 40,
+      "source_dataset": "${HANGMUG_DATA_ROOT}/teleop/hangmug_000.hdf5",
+      "dataset_globs": [
+        "${HANGMUG_DATA_ROOT}/teleop/hangmug_*.hdf5"
+      ],
+      "objects_root": "${HANGMUG_DATA_ROOT}/objects",
+      "runner": "examples/run_hangmug_skill_program.py",
+      "needs_keyframes": true,
+      "runner_args": [
+        "--device",
+        "cuda:0",
+        "--grasp-assist-mechanism",
+        "friction"
+      ]
+    }
+  ]
+}

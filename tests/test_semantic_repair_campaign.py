@@ -138,6 +138,42 @@ def test_preserved_demo_receipt_must_match_recorded_hash(monkeypatch):
         )
 
 
+def test_existing_artifact_uses_local_mirror_without_rewriting_receipt(tmp_path):
+    module = _module()
+    stale = tmp_path / "remote" / "skill_result.json"
+    mirror = tmp_path / "mirror" / "skill_result.json"
+    mirror.parent.mkdir()
+    mirror.write_text("{}")
+
+    assert module._existing_artifact(stale, mirror) == mirror
+    stale.parent.mkdir()
+    stale.write_text("{}")
+    assert module._existing_artifact(stale, mirror) == stale
+
+
+def test_demo_receipt_validates_local_mirror_without_changing_hash(monkeypatch, tmp_path):
+    module = _module()
+    mirror = tmp_path / "replay_demo.hdf5"
+    mirror.write_bytes(b"preserved")
+    monkeypatch.setattr(
+        module,
+        "validate_demo",
+        lambda path, assets: {"path": path, "sha256": "same", "actions": 825},
+    )
+
+    receipt = module._validate_demo_receipt(
+        {
+            "path": "/retired/campaign/replay_demo.hdf5",
+            "sha256": "same",
+            "actions": 825,
+        },
+        {},
+        fallback=mirror,
+    )
+
+    assert receipt["path"] == str(mirror)
+
+
 def test_fail_fast_lane_stops_only_after_a_failed_attempt():
     module = _module()
 

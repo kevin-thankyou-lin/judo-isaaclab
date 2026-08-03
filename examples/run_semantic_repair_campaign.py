@@ -31,6 +31,16 @@ from run_three_task_asset_campaign import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _existing_artifact(preferred: Path, fallback: Path) -> Path:
+    """Use a byte-identical campaign mirror without rewriting its receipts."""
+
+    if preferred.is_file():
+        return preferred
+    if fallback.is_file():
+        return fallback
+    return preferred
+
+
 def _trace(path: Path) -> dict[str, np.ndarray] | None:
     if not path.is_file():
         return None
@@ -43,7 +53,13 @@ def _result_record(result_path: Path, source: str) -> dict[str, Any] | None:
         return None
     result = _load(result_path)
     trace_value = result.get("provenance", {}).get("trace", {}).get("path")
-    trace_path = Path(trace_value) if trace_value else result_path.with_name("skill_trace.npz")
+    preferred_trace = (
+        Path(trace_value) if trace_value else result_path.with_name("skill_trace.npz")
+    )
+    trace_path = _existing_artifact(
+        preferred_trace,
+        result_path.with_name(preferred_trace.name),
+    )
     return {
         "source": source,
         "result_path": str(result_path.resolve()),
@@ -58,12 +74,15 @@ def _semantic_sources(
     pair_root = task_root / pair_id
     values = []
     if primary.get("method") == "deterministic_semantic_skill":
-        path = Path(primary.get("result", pair_root / "skill_result.json"))
+        fallback = pair_root / "skill_result.json"
+        path = _existing_artifact(Path(primary.get("result", fallback)), fallback)
         record = _result_record(path, "primary_campaign")
         if record:
             values.append(record)
-    audit_path = Path(
-        audit.get("result", pair_root / "semantic_audit" / "skill_result.json")
+    audit_fallback = pair_root / "semantic_audit" / "skill_result.json"
+    audit_path = _existing_artifact(
+        Path(audit.get("result", audit_fallback)),
+        audit_fallback,
     )
     record = _result_record(audit_path, "replay_success_semantic_audit")
     if record:
@@ -105,9 +124,14 @@ def _semantic_motion_success(source: dict[str, Any]) -> bool:
 
 
 def _validate_demo_receipt(
-    demonstration: dict[str, Any], assets: dict[str, str]
+    demonstration: dict[str, Any],
+    assets: dict[str, str],
+    *,
+    fallback: Path | None = None,
 ) -> dict[str, Any]:
-    actual = validate_demo(demonstration["path"], assets)
+    preferred = Path(demonstration["path"])
+    path = _existing_artifact(preferred, fallback or preferred)
+    actual = validate_demo(str(path), assets)
     if demonstration.get("sha256") not in (None, actual["sha256"]):
         raise RuntimeError(
             f"demonstration hash does not match its ledger: {demonstration['path']}"
@@ -204,8 +228,13 @@ def refresh_ledger(
                 primary_entry,
                 audit_pairs.get(pair_id, {}),
             )
-            primary_result_path = Path(
+            primary_preferred = Path(
                 primary_entry.get("result", task_root / pair_id / "skill_result.json")
+            )
+            primary_fallback = task_root / pair_id / primary_preferred.name
+            primary_result_path = _existing_artifact(
+                primary_preferred,
+                primary_fallback,
             )
             primary_result = (
                 _load(primary_result_path) if primary_result_path.is_file() else {}
@@ -255,8 +284,13 @@ def refresh_ledger(
             if successes:
                 selected = successes[-1]
                 result = selected["result"]
+                demo = result["provenance"]["demonstration"]
                 demonstration = _validate_demo_receipt(
-                    result["provenance"]["demonstration"], pair["assets"]
+                    demo,
+                    pair["assets"],
+                    fallback=Path(selected["result_path"]).with_name(
+                        Path(demo["path"]).name
+                    ),
                 )
                 record.update(
                     {
@@ -267,7 +301,13 @@ def refresh_ledger(
                     }
                 )
             elif preserved_primary:
-                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
+                demonstration = _validate_demo_receipt(
+                    primary_demo,
+                    pair["assets"],
+                    fallback=primary_result_path.with_name(
+                        Path(primary_demo["path"]).name
+                    ),
+                )
                 record.update(
                     {
                         "accepted_source": "preserved_primary_deterministic",
@@ -278,7 +318,13 @@ def refresh_ledger(
                 )
             elif combined_audit_success:
                 selected = audit_motion_successes[-1]
-                demonstration = _validate_demo_receipt(primary_demo, pair["assets"])
+                demonstration = _validate_demo_receipt(
+                    primary_demo,
+                    pair["assets"],
+                    fallback=primary_result_path.with_name(
+                        Path(primary_demo["path"]).name
+                    ),
+                )
                 record.update(
                     {
                         "accepted_source": "semantic_audit_with_preserved_primary_demo",
