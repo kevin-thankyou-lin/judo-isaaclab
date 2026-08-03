@@ -1933,9 +1933,12 @@ class PutPotSkillProgram:
         closed: float = 0.0,
         simultaneous: bool = False,
         right_first: bool = False,
+        contact_hold_steps: int = 0,
     ) -> None:
         if simultaneous and right_first:
             raise ValueError("simultaneous and right_first are mutually exclusive")
+        if contact_hold_steps < 0:
+            raise ValueError("contact_hold_steps must be nonnegative")
         self._append(
             "bimanual_pregrasp",
             "bimanual_handle_grasp",
@@ -1987,6 +1990,12 @@ class PutPotSkillProgram:
                 right_close_steps,
                 right_pose=right_grasp,
                 right_gripper=closed,
+            )
+        if contact_hold_steps:
+            self._append(
+                "left_handle_grasp" if right_first else "right_handle_grasp",
+                "bimanual_handle_grasp",
+                contact_hold_steps,
             )
 
     def lift_and_transport(

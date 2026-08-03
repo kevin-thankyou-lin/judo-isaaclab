@@ -629,7 +629,9 @@ def _build_skill(
         return compose_pose(pot_pose, local)
 
     from judo_isaaclab.put_pot import (
+        CONTACT_FEEDBACK_HORIZON_STEPS,
         geometry_conditioned_grasp_hold_steps,
+        geometry_conditioned_peer_contact_transfer,
         geometry_conditioned_right_first_close,
         geometry_conditioned_transport_steps,
     )
@@ -641,6 +643,18 @@ def _build_skill(
         grasp_geometry["left"]["predicted_pad_imbalance_m"],
     )
     grasp_geometry["left"]["right_first_close"] = right_first_close
+    peer_contact_hold_steps = (
+        CONTACT_FEEDBACK_HORIZON_STEPS
+        if geometry_conditioned_peer_contact_transfer(
+            handle_size(target_parts, left_side),
+            handle_size(target_parts, right_side),
+            grasp_geometry["left"]["predicted_pad_imbalance_m"],
+        )
+        else 0
+    )
+    grasp_geometry["left"]["peer_contact_hold_steps"] = (
+        peer_contact_hold_steps
+    )
     if right_first_close:
         approach = left_pregrasp[:3] - left_grasp[:3]
         approach_norm = float(np.linalg.norm(approach))
@@ -743,6 +757,7 @@ def _build_skill(
         right_close_steps=60 if right_first_close else grasp_hold_steps,
         simultaneous=not right_first_close,
         right_first=right_first_close,
+        contact_hold_steps=peer_contact_hold_steps,
     )
     transport = program.smooth_bimanual_transport_to_center(
         target_initial.root_pose,

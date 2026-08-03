@@ -506,6 +506,30 @@ def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():
     )
 
 
+def test_right_first_peer_grasp_holds_closed_contact_before_transport():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1),
+        _pose(0.1, 1.0),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=2,
+        right_first=True,
+        contact_hold_steps=3,
+    )
+    trajectory = program.build()
+    left_end = trajectory.waypoint_steps["left_handle_grasp"]
+    assert left_end == 8
+    assert trajectory.left_poses[left_end - 2 : left_end + 1] == pytest.approx(
+        np.broadcast_to(_pose(0.2), (3, 7))
+    )
+    assert trajectory.grippers[left_end - 2 : left_end + 1] == pytest.approx(
+        np.zeros((3, 2))
+    )
+
+
 def test_authored_handle_reanchors_to_observed_open_jaw_midpoint():
     points = np.asarray(
         [
