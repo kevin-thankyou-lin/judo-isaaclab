@@ -891,6 +891,11 @@ def main() -> None:
                 - source_geometry.handle_frame(0.0)[:3]
             )
         )
+        effective_handle_vertical_offset_m = (
+            0.0
+            if float(target_geometry.root_pose[2]) >= 1.04
+            else args.handle_pull_vertical_offset_m
+        )
         # Every asset uses the measured handle frame and joint axis.  The old
         # source-nominal-only pull left all 21 original semantic failures below
         # the immutable 5 cm opening stage (and recorded zero handle grasps).
@@ -907,7 +912,7 @@ def main() -> None:
                 args.drawer_pull_extra_m,
                 integrated_target_handle_ik,
                 args.rigid_handle_pull_m,
-                args.handle_pull_vertical_offset_m,
+                effective_handle_vertical_offset_m,
             )
             if args.mode == "skill" else (None, None, None, None)
         )
@@ -1178,6 +1183,9 @@ def main() -> None:
                     "rigid_target_handle_pull": integrated_target_handle_ik,
                     "rigid_handle_pull_m": args.rigid_handle_pull_m,
                     "handle_pull_vertical_offset_m": args.handle_pull_vertical_offset_m,
+                    "effective_handle_pull_vertical_offset_m": (
+                        effective_handle_vertical_offset_m
+                    ),
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
