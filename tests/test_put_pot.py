@@ -438,9 +438,10 @@ def test_missing_finger_pad_residual_scales_deterministic_seating():
         _pose(),
         [0.0, 3.0],
         [-0.043, 0.10],
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
         0.0,
     )
-    assert seated[:3] == pytest.approx([0.0, 0.0, 0.001])
+    assert seated[:3] == pytest.approx([0.0, 0.0, -0.001])
     assert depth == pytest.approx(0.001)
 
     unchanged, depth = reanchor_missing_finger_pad_depth(
@@ -448,6 +449,7 @@ def test_missing_finger_pad_residual_scales_deterministic_seating():
         _pose(),
         [0.0, 3.0],
         [np.nan, 0.10],
+        [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
         0.0,
     )
     assert unchanged == pytest.approx(contact)

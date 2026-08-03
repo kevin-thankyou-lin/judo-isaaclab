@@ -153,15 +153,19 @@ def _configure_offline_ground() -> dict[str, object]:
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
+    from isaaclab.utils.math import quat_apply
     from judo_isaaclab.put_pot import cooktop_center_error_m
     from run_putmarker_skill_program import _eef_pose
 
     left_grasp, right_grasp = env.robot.is_grasping()
     env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
 
-    def finger_evidence(arm_name: str) -> tuple[list[float], list[float]]:
+    def finger_evidence(
+        arm_name: str,
+    ) -> tuple[list[float], list[float], list[list[float]]]:
         gripper = env.robot.arms[arm_name].end_effector
-        forces, pad_fractions = [], []
+        arm = env.scene[arm_name]
+        forces, pad_fractions, pad_axes_world = [], [], []
         for finger in gripper.fingers:
             forces.append(
                 float(finger.contact_force(gripper.default_target, env_ids)[0].item())
@@ -172,10 +176,21 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
             pad_fractions.append(
                 float(fraction[0].item()) if bool(valid[0].item()) else float("nan")
             )
-        return forces, pad_fractions
+            body_idx = arm.data.body_names.index(finger.link)
+            finger_pose = arm.data.body_link_pose_w[env_ids, body_idx, :]
+            _, axis_unit, _ = finger._tip_base_axis(env.device)
+            axis_world = quat_apply(
+                finger_pose[:, 3:], axis_unit.expand(len(env_ids), -1)
+            )[0]
+            pad_axes_world.append(axis_world.detach().cpu().numpy().tolist())
+        return forces, pad_fractions, pad_axes_world
 
-    left_finger_forces, left_pad_fractions = finger_evidence("left_arm")
-    right_finger_forces, right_pad_fractions = finger_evidence("right_arm")
+    left_finger_forces, left_pad_fractions, left_pad_axes = finger_evidence(
+        "left_arm"
+    )
+    right_finger_forces, right_pad_fractions, right_pad_axes = finger_evidence(
+        "right_arm"
+    )
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     pot = env.scene["pot"]
     cooktop = env.scene["cooktop"]
@@ -206,8 +221,10 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "right_grasp": bool(right_grasp[0].item()),
         "left_finger_forces_n": left_finger_forces,
         "left_pad_fractions": left_pad_fractions,
+        "left_pad_axes_world": left_pad_axes,
         "right_finger_forces_n": right_finger_forces,
         "right_pad_fractions": right_pad_fractions,
+        "right_pad_axes_world": right_pad_axes,
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
         "task_success": task_success,
@@ -1048,6 +1065,7 @@ def main() -> None:
                             sample["pot_pose"],
                             sample[f"{arm}_finger_forces_n"],
                             sample[f"{arm}_pad_fractions"],
+                            sample[f"{arm}_pad_axes_world"],
                             missing_finger_depth_corrections[arm],
                         )
                     )
@@ -1227,6 +1245,14 @@ def main() -> None:
             ),
             right_pad_fractions=np.asarray(
                 [sample["right_pad_fractions"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            left_pad_axes_world=np.asarray(
+                [sample["left_pad_axes_world"] for sample in samples[1:]],
+                dtype=np.float32,
+            ),
+            right_pad_axes_world=np.asarray(
+                [sample["right_pad_axes_world"] for sample in samples[1:]],
                 dtype=np.float32,
             ),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),

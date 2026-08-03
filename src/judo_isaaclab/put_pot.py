@@ -462,6 +462,7 @@ def reanchor_missing_finger_pad_depth(
     observed_root_pose: Any,
     finger_forces_n: Any,
     pad_fractions: Any,
+    pad_axes_world: Any,
     depth_correction_m: float,
     *,
     contact_threshold_n: float = 0.1,
@@ -475,10 +476,13 @@ def reanchor_missing_finger_pad_depth(
     root = _pose(observed_root_pose, "observed_root_pose")
     forces = np.asarray(finger_forces_n, dtype=np.float64)
     fractions = np.asarray(pad_fractions, dtype=np.float64)
+    axes = np.asarray(pad_axes_world, dtype=np.float64)
     if forces.shape != (2,) or not np.all(np.isfinite(forces)):
         raise ValueError("finger_forces_n must contain two finite values")
     if fractions.shape != (2,):
         raise ValueError("pad_fractions must contain two values")
+    if axes.shape != (2, 3) or not np.all(np.isfinite(axes)):
+        raise ValueError("pad_axes_world must contain two finite 3D axes")
     if not np.isfinite(depth_correction_m) or depth_correction_m < 0.0:
         raise ValueError("depth_correction_m must be finite and nonnegative")
     if not np.isfinite(step_m) or step_m <= 0.0:
@@ -499,7 +503,13 @@ def reanchor_missing_finger_pad_depth(
     if delta <= 0.0:
         return local.copy(), float(depth_correction_m)
     world = compose_pose(root, local)
-    world = seat_handle_inside_finger_pads(world, delta)
+    axis = axes[missing]
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1.0e-9:
+        raise ValueError("missing finger pad axis must be nonzero")
+    # Moving the finger opposite its tip-to-base axis moves a fixed object
+    # contact from the tip toward the base, increasing the signed fraction.
+    world[:3] -= delta * axis / norm
     return compose_pose(inverse_pose(root), world), float(depth_correction_m + delta)
 
 
