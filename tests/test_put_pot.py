@@ -18,6 +18,7 @@ from judo_isaaclab.put_pot import (
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
     center_handle_between_finger_pads,
+    continue_contact_recovery_without_force,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
     geometry_conditioned_grasp_hold_steps,
@@ -462,6 +463,20 @@ def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
     assert residual == pytest.approx([0.015, 0.02, 0.0])
     assert result[:3] == pytest.approx(residual)
     assert result[3:] == pytest.approx(commanded[3:])
+
+
+def test_contact_recovery_continues_signed_residual_through_force_gap():
+    contact, signed = continue_contact_recovery_without_force(
+        _pose(), 0.018, 0.042374, [0.0, 2.0, 0.0]
+    )
+    assert signed == pytest.approx(0.019)
+    assert contact[:3] == pytest.approx([0.0, 0.001, 0.0])
+
+    contact, signed = continue_contact_recovery_without_force(
+        contact, signed, 0.0194, [0.0, 1.0, 0.0]
+    )
+    assert signed == pytest.approx(0.0194)
+    assert contact[:3] == pytest.approx([0.0, 0.0014, 0.0])
 
 
 def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
