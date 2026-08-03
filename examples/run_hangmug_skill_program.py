@@ -36,6 +36,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
+        "--require-cpu-physics",
+        action="store_true",
+        help="Fail before rollout unless both requested and actual physics devices are CPU.",
+    )
+    parser.add_argument(
         "--grasp-assist-mechanism",
         choices=("task_config", "friction", "fixed_joint"),
         default="task_config",
@@ -65,6 +70,33 @@ def _sha256(path: str | os.PathLike[str]) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _physics_device_receipt(
+    requested: object,
+    actual: object | None = None,
+    *,
+    require_cpu: bool,
+) -> dict[str, object]:
+    """Return a fail-closed physics-device receipt for CPU-only campaigns."""
+
+    requested_name = str(requested)
+    actual_name = None if actual is None else str(actual)
+    if require_cpu and requested_name != "cpu":
+        raise RuntimeError(
+            f"CPU physics is required, but the requested device is {requested_name!r}"
+        )
+    if require_cpu and actual_name is not None and actual_name != "cpu":
+        raise RuntimeError(
+            f"CPU physics is required, but the actual device is {actual_name!r}"
+        )
+    return {
+        "required": "cpu" if require_cpu else None,
+        "requested": requested_name,
+        "actual": actual_name,
+        "passed": not require_cpu
+        or (requested_name == "cpu" and actual_name in (None, "cpu")),
+    }
 
 
 def _dataset_assets(path: str, objects_root: str) -> dict[str, str]:
@@ -576,6 +608,10 @@ def _frame(env, sample):
 
 def main() -> None:
     args = _parser()
+    _physics_device_receipt(
+        args.device,
+        require_cpu=args.require_cpu_physics,
+    )
     if args.render and not args.video:
         raise ValueError("--render requires --video")
     for path in (args.result_json, args.trace_npz, args.video, args.write_keyframes):
@@ -610,6 +646,16 @@ def main() -> None:
             enable_gripper_grasp_clamp=False,
             enable_grasp_ray_viz=False,
             check_gripper_release_for_hang=True,
+        )
+        physics_device = _physics_device_receipt(
+            args.device,
+            env.device,
+            require_cpu=args.require_cpu_physics,
+        )
+        print(
+            "HANGMUG_PHYSICS_DEVICE="
+            + json.dumps(physics_device, sort_keys=True),
+            flush=True,
         )
         grasp_assistance = _validate_datagen_grasp_assists(
             env, override["grasp_assistance_config"]
@@ -756,6 +802,10 @@ def main() -> None:
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
+        if args.require_cpu_physics:
+            checks["physics_device_cpu"] = bool(
+                physics_device["passed"] and physics_device["actual"] == "cpu"
+            )
         if args.classification_run:
             if args.mode != "replay":
                 raise ValueError("--classification-run is only valid in replay mode")
@@ -804,7 +854,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_latch_then_handover_descent": trajectory is not None, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_latch_then_handover_descent": trajectory is not None, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),

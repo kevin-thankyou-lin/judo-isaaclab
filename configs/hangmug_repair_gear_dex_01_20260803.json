@@ -14,7 +14,8 @@
       "needs_keyframes": true,
       "runner_args": [
         "--device",
-        "cuda:0",
+        "cpu",
+        "--require-cpu-physics",
         "--grasp-assist-mechanism",
         "friction"
       ]
