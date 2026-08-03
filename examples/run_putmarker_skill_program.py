@@ -68,7 +68,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--handle-pull-joint-extension", type=float, default=-0.05)
     parser.add_argument("--drawer-placement-q-m", type=float, default=0.055)
     parser.add_argument("--drawer-pull-extra-m", type=float, default=0.010)
-    parser.add_argument("--rigid-handle-pull-m", type=float, default=0.15)
+    parser.add_argument("--rigid-handle-pull-m", type=float, default=0.10)
     parser.add_argument("--handle-pull-vertical-offset-m", type=float, default=-0.040)
     parser.add_argument(
         "--integrate-left-ik",
@@ -972,7 +972,10 @@ def main() -> None:
                     args,
                     right_dls_gain=right_dls_gain,
                     integrate_right_ik=integrate_right_ik,
-                    integrate_left_ik=_integrate_left_ik(args.integrate_left_ik, step),
+                    integrate_left_ik=(
+                        step > trajectory.waypoint_steps["drawer_open"]
+                        or _integrate_left_ik(args.integrate_left_ik, step)
+                    ),
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
@@ -1184,7 +1187,7 @@ def main() -> None:
                     "left_ik_anchor": (
                         "integrated_measured_joint"
                         if args.integrate_left_ik
-                        else "sparse_semantic_nominal"
+                        else "sparse_through_open_then_integrated_measured_joint"
                     ),
                 },
             },
