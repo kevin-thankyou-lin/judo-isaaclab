@@ -117,8 +117,8 @@ def test_handle_transfer_preserves_measured_transverse_surface_clearance():
 def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():
     grasp = _pose(x=0.07, y=0.02, z=0.04)
     deepened = seat_handle_inside_finger_pads(grasp, HANDLE_PAD_DEPTH_MARGIN_M)
-    assert HANDLE_PAD_DEPTH_MARGIN_M == pytest.approx(0.010)
-    assert deepened[:3] == pytest.approx([0.07, 0.02, 0.050])
+    assert HANDLE_PAD_DEPTH_MARGIN_M == pytest.approx(0.012)
+    assert deepened[:3] == pytest.approx([0.07, 0.02, 0.052])
     assert deepened[3:] == pytest.approx(grasp[3:])
 
 
