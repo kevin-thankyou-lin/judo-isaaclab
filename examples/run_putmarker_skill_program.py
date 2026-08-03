@@ -1486,8 +1486,10 @@ def main() -> None:
                 "grasp_assistance": (
                     {
                         "friction": "task_config:right=friction",
+                        "fixed_joint": "task_config:right=fixed_joint",
                     }.get(right_handle_assist_mechanism, "none")
                 ),
+                "right_handle_assist_engaged": right_handle_assist_ever,
                 "right_handle_friction_assist_engaged": (
                     right_handle_assist_ever
                     and right_handle_assist_mechanism == "friction"

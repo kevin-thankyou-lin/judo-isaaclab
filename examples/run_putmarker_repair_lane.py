@@ -112,6 +112,7 @@ def _artifact_receipt(
         in {
             "none",
             "task_config:right=friction",
+            "task_config:right=fixed_joint",
         }
     ):
         raise RuntimeError(f"deterministic continuity contract failed: {protocol}")
