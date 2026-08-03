@@ -1018,7 +1018,11 @@ def transport_reanchor_position_step_limit_m(
     )
     if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
         raise ValueError("transport reanchor step limits must be positive and finite")
-    return float(min(values[0], 0.5 * values[1]))
+    # ``handle_retention_tolerance_m`` is already derived as half of the
+    # narrowest measured handle cross-section.  Halving it again rejects
+    # smooth observed-state tails that remain inside the authored handle
+    # contact region, leaving the controller to chase a stale trajectory.
+    return float(min(values[0], values[1]))
 
 
 def cooktop_center_error_m(pot_pose: Any, cooktop_pose: Any) -> float:

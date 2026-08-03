@@ -572,10 +572,10 @@ def test_bimanual_position_step_limit_is_measured_per_arm():
 
 def test_transport_reanchor_step_limit_respects_handle_retention_geometry():
     assert transport_reanchor_position_step_limit_m(0.025, 0.010) == pytest.approx(
-        0.005
+        0.010
     )
     assert transport_reanchor_position_step_limit_m(0.008, 0.010) == pytest.approx(
-        0.005
+        0.008
     )
     assert transport_reanchor_position_step_limit_m(0.004, 0.010) == pytest.approx(
         0.004
