@@ -9,6 +9,7 @@ from judo_isaaclab.put_pot import (
     RigidSupportGeometry,
     YAM_FINGER_SEPARATION_LOCAL_M,
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
+    YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     balance_handle_contact_across_finger_pads,
     cartesian_smoothness_metrics,
     cooktop_center_error_m,
@@ -119,20 +120,19 @@ def test_handle_contact_depth_moves_opposite_local_pad_tip_axis():
     assert deepened[3:] == pytest.approx(grasp[3:])
 
 
-def test_handle_pad_balance_keeps_left_pivot_and_deepens_right_finger():
+def test_handle_pad_balance_keeps_right_pivot_and_deepens_left_finger():
     grasp = _pose(x=0.07, y=0.02, z=0.04)
     balanced = balance_handle_contact_across_finger_pads(grasp)
+    right_before = grasp[:3] + YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    right_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
     left_before = grasp[:3] + YAM_LEFT_FINGER_PIVOT_LOCAL_M
     left_after = balanced[:3] + quaternion_rotate(
         balanced[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
     )
-    right_before = left_before + YAM_FINGER_SEPARATION_LOCAL_M
-    right_after = balanced[:3] + quaternion_rotate(
-        balanced[3:],
-        YAM_LEFT_FINGER_PIVOT_LOCAL_M + YAM_FINGER_SEPARATION_LOCAL_M,
-    )
-    assert left_after == pytest.approx(left_before)
-    assert right_after[2] - right_before[2] == pytest.approx(0.003, abs=2.0e-6)
+    assert right_after == pytest.approx(right_before)
+    assert left_after[2] - left_before[2] == pytest.approx(0.003, abs=2.0e-6)
 
 
 def test_contact_feedback_chases_a_moving_handle_before_close_window_ends():
