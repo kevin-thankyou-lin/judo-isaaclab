@@ -81,3 +81,12 @@ def test_target_handle_grasp_index_comes_from_lower_drawer_motion():
     drawer = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0002], [0.0, 0.01]]
 
     assert module._target_drawer_grasp_index({"drawer_joint": drawer}) == 1
+
+
+def test_spawn_lift_repairs_only_actual_table_penetration():
+    module = _module()
+
+    assert module._collision_clear_spawn_lift_m(
+        1.0048369169, -0.2557240054, 0.7517
+    ) == pytest.approx(0.0035870885)
+    assert module._collision_clear_spawn_lift_m(1.015924, -0.2557240054, 0.7517) == 0.0

@@ -230,6 +230,38 @@ def _asset_size(path: str) -> np.ndarray:
     return np.asarray([size[axis] for axis in "xyz"], dtype=np.float64)
 
 
+def _usd_link_local_min_z(asset_path: str, link_name: str) -> float:
+    """Read one official link's composed local lower bound, failing closed."""
+
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.Open(_asset_root_usd(asset_path))
+    matches = [prim for prim in stage.Traverse() if prim.GetName() == link_name]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected one {link_name!r} prim in {asset_path}, found {len(matches)}"
+        )
+    cache = UsdGeom.BBoxCache(
+        Usd.TimeCode.Default(),
+        [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy],
+    )
+    bounds = cache.ComputeWorldBound(matches[0]).ComputeAlignedRange()
+    return float(bounds.GetMin()[2])
+
+
+def _collision_clear_spawn_lift_m(
+    root_z_m: float,
+    link_min_local_z_m: float,
+    table_surface_z_m: float,
+    *,
+    clearance_m: float = 0.001,
+) -> float:
+    return max(
+        0.0,
+        table_surface_z_m + clearance_m - (root_z_m + link_min_local_z_m),
+    )
+
+
 def _drawer_geometry(asset_path: str, root_pose: np.ndarray):
     from pxr import Usd, UsdGeom, UsdPhysics
 
@@ -988,15 +1020,44 @@ def main() -> None:
         )
 
         env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
-        _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
-        env.sim.forward()
-        env.reset_success_check(env_ids)
         source_geometry = _drawer_geometry(
             source_assets["obj_1"], np.asarray(source["cabinet_pose"])[0]
         )
         target_geometry = _drawer_geometry(
             target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
         )
+        low_handle_target = _uses_target_handle_keyframe(
+            args.target_dataset,
+            float(target_geometry.root_pose[2]),
+            float(target_geometry.handle_point_local[2]),
+        )
+        link_min_local_z_m = (
+            _usd_link_local_min_z(target_assets["obj_1"], "link_2")
+            if low_handle_target
+            else None
+        )
+        table_surface_z_m = float(env.robot.spec.table_position[2])
+        cabinet_spawn_lift_m = (
+            _collision_clear_spawn_lift_m(
+                float(target_geometry.root_pose[2]),
+                float(link_min_local_z_m),
+                table_surface_z_m,
+            )
+            if link_min_local_z_m is not None
+            else 0.0
+        )
+        if cabinet_spawn_lift_m > 0.0:
+            target["initial_state"]["articulation"]["obj_1"]["root_pose"][
+                :, 2
+            ] += cabinet_spawn_lift_m
+            target["cabinet_pose"] = np.asarray(target["cabinet_pose"]).copy()
+            target["cabinet_pose"][:, 2] += cabinet_spawn_lift_m
+            target_geometry = _drawer_geometry(
+                target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
+            )
+        _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
+        env.sim.forward()
+        env.reset_success_check(env_ids)
         handle_displacement_m = float(
             np.linalg.norm(
                 target_geometry.handle_frame(0.0)[:3]
@@ -1059,11 +1120,7 @@ def main() -> None:
                 args.rigid_handle_pull_m,
                 effective_handle_vertical_offset_m,
                 handle_engagement_depth_m,
-                _uses_target_handle_keyframe(
-                    args.target_dataset,
-                    float(target_geometry.root_pose[2]),
-                    float(target_geometry.handle_point_local[2]),
-                ),
+                low_handle_target,
             )
             if args.mode == "skill" else (None, None, None, None, None)
         )
@@ -1383,6 +1440,14 @@ def main() -> None:
                         if target_handle_grasp_index is not None
                         else 0.0
                     ),
+                    "cabinet_spawn_collision_clearance": {
+                        "adjustment_m": cabinet_spawn_lift_m,
+                        "link": "link_2" if low_handle_target else None,
+                        "link_min_local_z_m": link_min_local_z_m,
+                        "table_surface_z_m": table_surface_z_m,
+                        "required_clearance_m": 0.001,
+                        "application": "single_reset_initial_state",
+                    },
                     "drawer_pull_extra_m": args.drawer_pull_extra_m,
                     "drawer_placement_q_m": args.drawer_placement_q_m,
                     "marker_placement_feedback_reanchor": trajectory is not None,
