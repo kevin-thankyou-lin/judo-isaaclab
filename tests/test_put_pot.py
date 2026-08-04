@@ -75,6 +75,7 @@ from judo_isaaclab.put_pot import (
     reanchor_centered_release,
     reanchor_centered_lowering,
     reanchor_second_handle_grasp,
+    receiving_jaw_center_translation_m,
     reanchor_supported_center_slide,
     seat_handle_inside_finger_pads,
     select_geometry_conditioned_milestone_reanchor,
@@ -973,6 +974,17 @@ def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():
 
 def test_transport_contact_reanchor_uses_contact_feedback_horizon():
     assert TRANSPORT_CONTACT_REANCHOR_MIN_STEPS == CONTACT_FEEDBACK_HORIZON_STEPS
+
+
+def test_receiving_jaw_center_translation_scales_signed_contact_residual_and_clips():
+    assert receiving_jaw_center_translation_m(-0.032, 0.5, 0.025) == pytest.approx(
+        -0.016
+    )
+    assert receiving_jaw_center_translation_m(0.080, 1.0, 0.025) == pytest.approx(
+        0.025
+    )
+    with pytest.raises(ValueError, match="correction_fraction"):
+        receiving_jaw_center_translation_m(0.01, 1.01, 0.025)
 
 
 def test_observed_peer_contact_transfers_full_pose_before_receiving_jaw_centering():

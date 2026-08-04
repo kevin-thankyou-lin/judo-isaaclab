@@ -675,6 +675,37 @@ def center_handle_between_finger_pads(
     return result
 
 
+def receiving_jaw_center_translation_m(
+    measured_residual_m: float,
+    correction_fraction: float,
+    maximum_position_step_m: float,
+) -> float:
+    """Return a bounded object-local translation from measured jaw residual.
+
+    The signed residual is measured only after physical contact.  Scaling that
+    observation keeps this repair geometry-general, while the controller's
+    normal Cartesian step limit preserves continuity.
+    """
+
+    values = np.asarray(
+        [measured_residual_m, correction_fraction, maximum_position_step_m],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("receiving jaw centering inputs must be finite")
+    if not 0.0 <= correction_fraction <= 1.0:
+        raise ValueError("correction_fraction must be in [0, 1]")
+    if maximum_position_step_m <= 0.0:
+        raise ValueError("maximum_position_step_m must be positive")
+    return float(
+        np.clip(
+            measured_residual_m * correction_fraction,
+            -maximum_position_step_m,
+            maximum_position_step_m,
+        )
+    )
+
+
 def mirror_handle_position_in_receiving_jaw_frame(
     reference_pose: Any,
     reference_handle_frame: Any,

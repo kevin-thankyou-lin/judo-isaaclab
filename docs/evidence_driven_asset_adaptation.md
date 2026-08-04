@@ -144,8 +144,10 @@ the supervisor diagnoses that receipt. It never receives a static batch of
 prebuilt retries.
 
 Semantic trajectory/controller parameters live in the versioned, validated
-`configs/putpot_semantic_program_v1.json` program spec. The worker reloads that
-JSON file on every request after a full environment reset and fresh task
+`configs/putpot_semantic_program_v2.json` program spec. Schema v2 adds a bounded
+object-local receiving-jaw centering translation fraction; schema v1 remains
+preserved for provenance but is no longer accepted for new requests. The worker
+reloads that JSON file on every request after a full environment reset and fresh task
 predicates, controller state, recorder, trace, and encoder state. The SHA-256 of
 the exact immutable spec copy is recorded in the result, runtime receipt, and
 worker ack. Parameter-only revisions therefore reuse the loaded Isaac process;

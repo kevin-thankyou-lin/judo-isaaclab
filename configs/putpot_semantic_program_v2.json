@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "program": "putpot_semantic_support_frames",
+  "parameters": {
+    "damping": 0.045,
+    "max_joint_delta": 0.16,
+    "max_position_step": 0.025,
+    "max_rotation_step": 0.16,
+    "support_clearance_m": 0.006,
+    "transport_clearance_m": 0.025,
+    "collision_clearance_m": 0.025,
+    "transport_steps": 180,
+    "lower_steps": 40,
+    "release_steps": 20,
+    "withdraw_steps": 30,
+    "settle_steps": 35,
+    "center_repair_steps": 60,
+    "receiving_jaw_center_translation_fraction": 0.0,
+    "receiving_jaw_reorientation_fraction": 0.45
+  }
+}
