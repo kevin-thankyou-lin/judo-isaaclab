@@ -1,0 +1,130 @@
+import importlib.util
+from pathlib import Path
+
+
+def _module():
+    path = (
+        Path(__file__).parents[1]
+        / "examples/watch_putpot_repair_handoffs.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "watch_putpot_repair_handoffs", path
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _boundary(**overrides):
+    value = {
+        "action": "diagnose_and_repair",
+        "fingerprint": "epoch:2",
+        "pair": "cooktop_012__pot_012",
+        "session_json": "/results/session.json",
+        "attempts_completed": 2,
+        "attempt_limit": 4,
+        "latest_result_json": "/results/attempt_002/skill_result.json",
+        "ready_since_epoch_s": 100.0,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_waits_through_diagnosis_grace_period():
+    module = _module()
+
+    assert not module._should_wake(
+        _boundary(),
+        {"boundaries": {}},
+        now=699.0,
+        grace_seconds=600.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+    assert module._should_wake(
+        _boundary(),
+        {"boundaries": {}},
+        now=700.0,
+        grace_seconds=600.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+
+
+def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
+    module = _module()
+    state = {
+        "boundaries": {
+            "epoch:2": {
+                "wake_count": 1,
+                "last_wake_epoch_s": 1000.0,
+            }
+        }
+    }
+
+    assert not module._should_wake(
+        _boundary(),
+        state,
+        now=2199.0,
+        grace_seconds=600.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+    assert module._should_wake(
+        _boundary(),
+        state,
+        now=2200.0,
+        grace_seconds=600.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+    state["boundaries"]["epoch:2"]["wake_count"] = 2
+    assert not module._should_wake(
+        _boundary(),
+        state,
+        now=4000.0,
+        grace_seconds=600.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+
+
+def test_prompt_requires_diagnosis_and_duplicate_preflight():
+    module = _module()
+
+    prompt = module._prompt(_boundary())
+
+    assert "inspect /results/attempt_002/skill_result.json" in prompt
+    assert "exactly one materially revised program spec" in prompt
+    assert "Do not blind-repeat" in prompt
+    assert "do nothing duplicate" in prompt
+
+
+def test_rotation_prompt_requires_live_process_preflight():
+    module = _module()
+    prompt = module._prompt(
+        _boundary(action="rotate_after_visit", session_json="/results/finished.json")
+    )
+
+    assert "rotate to the next pending asset" in prompt
+    assert "do not launch a duplicate simulator" in prompt
+
+
+def test_tmux_wake_waits_for_paste_before_carriage_return(monkeypatch):
+    module = _module()
+    events = []
+
+    def fake_run(argv, **_kwargs):
+        events.append(tuple(argv))
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module.time, "sleep", lambda value: events.append(("sleep", value)))
+
+    module._wake_tmux("agent", "continue")
+
+    assert events[-3:] == [
+        ("tmux", "send-keys", "-t", "agent", "-l", "--", "continue"),
+        ("sleep", 0.25),
+        ("tmux", "send-keys", "-t", "agent", "C-m"),
+    ]

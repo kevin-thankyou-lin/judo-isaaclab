@@ -196,6 +196,17 @@ rendered attempt on them. A Python fix is deployed by shutting down and
 restarting that worker; a parameter-only fix is submitted through the live
 queue.
 
+The tmux-hosted coding agent is guarded by
+`examples/watch_putpot_repair_handoffs.py`. The watchdog polls durable remote
+receipts, allows a normal diagnosis grace period, and then steers the existing
+agent once if an acknowledged repair boundary has not produced a new request.
+It likewise wakes the agent after a completed visit so round-robin rotation
+cannot silently stop. The watchdog never writes the worker queue: the coding
+agent must still inspect the trace and use the guarded submission CLI, which
+continues to reject unacknowledged, unchanged, duplicate, and fifth-cycle
+requests. Wake attempts are recorded in an atomic state file and are bounded
+per receipt.
+
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,
 validation/decode/hash, and shutdown. They additionally report the full
