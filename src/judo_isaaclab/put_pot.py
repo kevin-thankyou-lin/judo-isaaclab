@@ -529,6 +529,32 @@ def single_finger_contact_observed(
     )
 
 
+def peer_contact_latch_supported(
+    peer_contact_transfer: bool,
+    finger_forces_n: Any,
+    pad_fractions: Any,
+) -> bool:
+    """Use measured peer-stabilized contact as the receiving-jaw milestone.
+
+    The nominal gripper-close step is only a schedule.  Once the proven peer
+    has stabilized the object, a measured on-pad contact is the physical
+    authority for a deterministic receiving-jaw reanchor.  Waiting for the
+    stale schedule can carry that contact beyond the finite pad interval.
+    """
+
+    # The ten-frame streak supplies the stability margin here.  Use the same
+    # complete authored pad interval as the robot's grasp predicate rather
+    # than imposing the narrower reseating target band a second time.
+    return bool(
+        peer_contact_transfer
+        and single_finger_contact_observed(
+            finger_forces_n,
+            pad_fractions,
+            minimum_pad_fraction=0.0,
+        )
+    )
+
+
 def preserve_loaded_contact_target(
     observed_pose: Any,
     commanded_pose: Any,

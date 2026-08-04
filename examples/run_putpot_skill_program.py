@@ -1477,6 +1477,7 @@ def main() -> None:
                     single_contact_pad_base_residual_m,
                     twist_loaded_jaw_about_observed_contact,
                     preserve_loaded_contact_target,
+                    peer_contact_latch_supported,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
                     track_loaded_pad_center_from_observation,
@@ -1535,16 +1536,10 @@ def main() -> None:
                             step - milestone_reanchor_step
                         )
 
-                supported_peer_contact = bool(
-                    peer_contact_transfer
-                    and (
-                        milestone_gripper_close_start_step is None
-                        or step >= milestone_gripper_close_start_step
-                    )
-                    and single_finger_contact_observed(
-                        sample["left_finger_forces_n"],
-                        sample["left_pad_fractions"],
-                    )
+                supported_peer_contact = peer_contact_latch_supported(
+                    peer_contact_transfer,
+                    sample["left_finger_forces_n"],
+                    sample["left_pad_fractions"],
                 )
                 peer_single_contact_latch_support_frames = (
                     SINGLE_FINGER_CONTACT_LATCH_STEPS

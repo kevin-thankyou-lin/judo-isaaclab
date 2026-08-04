@@ -41,6 +41,7 @@ from judo_isaaclab.put_pot import (
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     orient_loaded_jaw_around_authored_handle,
+    peer_contact_latch_supported,
     preserve_loaded_contact_target,
     reinforce_loaded_contact_for_motion,
     reanchor_authored_handle_in_observed_jaw,
@@ -806,6 +807,15 @@ def test_single_finger_contact_detection_is_exact_and_thresholded():
     assert not single_finger_contact_observed([0.1, 0.1], [0.5, 0.5])
     assert not single_finger_contact_observed([0.0, 2.0], [np.nan, -0.005])
     assert not single_finger_contact_observed([0.0, 2.0], [np.nan, 0.81])
+
+
+def test_peer_contact_latch_uses_measured_contact_before_nominal_close():
+    # PutPot023 attempt_023 first sustained this contact 89 controller steps
+    # before the nominal close schedule.
+    assert peer_contact_latch_supported(True, [0.0, 11.53], [np.nan, 0.801])
+    assert not peer_contact_latch_supported(
+        False, [0.0, 11.53], [np.nan, 0.801]
+    )
 
 
 def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
