@@ -411,6 +411,30 @@ def peer_contact_transfer_horizon_steps(
     return max(base_steps, int(np.ceil(translation_m / maximum_step_m)))
 
 
+def peer_contact_gripper_reseat_distance_m(
+    pad_reseat_residual_m: float,
+    jaw_centering_translation_m: float,
+    *,
+    position_locked: bool,
+) -> float:
+    """Retain the loaded gripper command while its jaw target is moving.
+
+    A one-pad pivot can require substantial translation even when that pad is
+    already at a valid depth.  Closing during this measured centering motion
+    sweeps the receiving finger past the handle; use the larger observed
+    distance as the deterministic close-hold budget.
+    """
+
+    values = np.asarray(
+        [pad_reseat_residual_m, jaw_centering_translation_m], dtype=np.float64
+    )
+    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("peer contact reseat distances must be finite and nonnegative")
+    if position_locked:
+        return 0.0
+    return float(np.max(values))
+
+
 def geometry_conditioned_vertical_rise_fraction(
     transport_steps: int, retained_contact_steps: int
 ) -> float:

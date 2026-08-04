@@ -52,6 +52,7 @@ from judo_isaaclab.put_pot import (
     mirror_handle_position_in_receiving_jaw_frame,
     orient_loaded_jaw_around_authored_handle,
     peer_contact_transfer_horizon_steps,
+    peer_contact_gripper_reseat_distance_m,
     peer_contact_latch_supported,
     preserve_loaded_contact_target,
     reinforce_loaded_contact_for_motion,
@@ -368,6 +369,22 @@ def test_two_contact_pad_support_moves_shallow_contact_baseward_with_bound():
     )
     assert cumulative_again == pytest.approx(-0.0015)
     assert corrected_again[2] == pytest.approx(0.1985)
+
+
+def test_peer_contact_gripper_hold_includes_measured_jaw_centering_motion():
+    assert peer_contact_gripper_reseat_distance_m(
+        0.0, 0.028, position_locked=False
+    ) == pytest.approx(0.028)
+    assert peer_contact_gripper_reseat_distance_m(
+        0.049, 0.027, position_locked=False
+    ) == pytest.approx(0.049)
+    assert peer_contact_gripper_reseat_distance_m(
+        0.049, 0.027, position_locked=True
+    ) == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        peer_contact_gripper_reseat_distance_m(
+            -0.001, 0.027, position_locked=False
+        )
 
 
 def test_two_contact_pad_support_default_authority_matches_pad_depth_margin():

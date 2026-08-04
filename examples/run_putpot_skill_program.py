@@ -1502,8 +1502,9 @@ def main() -> None:
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
                     reanchor_single_contact_pad_fraction,
-                    geometry_conditioned_loaded_jaw_rotation_fraction,
-                    retime_loaded_gripper_close_for_pad_reseat,
+                        geometry_conditioned_loaded_jaw_rotation_fraction,
+                        peer_contact_gripper_reseat_distance_m,
+                        retime_loaded_gripper_close_for_pad_reseat,
                     single_contact_pad_base_residual_m,
                     twist_loaded_jaw_about_observed_contact,
                     preserve_loaded_contact_target,
@@ -1693,23 +1694,16 @@ def main() -> None:
                         )
                     )
                     effective_pad_reseat_residual_m = (
-                        0.0
-                        if (
-                            peer_contact_position_locked
-                            or peer_contact_handle_center_rotation_rad
-                            is not None
+                        peer_contact_gripper_reseat_distance_m(
+                            initial_pad_reseat_residual_m,
+                            peer_contact_latch_centering_translation_m,
+                            position_locked=peer_contact_position_locked,
                         )
-                        else initial_pad_reseat_residual_m
                     )
                     gripper_retime_step_m = 0.001
                     if (
                         peer_contact_latch_centering_translation_m > 0.0
-                        and peer_contact_handle_center_rotation_rad is None
                     ):
-                        effective_pad_reseat_residual_m = max(
-                            effective_pad_reseat_residual_m,
-                            peer_contact_latch_centering_translation_m,
-                        )
                         gripper_retime_step_m = 0.002
                     trajectory, gripper_hold_steps = (
                         retime_loaded_gripper_close_for_pad_reseat(
