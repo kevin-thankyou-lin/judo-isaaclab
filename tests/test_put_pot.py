@@ -36,6 +36,7 @@ from judo_isaaclab.put_pot import (
     geometry_gated_milestone_reanchor,
     geometry_conditioned_handle_balance_limit,
     geometry_conditioned_handle_pad_depth,
+    geometry_conditioned_peer_contact_hold_steps,
     geometry_conditioned_peer_contact_transfer,
     geometry_conditioned_right_first_close,
     geometry_conditioned_target_handle_symmetry,
@@ -1343,6 +1344,8 @@ def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():
     assert not geometry_conditioned_peer_contact_transfer(
         left, [0.070, 0.060, 0.030], 0.0488
     )
+    assert geometry_conditioned_peer_contact_hold_steps(left, right, 0.0488) == 240
+    assert geometry_conditioned_peer_contact_hold_steps(left, right, 0.0375) == 0
 
 
 def test_right_first_peer_grasp_holds_closed_contact_before_transport():

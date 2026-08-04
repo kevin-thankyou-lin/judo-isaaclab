@@ -108,6 +108,14 @@ MISSING_FINGER_CONTACT_SETTLE_STEPS = (
     + int(np.ceil(MISSING_FINGER_PAD_DEPTH_LIMIT_M / MISSING_FINGER_PAD_DEPTH_STEP_M))
     + 15
 )
+# The first round-robin pass showed the same contact chronology on multiple
+# right-first geometries: the initially loaded receiving pad remained physical,
+# the opposite pad arrived just after the 180-step contact-hold boundary, and
+# transport began before the two force windows overlapped.  Keep feedback in
+# the object-local contact-hold stage for two additional seconds at 30 Hz.  This
+# changes controller horizon only; bimanual acceptance still requires measured
+# simultaneous force-backed transport.
+BIMANUAL_CONTACT_OVERLAP_RECOVERY_STEPS = 60
 # Pot023 attempts 019-021 measured the receiving jaw in the target pot frame.
 # The source-transferred jaw axis was mostly transverse/vertical
 # (-0.265, -0.806, -0.529), while the handle-centered contact-pivot solution
@@ -1418,6 +1426,24 @@ def geometry_conditioned_peer_contact_transfer(
     return bool(
         relative_difference <= relative_size_tolerance
         and predicted_imbalance_m > HANDLE_JAW_CENTERING_LIMIT_M
+    )
+
+
+def geometry_conditioned_peer_contact_hold_steps(
+    left_handle_size: Any,
+    right_handle_size: Any,
+    predicted_imbalance_m: float,
+) -> int:
+    """Budget deterministic feedback until both measured pad windows overlap."""
+
+    if not geometry_conditioned_peer_contact_transfer(
+        left_handle_size, right_handle_size, predicted_imbalance_m
+    ):
+        return 0
+    return (
+        MISSING_FINGER_CONTACT_SETTLE_STEPS
+        + CONTACT_BACKED_PICK_SETTLE_STEPS
+        + BIMANUAL_CONTACT_OVERLAP_RECOVERY_STEPS
     )
 
 
