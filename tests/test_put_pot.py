@@ -34,7 +34,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     geometry_conditioned_vertical_rise_fraction,
-    loaded_contact_hold_lift_step_m,
+    advance_loaded_contact_hold_lift,
     remaining_contact_vertical_rise_fraction,
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
@@ -1061,11 +1061,26 @@ def test_loaded_vertical_rise_uses_attempt026_remaining_contact_budget():
 
 def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
     initial = _pose(z=0.80)
-    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.80)) == 0.002
-    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.854)) == pytest.approx(
-        0.001
+    command, residual = advance_loaded_contact_hold_lift(
+        initial, _pose(z=0.80), 0.0
     )
-    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.855)) == 0.0
+    assert command == 0.002
+    assert residual == 0.002
+    command, residual = advance_loaded_contact_hold_lift(
+        initial, _pose(z=0.80), 0.024
+    )
+    assert command == pytest.approx(0.026)
+    assert residual == pytest.approx(0.025)
+    command, residual = advance_loaded_contact_hold_lift(
+        initial, _pose(z=0.854), 0.054
+    )
+    assert command == pytest.approx(0.055)
+    assert residual == pytest.approx(0.001)
+    command, residual = advance_loaded_contact_hold_lift(
+        initial, _pose(z=0.855), 0.055
+    )
+    assert command == pytest.approx(0.055)
+    assert residual == pytest.approx(0.0)
 
     program = PutPotSkillProgram(_pose(), _pose(y=1.0))
     program.bimanual_handle_grasp(
@@ -1081,7 +1096,7 @@ def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
         _pose(z=0.80),
         _pose(0.2),
         _pose(0.2, 1.0),
-        object_local_lift_step_m=0.002,
+        object_local_lift_residual_m=0.002,
     )
     assert lifted.left_poses[step + 1, 2] == pytest.approx(0.802)
     assert lifted.right_poses[step + 1, 2] == pytest.approx(0.802)

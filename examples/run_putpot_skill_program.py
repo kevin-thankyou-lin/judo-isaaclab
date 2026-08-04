@@ -1195,6 +1195,7 @@ def main() -> None:
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
         contact_hold_pick_lift_steps = []
+        contact_hold_pick_lift_command_m = 0.0
         reference_hold_left_contact_local = None
         reference_hold_right_contact_local = None
         transport_reanchor_steps = []
@@ -1981,22 +1982,31 @@ def main() -> None:
                         }
                     )
                     from judo_isaaclab.put_pot import (
-                        loaded_contact_hold_lift_step_m,
+                        advance_loaded_contact_hold_lift,
                     )
 
-                    hold_lift_step_m = (
-                        loaded_contact_hold_lift_step_m(
+                    if sample["left_grasp"] and sample["right_grasp"]:
+                        (
+                            contact_hold_pick_lift_command_m,
+                            hold_lift_residual_m,
+                        ) = advance_loaded_contact_hold_lift(
                             target_geometry.root_pose,
                             sample["pot_pose"],
+                            contact_hold_pick_lift_command_m,
+                            maximum_residual_m=args.max_position_step,
                         )
-                        if sample["left_grasp"] and sample["right_grasp"]
-                        else 0.0
-                    )
-                    if hold_lift_step_m > 0.0:
+                    else:
+                        hold_lift_residual_m = 0.0
+                    if hold_lift_residual_m > 0.0:
                         contact_hold_pick_lift_steps.append(
                             {
                                 "step": step,
-                                "object_local_lift_step_m": hold_lift_step_m,
+                                "commanded_lift_m": (
+                                    contact_hold_pick_lift_command_m
+                                ),
+                                "object_local_lift_residual_m": (
+                                    hold_lift_residual_m
+                                ),
                                 "observed_lift_m": float(
                                     np.asarray(sample["pot_pose"])[2]
                                     - target_geometry.root_pose[2]
@@ -2009,7 +2019,7 @@ def main() -> None:
                         sample["pot_pose"],
                         retained_hold_left_contact_local,
                         reference_hold_right_contact_local,
-                        object_local_lift_step_m=hold_lift_step_m,
+                        object_local_lift_residual_m=hold_lift_residual_m,
                     )
                     if step + 1 == grasp_complete_step:
                         from judo_isaaclab.put_pot import (

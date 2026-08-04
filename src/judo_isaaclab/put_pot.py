@@ -391,26 +391,35 @@ def remaining_contact_vertical_rise_fraction(
     return float(min(1.0, rise_steps / transport_steps))
 
 
-def loaded_contact_hold_lift_step_m(
+def advance_loaded_contact_hold_lift(
     initial_pot_pose: Any,
     observed_pot_pose: Any,
+    commanded_lift_m: float,
     *,
     pick_height_m: float = CONTACT_BACKED_PICK_HEIGHT_M,
     margin_m: float = CONTACT_BACKED_PICK_MARGIN_M,
-    maximum_step_m: float = LOADED_CONTACT_HOLD_LIFT_STEP_M,
-) -> float:
-    """Return a bounded upward hold increment until coded pickup has margin."""
+    command_step_m: float = LOADED_CONTACT_HOLD_LIFT_STEP_M,
+    maximum_residual_m: float = 0.025,
+) -> tuple[float, float]:
+    """Advance a monotonic loaded lift and return its bounded pose residual."""
 
     initial = _pose(initial_pot_pose, "initial_pot_pose")
     observed = _pose(observed_pot_pose, "observed_pot_pose")
-    values = np.asarray([pick_height_m, margin_m, maximum_step_m])
+    values = np.asarray(
+        [pick_height_m, margin_m, command_step_m, maximum_residual_m]
+    )
     if np.any(~np.isfinite(values)) or np.any(values < 0.0):
         raise ValueError("pick lift distances must be finite and nonnegative")
-    required_z = initial[2] + pick_height_m + margin_m
-    remaining_m = required_z - observed[2]
-    if remaining_m <= 1.0e-9:
-        return 0.0
-    return float(min(remaining_m, maximum_step_m))
+    if not np.isfinite(commanded_lift_m) or commanded_lift_m < 0.0:
+        raise ValueError("commanded_lift_m must be finite and nonnegative")
+    required_lift_m = pick_height_m + margin_m
+    next_command_m = min(required_lift_m, commanded_lift_m + command_step_m)
+    observed_lift_m = max(0.0, observed[2] - initial[2])
+    residual_m = min(
+        maximum_residual_m,
+        max(0.0, next_command_m - observed_lift_m),
+    )
+    return float(next_command_m), float(residual_m)
 
 
 def support_boundary_staging_pose(
@@ -2059,7 +2068,7 @@ def reanchor_bimanual_contact_hold(
     retained_left_contact_local: Any,
     retained_right_contact_local: Any,
     *,
-    object_local_lift_step_m: float = 0.0,
+    object_local_lift_residual_m: float = 0.0,
 ) -> SkillTrajectory:
     """Follow retained object-local two-arm contacts before transport."""
 
@@ -2079,11 +2088,16 @@ def reanchor_bimanual_contact_hold(
         _pose(observed_pot_pose, "observed_pot_pose"),
         _pose(retained_right_contact_local, "retained_right_contact_local"),
     )
-    if not np.isfinite(object_local_lift_step_m) or object_local_lift_step_m < 0.0:
-        raise ValueError("object_local_lift_step_m must be finite and nonnegative")
+    if (
+        not np.isfinite(object_local_lift_residual_m)
+        or object_local_lift_residual_m < 0.0
+    ):
+        raise ValueError(
+            "object_local_lift_residual_m must be finite and nonnegative"
+        )
     lift_world = quaternion_rotate(
         _pose(observed_pot_pose, "observed_pot_pose")[3:],
-        np.asarray([0.0, 0.0, object_local_lift_step_m]),
+        np.asarray([0.0, 0.0, object_local_lift_residual_m]),
     )
     left_target[:3] += lift_world
     right_target[:3] += lift_world
