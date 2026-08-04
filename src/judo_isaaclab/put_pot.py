@@ -372,6 +372,24 @@ def contact_budget_transport_steps(
     )
 
 
+def complete_peer_contact_transport_steps(
+    planned_steps: int, retained_contact_steps: int
+) -> int:
+    """Preserve the full smooth path after a complete observed peer grasp.
+
+    A pre-contact retention estimate can bound how quickly the second jaw must
+    be acquired, but it must not compress transport after both jaws have
+    physically latched.  Feedback reanchors maintain the complete observed
+    contact relation during the full geometry-paced path.
+    """
+
+    if planned_steps < 1:
+        raise ValueError("planned_steps must be positive")
+    if retained_contact_steps < 0:
+        raise ValueError("retained_contact_steps must be nonnegative")
+    return planned_steps
+
+
 def geometry_conditioned_vertical_rise_fraction(
     transport_steps: int, retained_contact_steps: int
 ) -> float:

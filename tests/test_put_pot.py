@@ -25,6 +25,7 @@ from judo_isaaclab.put_pot import (
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
     contact_budget_transport_steps,
+    complete_peer_contact_transport_steps,
     center_handle_between_finger_pads,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
@@ -318,6 +319,12 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
     assert contact_budget_transport_steps(365, 80) == 120
     assert contact_budget_transport_steps(50, 80) == 50
     assert contact_budget_transport_steps(180, 0) == 180
+    assert complete_peer_contact_transport_steps(365, 80) == 365
+    assert complete_peer_contact_transport_steps(180, 0) == 180
+    with pytest.raises(ValueError, match="planned_steps"):
+        complete_peer_contact_transport_steps(0, 80)
+    with pytest.raises(ValueError, match="retained_contact_steps"):
+        complete_peer_contact_transport_steps(180, -1)
 
 
 def test_loaded_pick_height_acquires_support_clearance_before_transport():

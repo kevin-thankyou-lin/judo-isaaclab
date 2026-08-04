@@ -632,7 +632,7 @@ def _build_skill(
         CONTACT_FEEDBACK_HORIZON_STEPS,
         CONTACT_BACKED_PICK_SETTLE_STEPS,
         MISSING_FINGER_CONTACT_SETTLE_STEPS,
-        contact_budget_transport_steps,
+        complete_peer_contact_transport_steps,
         geometry_conditioned_grasp_hold_steps,
         geometry_conditioned_peer_contact_transfer,
         geometry_conditioned_right_first_close,
@@ -741,7 +741,7 @@ def _build_skill(
         for side in (left_side, right_side)
     )
     if peer_contact_hold_steps:
-        transport_steps = contact_budget_transport_steps(
+        transport_steps = complete_peer_contact_transport_steps(
             transport_steps,
             peer_contact_hold_steps - CONTACT_BACKED_PICK_SETTLE_STEPS,
         )
@@ -2971,9 +2971,7 @@ def main() -> None:
                 "transport_reanchor_minimum_interval_steps": (
                     None
                     if transport_plan is None
-                    else max(
-                        1, int(transport_plan.get("vertical_rise_steps", 1))
-                    )
+                    else TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
                 ),
                 "transport_expected_tracking_residual_local_m": {
                     "left": (
