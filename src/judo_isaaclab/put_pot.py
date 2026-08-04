@@ -424,6 +424,7 @@ def peer_contact_gripper_reseat_distance_m(
     jaw_centering_translation_m: float,
     *,
     position_locked: bool,
+    additional_jaw_centering_translation_m: float = 0.0,
 ) -> float:
     """Retain the loaded gripper command while its jaw target is moving.
 
@@ -434,7 +435,12 @@ def peer_contact_gripper_reseat_distance_m(
     """
 
     values = np.asarray(
-        [pad_reseat_residual_m, jaw_centering_translation_m], dtype=np.float64
+        [
+            pad_reseat_residual_m,
+            jaw_centering_translation_m,
+            additional_jaw_centering_translation_m,
+        ],
+        dtype=np.float64,
     )
     if not np.all(np.isfinite(values)) or np.any(values < 0.0):
         raise ValueError("peer contact reseat distances must be finite and nonnegative")

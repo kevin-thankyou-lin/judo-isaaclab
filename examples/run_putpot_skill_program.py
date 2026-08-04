@@ -1821,11 +1821,15 @@ def main(argv: list[str] | None = None) -> None:
                             initial_pad_reseat_residual_m,
                             peer_contact_latch_centering_translation_m,
                             position_locked=peer_contact_position_locked,
+                            additional_jaw_centering_translation_m=abs(
+                                peer_contact_jaw_center_translation_m
+                            ),
                         )
                     )
                     gripper_retime_step_m = 0.001
                     if (
                         peer_contact_latch_centering_translation_m > 0.0
+                        or abs(peer_contact_jaw_center_translation_m) > 0.0
                     ):
                         gripper_retime_step_m = 0.002
                     trajectory, gripper_hold_steps = (
@@ -1846,6 +1850,9 @@ def main(argv: list[str] | None = None) -> None:
                         ),
                         "effective_pad_reseat_residual_m": (
                             effective_pad_reseat_residual_m
+                        ),
+                        "jaw_center_translation_m": (
+                            peer_contact_jaw_center_translation_m
                         ),
                         "hold_steps": gripper_hold_steps,
                         "hold_step_m": gripper_retime_step_m,

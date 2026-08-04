@@ -155,6 +155,9 @@ worker ack. Parameter-only revisions therefore reuse the loaded Isaac process;
 arbitrary Python changes, a changed asset pair, device, camera capability, or
 code commit are worker boundaries and require a new process.
 
+A measured receiving-jaw translation also retimes the close command by its
+object-local distance, keeping the jaw open while the wrist tracks the correction.
+
 Every attempt records both its immutable lifetime attempt number and its
 one-based repair-epoch cycle number. The epoch limit is four diagnose-to-repair
 cycles, not four identical-code retries. A same-spec repeat is rejected unless

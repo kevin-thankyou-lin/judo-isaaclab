@@ -384,6 +384,12 @@ def test_peer_contact_gripper_hold_includes_measured_jaw_centering_motion():
         0.049, 0.027, position_locked=False
     ) == pytest.approx(0.049)
     assert peer_contact_gripper_reseat_distance_m(
+        0.0,
+        0.0,
+        position_locked=False,
+        additional_jaw_centering_translation_m=0.0587,
+    ) == pytest.approx(0.0587)
+    assert peer_contact_gripper_reseat_distance_m(
         0.049, 0.027, position_locked=True
     ) == pytest.approx(0.0)
     with pytest.raises(ValueError, match="finite and nonnegative"):
