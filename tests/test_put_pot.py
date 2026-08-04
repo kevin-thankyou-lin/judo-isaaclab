@@ -34,6 +34,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     geometry_conditioned_vertical_rise_fraction,
+    remaining_contact_vertical_rise_fraction,
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
@@ -1042,6 +1043,18 @@ def test_vertical_rise_finishes_inside_measured_contact_window():
     assert geometry_conditioned_vertical_rise_fraction(180, 0) == 1.0
     assert geometry_conditioned_vertical_rise_fraction(1000, 80) == 0.15
     assert geometry_conditioned_vertical_rise_fraction(100, 80) == 0.30
+
+
+def test_loaded_vertical_rise_uses_attempt026_remaining_contact_budget():
+    # Both contacts latched at step 234 and transport began after step 296, so
+    # 62 of the 80 geometry-conditioned retention steps were already consumed.
+    fraction = remaining_contact_vertical_rise_fraction(288, 80, 62)
+    assert fraction == pytest.approx(18 / 288)
+    assert int(np.ceil(288 * fraction)) == 18
+    assert remaining_contact_vertical_rise_fraction(288, 80, 100) == pytest.approx(
+        8 / 288
+    )
+    assert remaining_contact_vertical_rise_fraction(180, 0, 0) == 1.0
 
 
 def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():

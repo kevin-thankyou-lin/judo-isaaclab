@@ -1205,6 +1205,7 @@ def main() -> None:
         transport_expected_left_tracking_residual_local = None
         transport_expected_right_tracking_residual_local = None
         transport_motion_preload_local_m = None
+        transport_loaded_vertical_rise_fraction = None
         loaded_transport_contact_tracking = []
         center_slide_reanchor_steps = []
         center_slide_reanchor_signed_residuals_local_m = []
@@ -1986,6 +1987,10 @@ def main() -> None:
                         reference_hold_right_contact_local,
                     )
                     if step + 1 == grasp_complete_step:
+                        from judo_isaaclab.put_pot import (
+                            remaining_contact_vertical_rise_fraction,
+                        )
+
                         observed_inverse = inverse_pose(sample["pot_pose"])
                         observed_left_local = compose_pose(
                             observed_inverse, sample["left_eef_pose"]
@@ -2012,6 +2017,18 @@ def main() -> None:
                         transport_motion_preload_local_m = (
                             transport_motion_preload.tolist()
                         )
+                        transport_loaded_vertical_rise_fraction = (
+                            remaining_contact_vertical_rise_fraction(
+                                trajectory.waypoint_steps["smooth_transport"]
+                                - step,
+                                peer_contact_hold_steps,
+                                (
+                                    0
+                                    if contact_hold_latch_step is None
+                                    else step - contact_hold_latch_step
+                                ),
+                            )
+                        )
                         trajectory, retained_transport = (
                             reanchor_bimanual_transport_from_observation(
                                 trajectory,
@@ -2030,9 +2047,9 @@ def main() -> None:
                                 right_contact_local=(
                                     reference_hold_right_contact_local
                                 ),
-                                vertical_rise_fraction=handle_grasp_geometry[
-                                    "left"
-                                ]["transport_vertical_rise_fraction"],
+                                vertical_rise_fraction=(
+                                    transport_loaded_vertical_rise_fraction
+                                ),
                                 frontload_horizontal_axis=handle_grasp_geometry[
                                     "left"
                                 ]["transport_frontload_horizontal_axis"],
@@ -2205,9 +2222,14 @@ def main() -> None:
                             current_step=step,
                             left_contact_local=retained_left_contact_local,
                             right_contact_local=retained_right_contact_local,
-                            vertical_rise_fraction=handle_grasp_geometry[
-                                "left"
-                            ]["transport_vertical_rise_fraction"],
+                            vertical_rise_fraction=(
+                                transport_loaded_vertical_rise_fraction
+                                if transport_loaded_vertical_rise_fraction
+                                is not None
+                                else handle_grasp_geometry["left"][
+                                    "transport_vertical_rise_fraction"
+                                ]
+                            ),
                             frontload_horizontal_axis=handle_grasp_geometry[
                                 "left"
                             ]["transport_frontload_horizontal_axis"],
@@ -2836,6 +2858,9 @@ def main() -> None:
                 },
                 "transport_motion_preload_local_m": (
                     transport_motion_preload_local_m
+                ),
+                "transport_loaded_vertical_rise_fraction": (
+                    transport_loaded_vertical_rise_fraction
                 ),
                 "loaded_transport_contact_tracking": (
                     loaded_transport_contact_tracking

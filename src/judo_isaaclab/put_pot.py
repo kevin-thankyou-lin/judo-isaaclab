@@ -355,6 +355,35 @@ def geometry_conditioned_vertical_rise_fraction(
     )
 
 
+def remaining_contact_vertical_rise_fraction(
+    transport_steps: int,
+    contact_budget_steps: int,
+    loaded_hold_steps: int,
+    *,
+    minimum_rise_steps: int = 8,
+) -> float:
+    """Finish pickup inside the unconsumed measured contact budget.
+
+    Thin-handle repairs can spend most of their geometry-conditioned contact
+    window stabilizing a bimanual close.  At the observed transport boundary,
+    use only the remaining budget rather than restarting the original window.
+    """
+
+    if transport_steps < 1:
+        raise ValueError("transport_steps must be positive")
+    if contact_budget_steps < 0 or loaded_hold_steps < 0:
+        raise ValueError("contact step counts must be nonnegative")
+    if minimum_rise_steps < 1:
+        raise ValueError("minimum_rise_steps must be positive")
+    if contact_budget_steps == 0:
+        return 1.0
+    rise_steps = max(
+        min(minimum_rise_steps, transport_steps),
+        contact_budget_steps - loaded_hold_steps,
+    )
+    return float(min(1.0, rise_steps / transport_steps))
+
+
 def support_boundary_staging_pose(
     initial_pot_pose: Any,
     centered_pot_pose: Any,
