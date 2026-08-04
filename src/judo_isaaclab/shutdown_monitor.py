@@ -66,6 +66,20 @@ def main(argv: list[str] | None = None) -> None:
     }
     if isinstance(payload.get("phase_timings_s"), dict):
         payload["phase_timings_s"]["shutdown"] = payload["shutdown"]["shutdown_s"]
+    attempt_started = payload.pop("attempt_wall_started_monotonic", None)
+    if attempt_started is not None and isinstance(payload.get("phase_timings_s"), dict):
+        attempt_wall_time_s = max(0.0, finished - float(attempt_started))
+        named_phase_sum_s = sum(
+            float(value) for value in payload["phase_timings_s"].values()
+        )
+        payload["timing_accounting"] = {
+            "attempt_wall_time_s": attempt_wall_time_s,
+            "named_phase_sum_s": named_phase_sum_s,
+            "unattributed_time_s": attempt_wall_time_s - named_phase_sum_s,
+        }
+    worker_started = payload.pop("worker_started_monotonic", None)
+    if worker_started is not None:
+        payload["worker_wall_time_s"] = max(0.0, finished - float(worker_started))
     if args.receipt_jsonl:
         _append_jsonl(Path(args.receipt_jsonl), payload)
     else:

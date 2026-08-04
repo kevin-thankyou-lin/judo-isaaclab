@@ -9,7 +9,9 @@ from judo_isaaclab.putpot_runtime import (
     diagnostic_classification,
     ensure_fresh_output_paths,
     full_render_required_for_merge,
+    instantiated_scene_sensor_inventory,
     render_recommendation,
+    timing_accounting,
     without_scene_camera_sensors,
 )
 
@@ -35,6 +37,43 @@ def test_phase_timers_expose_every_required_phase():
     assert tuple(receipt) == PHASE_NAMES
     assert receipt["reset"] == pytest.approx(0.25)
     assert receipt["shutdown"] == pytest.approx(0.0)
+
+
+def test_timing_accounting_exposes_unattributed_wall_time():
+    phases = {name: 0.0 for name in PHASE_NAMES}
+    phases["app_startup"] = 10.0
+    phases["rollout"] = 30.0
+    assert timing_accounting(62.0, phases) == {
+        "attempt_wall_time_s": 62.0,
+        "named_phase_sum_s": 40.0,
+        "unattributed_time_s": 22.0,
+    }
+
+
+def test_instantiated_scene_sensor_inventory_uses_runtime_sensor_instances():
+    class ContactSensor:
+        pass
+
+    class Camera:
+        pass
+
+    class Scene:
+        sensors = {
+            "pot_contact": ContactSensor(),
+            "top_camera": Camera(),
+        }
+
+    assert instantiated_scene_sensor_inventory(Scene()) == {
+        "instantiated_scene_sensor_names": ["pot_contact", "top_camera"],
+        "instantiated_scene_sensor_count": 2,
+        "instantiated_scene_camera_sensor_names": ["top_camera"],
+        "instantiated_scene_camera_sensor_count": 1,
+    }
+
+    Scene.sensors = {"pot_contact": ContactSensor()}
+    inventory = instantiated_scene_sensor_inventory(Scene())
+    assert inventory["instantiated_scene_camera_sensor_names"] == []
+    assert inventory["instantiated_scene_camera_sensor_count"] == 0
 
 
 def test_fresh_output_guard_refuses_overwrite(tmp_path):
@@ -131,6 +170,7 @@ def test_shutdown_monitor_writes_completion_for_gone_process(tmp_path):
 
 def test_shutdown_monitor_atomically_writes_phase_timing_json(tmp_path):
     receipt = tmp_path / "runtime.json"
+    started = __import__("time").monotonic() - 2.0
     shutdown_monitor.main(
         [
             "--pid",
@@ -140,9 +180,17 @@ def test_shutdown_monitor_atomically_writes_phase_timing_json(tmp_path):
             "--receipt-json",
             str(receipt),
             "--payload-json",
-            '{"phase_timings_s":{"shutdown":0.0}}',
+            __import__("json").dumps(
+                {
+                    "phase_timings_s": {"shutdown": 0.0},
+                    "attempt_wall_started_monotonic": started,
+                }
+            ),
         ]
     )
     value = __import__("json").loads(receipt.read_text(encoding="utf-8"))
     assert value["shutdown"]["completion"] == "process_exit_observed"
     assert value["phase_timings_s"]["shutdown"] >= 0.0
+    assert value["timing_accounting"]["attempt_wall_time_s"] >= 2.0
+    assert value["timing_accounting"]["named_phase_sum_s"] >= 0.0
+    assert value["timing_accounting"]["unattributed_time_s"] >= 1.9

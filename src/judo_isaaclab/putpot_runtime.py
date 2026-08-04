@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import time
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 
 PHASE_NAMES = (
@@ -50,6 +50,57 @@ class PhaseTimers:
 
     def receipt(self) -> dict[str, float]:
         return {name: float(self.seconds[name]) for name in PHASE_NAMES}
+
+
+def timing_accounting(
+    attempt_wall_time_s: float, phase_timings_s: Mapping[str, float]
+) -> dict[str, float]:
+    """Expose named-phase coverage without absorbing uninstrumented overhead."""
+
+    wall = float(attempt_wall_time_s)
+    if wall < 0.0:
+        raise ValueError("attempt wall time must be nonnegative")
+    named_phase_sum = sum(float(phase_timings_s.get(name, 0.0)) for name in PHASE_NAMES)
+    return {
+        "attempt_wall_time_s": wall,
+        "named_phase_sum_s": named_phase_sum,
+        # Do not clamp this value: a negative result is evidence of overlapping
+        # phase timers and must remain visible instead of being hidden.
+        "unattributed_time_s": wall - named_phase_sum,
+    }
+
+
+def instantiated_scene_sensor_inventory(scene: Any) -> dict[str, Any]:
+    """Inventory camera sensor *instances*, independent of scene config warnings."""
+
+    sensors = getattr(scene, "sensors", None)
+    if sensors is None:
+        sensors = getattr(scene, "_sensors", None)
+    if not isinstance(sensors, Mapping):
+        raise TypeError("Isaac scene does not expose an instantiated sensor mapping")
+
+    def is_camera_sensor(sensor: Any) -> bool:
+        candidates = [type(sensor)]
+        cfg = getattr(sensor, "cfg", None)
+        if cfg is not None:
+            candidates.append(type(cfg))
+        for candidate in candidates:
+            for base in candidate.__mro__:
+                qualified = f"{base.__module__}.{base.__name__}".lower()
+                if "camera" in qualified:
+                    return True
+        return False
+
+    all_names = sorted(str(name) for name in sensors)
+    camera_names = sorted(
+        str(name) for name, sensor in sensors.items() if is_camera_sensor(sensor)
+    )
+    return {
+        "instantiated_scene_sensor_names": all_names,
+        "instantiated_scene_sensor_count": len(all_names),
+        "instantiated_scene_camera_sensor_names": camera_names,
+        "instantiated_scene_camera_sensor_count": len(camera_names),
+    }
 
 
 @dataclass(frozen=True)

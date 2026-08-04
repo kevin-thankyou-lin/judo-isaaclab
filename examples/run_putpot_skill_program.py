@@ -1022,10 +1022,14 @@ def _transition_trace(samples):
 
 def main(argv: list[str] | None = None) -> None:
     global _LAST_ATTEMPT_RUNTIME_RECEIPT, _PERSISTENT_RUNTIME
+    attempt_wall_started_monotonic = time.monotonic()
+    _LAST_ATTEMPT_RUNTIME_RECEIPT = None
     from judo_isaaclab.putpot_runtime import (
         AttemptIdentity,
         PhaseTimers,
         ensure_fresh_output_paths,
+        instantiated_scene_sensor_inventory,
+        timing_accounting,
         without_scene_camera_sensors,
     )
 
@@ -1097,6 +1101,7 @@ def main(argv: list[str] | None = None) -> None:
     }
     runtime_reused = False
     reset_index = 1
+    scene_sensor_inventory = None
     if args.persistent_session and _PERSISTENT_RUNTIME is not None:
         if _PERSISTENT_RUNTIME["key"] != runtime_key:
             raise RuntimeError(
@@ -1106,6 +1111,7 @@ def main(argv: list[str] | None = None) -> None:
         simulation_app = _PERSISTENT_RUNTIME["simulation_app"]
         env = _PERSISTENT_RUNTIME["env"]
         offline_ground = _PERSISTENT_RUNTIME["offline_ground"]
+        scene_sensor_inventory = _PERSISTENT_RUNTIME["scene_sensor_inventory"]
         runtime_reused = True
         reset_index = int(_PERSISTENT_RUNTIME["attempts"]) + 1
     else:
@@ -1156,6 +1162,7 @@ def main(argv: list[str] | None = None) -> None:
                     enable_gripper_grasp_clamp=False,
                     enable_grasp_ray_viz=False,
                 )
+            scene_sensor_inventory = instantiated_scene_sensor_inventory(env.scene)
             timers.add("asset_env_load", time.monotonic() - env_load_started)
             if args.persistent_session:
                 _PERSISTENT_RUNTIME = {
@@ -1163,8 +1170,27 @@ def main(argv: list[str] | None = None) -> None:
                     "simulation_app": simulation_app,
                     "env": env,
                     "offline_ground": offline_ground,
+                    "scene_sensor_inventory": scene_sensor_inventory,
                     "attempts": 0,
                 }
+        # Re-read the instantiated scene on every retry.  The persistent copy is
+        # provenance, not a substitute for live camera-absence evidence.
+        scene_sensor_inventory = instantiated_scene_sensor_inventory(env.scene)
+        if (
+            not args.render
+            and scene_sensor_inventory["instantiated_scene_camera_sensor_count"]
+            != 0
+        ):
+            raise RuntimeError(
+                "diagnostic mode instantiated scene camera sensors: "
+                + repr(
+                    scene_sensor_inventory[
+                        "instantiated_scene_camera_sensor_names"
+                    ]
+                )
+            )
+        if args.persistent_session and _PERSISTENT_RUNTIME is not None:
+            _PERSISTENT_RUNTIME["scene_sensor_inventory"] = scene_sensor_inventory
         reset_started = time.monotonic()
         env.reset(warm_up=False, seed=args.seed)
         source = _load_dataset(args.source_dataset, args.episode, env.device)
@@ -3128,6 +3154,7 @@ def main(argv: list[str] | None = None) -> None:
                     "app_cameras_enabled": bool(args.render),
                     "observation_modalities": ["proprioception"]
                     + (["rgb"] if args.render else []),
+                    **scene_sensor_inventory,
                     "worker_boundary": (
                         "same assets, device, camera capability, and code head"
                     ),
@@ -3368,6 +3395,10 @@ def main(argv: list[str] | None = None) -> None:
                         else attempt_identity.receipt()
                     ),
                     "phase_timings_s": timers.receipt(),
+                    "attempt_wall_started_monotonic": (
+                        attempt_wall_started_monotonic
+                    ),
+                    "scene_sensor_inventory": scene_sensor_inventory,
                 }
                 subprocess.Popen(
                     [
@@ -3390,6 +3421,7 @@ def main(argv: list[str] | None = None) -> None:
                 runtime_receipt_via_monitor = True
             simulation_app.close()
             timers.add("shutdown", time.monotonic() - shutdown_started)
+        phase_timings = timers.receipt()
         _LAST_ATTEMPT_RUNTIME_RECEIPT = {
             "pid": os.getpid(),
             "persistent": bool(args.persistent_session),
@@ -3398,7 +3430,12 @@ def main(argv: list[str] | None = None) -> None:
             "attempt_identity": (
                 None if attempt_identity is None else attempt_identity.receipt()
             ),
-            "phase_timings_s": timers.receipt(),
+            "phase_timings_s": phase_timings,
+            "timing_accounting": timing_accounting(
+                time.monotonic() - attempt_wall_started_monotonic,
+                phase_timings,
+            ),
+            "scene_sensor_inventory": scene_sensor_inventory,
         }
         if args.runtime_receipt_json and not runtime_receipt_via_monitor:
             receipt_path = Path(args.runtime_receipt_json)

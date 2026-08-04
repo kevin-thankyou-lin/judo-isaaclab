@@ -24,6 +24,7 @@ from judo_isaaclab.putpot_runtime import (
     diagnostic_classification,
     ensure_fresh_output_paths,
     render_recommendation,
+    timing_accounting,
 )
 import run_putpot_skill_program as putpot
 
@@ -38,6 +39,15 @@ def _git_status() -> str:
     return subprocess.check_output(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"], text=True
     )
+
+
+def _process_started_monotonic() -> float:
+    """Return Linux process start time on the same clock as time.monotonic()."""
+
+    stat = Path("/proc/self/stat").read_text(encoding="utf-8")
+    fields_after_comm = stat[stat.rfind(")") + 2 :].split()
+    start_ticks = int(fields_after_comm[19])  # proc(5) field 22; list starts at 3.
+    return start_ticks / os.sysconf("SC_CLK_TCK")
 
 
 @contextmanager
@@ -72,6 +82,7 @@ def _append_receipt(path: Path, value: dict[str, object]) -> None:
 
 
 def main() -> None:
+    worker_started_monotonic = _process_started_monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request-manifest", required=True)
     parser.add_argument("--receipt-jsonl", required=True)
@@ -90,6 +101,9 @@ def main() -> None:
             "persistent PutPot worker requires a clean committed code boundary"
         )
     worker_pid = os.getpid()
+    worker_bootstrap_import_and_validation_s = (
+        time.monotonic() - worker_started_monotonic
+    )
     completed = 0
     try:
         for index, request in enumerate(requests, start=1):
@@ -115,6 +129,7 @@ def main() -> None:
                     },
                 )
                 break
+            attempt_started_monotonic = time.monotonic()
             started = datetime.now(timezone.utc).isoformat()
             result_path = Path(request["result_json"])
             error = None
@@ -134,6 +149,13 @@ def main() -> None:
             )
             classification = diagnostic_classification(result, error)
             recommendation = render_recommendation(result, error)
+            attempt_wall_time_s = time.monotonic() - attempt_started_monotonic
+            runtime_receipt = putpot._LAST_ATTEMPT_RUNTIME_RECEIPT
+            phase_timings = (
+                runtime_receipt.get("phase_timings_s", {})
+                if isinstance(runtime_receipt, dict)
+                else {}
+            )
             completed += 1
             receipt = {
                 "type": "attempt",
@@ -148,7 +170,13 @@ def main() -> None:
                 "error": error,
                 "diagnostic_classification": classification,
                 "render_recommendation": recommendation,
-                "runtime": putpot._LAST_ATTEMPT_RUNTIME_RECEIPT,
+                "timing_accounting": timing_accounting(
+                    attempt_wall_time_s, phase_timings
+                ),
+                "worker_bootstrap_import_and_validation_s": (
+                    worker_bootstrap_import_and_validation_s if index == 1 else 0.0
+                ),
+                "runtime": runtime_receipt,
             }
             _append_receipt(receipt_path, receipt)
             if (
@@ -164,6 +192,13 @@ def main() -> None:
             "pid": worker_pid,
             "code_head": startup_head,
             "completed_attempts": completed,
+            "worker_started_monotonic": worker_started_monotonic,
+            "worker_bootstrap_import_and_validation_s": (
+                worker_bootstrap_import_and_validation_s
+            ),
+            "worker_wall_time_before_shutdown_s": (
+                time.monotonic() - worker_started_monotonic
+            ),
             "shutdown": (
                 None
                 if runtime is None

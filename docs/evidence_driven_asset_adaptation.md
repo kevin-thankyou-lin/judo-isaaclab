@@ -149,7 +149,10 @@ attempts. After four nonaccepting attempts the scheduler rotates the asset into
 hard-case review; it never reuses or overwrites an attempt directory.
 
 Diagnostics are true no-render runs: cameras are disabled in `AppLauncher`, RGB
-is absent from environment observations, and no encoder is created. A fresh
+is absent from environment observations, and no encoder is created. Receipts
+also inventory the actual instantiated scene sensors by runtime type and require
+the diagnostic camera-sensor names/count to be `[]`/`0`; configuration warnings
+are not used as camera-absence proof. A fresh
 fully rendered process is allowed only for an ambiguous failure or a final
 acceptance candidate. A diagnostic result can never merge into the ledger;
 merging still requires a continuous, fully decoded H.264 video plus every
@@ -160,7 +163,10 @@ stops the unchanged worker visit, and never spends a rendered attempt on them.
 
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,
-validation/decode/hash, and shutdown. CPU deployment is sized to the remote
+validation/decode/hash, and shutdown. They additionally report the full
+per-attempt wall time, sum of those named phases, and the unattributed remainder;
+worker bootstrap/import/validation time is reported separately instead of being
+folded into a named phase. CPU deployment is sized to the remote
 cgroup quota of eight cores; host CPU inventory is not treated as usable quota.
 
 ## HangMug deployment
