@@ -2036,6 +2036,9 @@ def main() -> None:
                             target_cooktop_geometry.root_pose[3:],
                             np.asarray([0.0, 0.0, 1.0]),
                         ),
+                        support_aligned_object_orientation_wxyz=(
+                            target_geometry.root_pose[3:]
+                        ),
                     )
                     if step + 1 == grasp_complete_step:
                         from judo_isaaclab.put_pot import (

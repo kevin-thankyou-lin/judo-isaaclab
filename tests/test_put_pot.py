@@ -1101,17 +1101,21 @@ def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
     )
     trajectory = program.build()
     step = trajectory.waypoint_steps["right_handle_grasp"]
+    tilted_observation = _pose(z=0.80)
+    tilted_observation[3:] = [np.cos(0.2), np.sin(0.2), 0.0, 0.0]
     lifted = reanchor_bimanual_contact_hold(
         trajectory,
         step,
-        _pose(z=0.80),
+        tilted_observation,
         _pose(0.2),
         _pose(0.2, 1.0),
         object_local_lift_residual_m=0.002,
         support_normal_world=[0.0, 0.0, 1.0],
+        support_aligned_object_orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
     )
     assert lifted.left_poses[step + 1, 2] == pytest.approx(0.802)
     assert lifted.right_poses[step + 1, 2] == pytest.approx(0.802)
+    assert lifted.left_poses[step + 1, 3:] == pytest.approx([1.0, 0.0, 0.0, 0.0])
 
 
 def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():
