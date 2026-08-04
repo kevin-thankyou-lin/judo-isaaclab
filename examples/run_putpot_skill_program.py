@@ -2421,13 +2421,7 @@ def main() -> None:
                     track_retained_contact_from_observed_object,
                 )
 
-                left_contacting = (
-                    np.asarray(sample["left_finger_forces_n"]) >= 0.1
-                )
-                if (
-                    not sample["left_grasp"]
-                    and int(np.sum(left_contacting)) == 1
-                ):
+                if not sample["left_grasp"]:
                     observed_left_contact_local = compose_pose(
                         inverse_pose(sample["pot_pose"]),
                         sample["left_eef_pose"],
