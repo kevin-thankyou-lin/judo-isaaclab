@@ -59,6 +59,13 @@ CONTACT_BACKED_PICK_HEIGHT_M = 0.05
 CONTACT_BACKED_PICK_MARGIN_M = 0.005
 LOADED_CONTACT_HOLD_LIFT_STEP_M = 0.002
 CONTACT_BACKED_PICK_SETTLE_STEPS = 100
+# PutPot023 attempt_038 retained both contacts for 96 consecutive frames, but
+# the unconstrained loaded hold accumulated 63 degrees of pot tilt before the
+# thin left pad unloaded.  Correct only 2% of the measured support-alignment
+# residual per controller step: this is deterministic support geometry, and
+# avoids the loaded discontinuity from commanding the complete correction in
+# one step.
+CONTACT_HOLD_SUPPORT_ALIGNMENT_FRACTION = 0.02
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
@@ -2103,6 +2110,7 @@ def reanchor_bimanual_contact_hold(
     object_local_lift_residual_m: float = 0.0,
     support_normal_world: Any = (0.0, 0.0, 1.0),
     support_aligned_object_orientation_wxyz: Any | None = None,
+    support_alignment_fraction: float = 1.0,
 ) -> SkillTrajectory:
     """Follow retained object-local two-arm contacts before transport."""
 
@@ -2128,7 +2136,18 @@ def reanchor_bimanual_contact_hold(
             raise ValueError(
                 "support_aligned_object_orientation_wxyz must be nonzero"
             )
-        contact_root[3:] = orientation / orientation_norm
+        if (
+            not np.isfinite(support_alignment_fraction)
+            or not 0.0 < support_alignment_fraction <= 1.0
+        ):
+            raise ValueError(
+                "support_alignment_fraction must be finite and in (0, 1]"
+            )
+        contact_root[3:] = _slerp(
+            contact_root[3:],
+            orientation / orientation_norm,
+            np.asarray([support_alignment_fraction], dtype=np.float64),
+        )[0]
     left_target = compose_pose(
         contact_root,
         _pose(retained_left_contact_local, "retained_left_contact_local"),

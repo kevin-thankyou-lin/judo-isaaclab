@@ -2,6 +2,8 @@ import numpy as np
 from types import SimpleNamespace
 import pytest
 
+from judo_isaaclab.put_marker import _slerp
+
 from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
@@ -1129,6 +1131,22 @@ def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
     assert lifted.left_poses[step + 1, 2] == pytest.approx(0.802)
     assert lifted.right_poses[step + 1, 2] == pytest.approx(0.802)
     assert lifted.left_poses[step + 1, 3:] == pytest.approx([1.0, 0.0, 0.0, 0.0])
+
+    gradual = reanchor_bimanual_contact_hold(
+        trajectory,
+        step,
+        tilted_observation,
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        support_aligned_object_orientation_wxyz=[1.0, 0.0, 0.0, 0.0],
+        support_alignment_fraction=0.02,
+    )
+    expected = _slerp(
+        tilted_observation[3:],
+        np.asarray([1.0, 0.0, 0.0, 0.0]),
+        np.asarray([0.02]),
+    )[0]
+    assert gradual.left_poses[step + 1, 3:] == pytest.approx(expected)
 
 
 def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():

@@ -2025,6 +2025,7 @@ def main() -> None:
                         }
                     )
                     from judo_isaaclab.put_pot import (
+                        CONTACT_HOLD_SUPPORT_ALIGNMENT_FRACTION,
                         advance_loaded_contact_hold_lift,
                     )
 
@@ -2069,6 +2070,12 @@ def main() -> None:
                         support_normal_world=quaternion_rotate(
                             target_cooktop_geometry.root_pose[3:],
                             np.asarray([0.0, 0.0, 1.0]),
+                        ),
+                        support_aligned_object_orientation_wxyz=(
+                            target_geometry.root_pose[3:]
+                        ),
+                        support_alignment_fraction=(
+                            CONTACT_HOLD_SUPPORT_ALIGNMENT_FRACTION
                         ),
                     )
                     if step + 1 == grasp_complete_step:
@@ -2702,6 +2709,7 @@ def main() -> None:
                 direct_replay = json.load(stream)
         from judo_isaaclab.put_pot import (
             CENTERED_ON_COOKTOP_TOLERANCE_M,
+            CONTACT_HOLD_SUPPORT_ALIGNMENT_FRACTION,
             HANDLE_PAD_DEPTH_MARGIN_M,
             LOADED_JAW_REACH_AVOIDANCE_FRACTION,
             MISSING_FINGER_CONTACT_LIMIT_M,
