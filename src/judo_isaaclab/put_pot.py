@@ -452,6 +452,38 @@ def advance_loaded_contact_hold_lift(
     return float(next_command_m), float(residual_m)
 
 
+def loaded_pick_height_for_support_clearance(
+    initial_pot_pose: Any,
+    pot_size: Any,
+    cooktop: "RigidSupportGeometry",
+    *,
+    collision_clearance_m: float,
+    minimum_pick_height_m: float = CONTACT_BACKED_PICK_HEIGHT_M,
+) -> float:
+    """Return the loaded lift needed before a swept support overlap.
+
+    The coded pick predicate alone only proves a 5 cm lift.  When the initial
+    pot footprint already overlaps the cooktop boundary, beginning transport
+    at that height can force a discontinuous clearance correction.  Acquire
+    the extra height during the contact hold so the first transport sample is
+    continuous and both handle contacts remain loaded.
+    """
+
+    if not np.isfinite(collision_clearance_m) or collision_clearance_m < 0.0:
+        raise ValueError("collision_clearance_m must be finite and nonnegative")
+    if not np.isfinite(minimum_pick_height_m) or minimum_pick_height_m < 0.0:
+        raise ValueError("minimum_pick_height_m must be finite and nonnegative")
+    initial = _pose(initial_pot_pose, "initial_pot_pose")
+    clearance = minimum_cooktop_clearance_m(
+        np.asarray([initial]), pot_size, cooktop
+    )
+    if not np.isfinite(clearance):
+        return float(minimum_pick_height_m)
+    return float(
+        max(minimum_pick_height_m, collision_clearance_m - clearance)
+    )
+
+
 def support_boundary_staging_pose(
     initial_pot_pose: Any,
     centered_pot_pose: Any,

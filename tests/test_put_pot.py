@@ -37,6 +37,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_right_first_close,
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
+    loaded_pick_height_for_support_clearance,
     geometry_conditioned_vertical_rise_fraction,
     advance_loaded_contact_hold_lift,
     remaining_contact_vertical_rise_fraction,
@@ -315,6 +316,27 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
     assert contact_budget_transport_steps(365, 80) == 120
     assert contact_budget_transport_steps(50, 80) == 50
     assert contact_budget_transport_steps(180, 0) == 180
+
+
+def test_loaded_pick_height_acquires_support_clearance_before_transport():
+    cooktop = RigidSupportGeometry(_pose(x=0.2, z=0.8), [0.4, 0.4, 0.1])
+    overlapping_pot = _pose(x=0.0, z=0.82)
+
+    height = loaded_pick_height_for_support_clearance(
+        overlapping_pot,
+        [0.2, 0.2, 0.2],
+        cooktop,
+        collision_clearance_m=0.025,
+    )
+
+    # Initial clearance is 0.82 - 0.10 - 0.85 = -0.13 m.
+    assert height == pytest.approx(0.155)
+    assert loaded_pick_height_for_support_clearance(
+        _pose(x=-1.0, z=0.82),
+        [0.2, 0.2, 0.2],
+        cooktop,
+        collision_clearance_m=0.025,
+    ) == pytest.approx(0.05)
 
 
 def test_support_staging_uses_authored_boundary_and_inset():

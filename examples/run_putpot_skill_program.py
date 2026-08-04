@@ -1060,6 +1060,14 @@ def main() -> None:
         target_cooktop_geometry = _geometry(
             target_assets["cooktop"], target["cooktop_pose"][0]
         )
+        from judo_isaaclab.put_pot import loaded_pick_height_for_support_clearance
+
+        loaded_pick_height_m = loaded_pick_height_for_support_clearance(
+            target_geometry.root_pose,
+            target_geometry.size,
+            target_cooktop_geometry,
+            collision_clearance_m=args.collision_clearance_m,
+        )
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
         (
             trajectory,
@@ -2039,6 +2047,7 @@ def main() -> None:
                             target_geometry.root_pose,
                             sample["pot_pose"],
                             contact_hold_pick_lift_command_m,
+                            pick_height_m=loaded_pick_height_m,
                             # Saturate the existing Cartesian action limiter;
                             # CPU loaded-arm tracking otherwise reaches the
                             # pick height only after the thin left pad unloads.
@@ -2084,6 +2093,12 @@ def main() -> None:
                         sample["stage1"]
                         and sample["left_grasp"]
                         and sample["right_grasp"]
+                        and minimum_cooktop_clearance_m(
+                            np.asarray([sample["pot_pose"]]),
+                            target_geometry.size,
+                            target_cooktop_geometry,
+                        )
+                        >= args.collision_clearance_m
                         and step + 1 < grasp_complete_step
                     ):
                         from judo_isaaclab.put_pot import (
