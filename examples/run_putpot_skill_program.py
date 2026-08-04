@@ -1958,6 +1958,7 @@ def main() -> None:
                 and contact_close_complete_step <= step < grasp_complete_step
             ):
                 from judo_isaaclab.put_pot import (
+                    TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
                     cartesian_smoothness_metrics,
                     compensate_retained_contact_tracking,
                     maximum_bimanual_position_step_m,
@@ -2268,8 +2269,12 @@ def main() -> None:
                     expected_right_tracking_residual_local=(
                         transport_expected_right_tracking_residual_local
                     ),
-                    minimum_interval_steps=max(
-                        1, int(transport_plan.get("vertical_rise_steps", 1))
+                    # Contact feedback must run on its measured horizon.  A
+                    # geometry-dependent vertical rise can be much longer and
+                    # allowed a newly acquired second handle to detach before
+                    # the first drift correction.
+                    minimum_interval_steps=(
+                        TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
                     ),
                 ):
                     transport_reanchor_evaluation_steps.append(step)

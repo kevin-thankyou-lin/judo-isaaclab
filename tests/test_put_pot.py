@@ -7,6 +7,7 @@ from judo_isaaclab.put_marker import _slerp
 from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
+    TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
     HANDLE_PAD_DEPTH_MARGIN_M,
     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
@@ -809,6 +810,10 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
     assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
         0.0, abs=1.0e-9
     )
+
+
+def test_transport_contact_reanchor_uses_contact_feedback_horizon():
+    assert TRANSPORT_CONTACT_REANCHOR_MIN_STEPS == CONTACT_FEEDBACK_HORIZON_STEPS
 
 
 def test_observed_peer_contact_transfers_full_pose_before_receiving_jaw_centering():
