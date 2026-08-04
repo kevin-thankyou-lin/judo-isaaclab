@@ -58,6 +58,7 @@ LOADED_CONTACT_MOTION_PRELOAD_M = 0.009
 CONTACT_BACKED_PICK_HEIGHT_M = 0.05
 CONTACT_BACKED_PICK_MARGIN_M = 0.005
 LOADED_CONTACT_HOLD_LIFT_STEP_M = 0.002
+CONTACT_BACKED_PICK_SETTLE_STEPS = 20
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
@@ -340,6 +341,28 @@ def geometry_conditioned_transport_steps(
         1.0, min(float(target[axis] / source[axis]) for axis in transverse)
     )
     return int(np.ceil(base_steps / retained_ratio))
+
+
+def contact_budget_transport_steps(
+    planned_steps: int,
+    retained_contact_steps: int,
+    *,
+    budget_multiplier: float = 1.5,
+) -> int:
+    """Keep a thin-handle support sweep inside measured contact retention."""
+
+    if planned_steps < 1:
+        raise ValueError("planned_steps must be positive")
+    if retained_contact_steps < 0:
+        raise ValueError("retained_contact_steps must be nonnegative")
+    if not np.isfinite(budget_multiplier) or budget_multiplier <= 0.0:
+        raise ValueError("budget_multiplier must be positive and finite")
+    if retained_contact_steps == 0:
+        return planned_steps
+    return min(
+        planned_steps,
+        max(8, int(np.ceil(budget_multiplier * retained_contact_steps))),
+    )
 
 
 def geometry_conditioned_vertical_rise_fraction(

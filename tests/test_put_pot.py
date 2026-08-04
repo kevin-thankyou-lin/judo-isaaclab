@@ -21,6 +21,7 @@ from judo_isaaclab.put_pot import (
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
+    contact_budget_transport_steps,
     center_handle_between_finger_pads,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
@@ -308,6 +309,9 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.069219, 0.061195, 0.020012],
         0,
     ) == 122
+    assert contact_budget_transport_steps(365, 80) == 120
+    assert contact_budget_transport_steps(100, 80) == 100
+    assert contact_budget_transport_steps(180, 0) == 180
 
 
 def test_support_staging_uses_authored_boundary_and_inset():

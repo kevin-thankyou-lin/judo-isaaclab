@@ -630,7 +630,9 @@ def _build_skill(
 
     from judo_isaaclab.put_pot import (
         CONTACT_FEEDBACK_HORIZON_STEPS,
+        CONTACT_BACKED_PICK_SETTLE_STEPS,
         MISSING_FINGER_CONTACT_SETTLE_STEPS,
+        contact_budget_transport_steps,
         geometry_conditioned_grasp_hold_steps,
         geometry_conditioned_peer_contact_transfer,
         geometry_conditioned_right_first_close,
@@ -647,6 +649,7 @@ def _build_skill(
     grasp_geometry["left"]["right_first_close"] = right_first_close
     peer_contact_hold_steps = (
         MISSING_FINGER_CONTACT_SETTLE_STEPS
+        + CONTACT_BACKED_PICK_SETTLE_STEPS
         if geometry_conditioned_peer_contact_transfer(
             handle_size(target_parts, left_side),
             handle_size(target_parts, right_side),
@@ -737,6 +740,11 @@ def _build_skill(
         )
         for side in (left_side, right_side)
     )
+    if peer_contact_hold_steps:
+        transport_steps = contact_budget_transport_steps(
+            transport_steps,
+            peer_contact_hold_steps - CONTACT_BACKED_PICK_SETTLE_STEPS,
+        )
     center_slide_steps = max(
         geometry_conditioned_transport_steps(
             args.center_repair_steps,
