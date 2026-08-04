@@ -739,6 +739,37 @@ def _putpot_worker_visit(
     return attempts
 
 
+def _record_completed_visit_attempts(
+    config: dict[str, Any],
+    output_root: Path,
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    key: str,
+    visit_attempts: list[dict[str, Any]],
+    visit_attempt_limit: int,
+) -> dict[str, Any]:
+    """Atomically record every completed receipt, even after acceptance is found.
+
+    A PutPot worker may finish several diagnostics and a separate rendered run
+    before the campaign refreshes the ledger.  Artifact discovery can therefore
+    make the pair accepted while earlier completed receipts are still being
+    appended.  Acceptance stops future physics, never receipt bookkeeping.
+    """
+
+    for visit_attempt, attempt in enumerate(visit_attempts, 1):
+        attempt["asset_visit_attempt"] = visit_attempt
+        attempt["asset_visit_attempt_limit"] = visit_attempt_limit
+        ledger["pairs"][key]["attempts"].append(attempt)
+        _atomic_json(ledger_path, ledger)
+        print(
+            "SEMANTIC_REPAIR_ATTEMPT="
+            + json.dumps({"pair": key, **attempt}, sort_keys=True),
+            flush=True,
+        )
+        ledger = refresh_ledger(config, output_root, ledger_path)
+    return ledger
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -811,20 +842,15 @@ def main() -> None:
                 visit_attempts.append(attempt)
                 if attempt["status"] == "accepted":
                     break
-        for visit_attempt, attempt in enumerate(visit_attempts, 1):
-            attempt["asset_visit_attempt"] = visit_attempt
-            attempt["asset_visit_attempt_limit"] = visit_attempt_limit
-            record["attempts"].append(attempt)
-            _atomic_json(ledger_path, ledger)
-            print(
-                "SEMANTIC_REPAIR_ATTEMPT="
-                + json.dumps({"pair": key, **attempt}, sort_keys=True),
-                flush=True,
-            )
-            ledger = refresh_ledger(config, output_root, ledger_path)
-            record = ledger["pairs"][key]
-            if record["status"] == "accepted":
-                break
+        ledger = _record_completed_visit_attempts(
+            config,
+            output_root,
+            ledger_path,
+            ledger,
+            key,
+            visit_attempts,
+            visit_attempt_limit,
+        )
         if _stop_after_attempt(args.stop_on_failure, ledger["pairs"][key]):
             print(f"SEMANTIC_REPAIR_STOP_ON_FAILURE={key}", flush=True)
             break

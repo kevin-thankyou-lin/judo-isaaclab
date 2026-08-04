@@ -157,6 +157,59 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
     assert attempts[1]["render_reason"] == "final_acceptance_candidate"
 
 
+def test_completed_visit_receipts_survive_early_acceptance_discovery(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    ledger = {
+        "pairs": {
+            "putpot:pair": {
+                "status": "pending",
+                "attempts": [],
+            }
+        }
+    }
+    written = []
+    monkeypatch.setattr(
+        module,
+        "_atomic_json",
+        lambda _path, value: written.append(
+            json.loads(json.dumps(value))
+        ),
+    )
+
+    def discover_acceptance(_config, _root, _path):
+        refreshed = json.loads(json.dumps(ledger))
+        refreshed["pairs"]["putpot:pair"]["attempts"] = json.loads(
+            json.dumps(written[-1]["pairs"]["putpot:pair"]["attempts"])
+        )
+        refreshed["pairs"]["putpot:pair"]["status"] = "accepted"
+        ledger.clear()
+        ledger.update(refreshed)
+        return ledger
+
+    monkeypatch.setattr(module, "refresh_ledger", discover_acceptance)
+    result = module._record_completed_visit_attempts(
+        {},
+        tmp_path,
+        tmp_path / "ledger.json",
+        ledger,
+        "putpot:pair",
+        [
+            {"attempt": "attempt_001", "status": "render_candidate"},
+            {"attempt": "attempt_002", "status": "accepted"},
+        ],
+        4,
+    )
+
+    assert result["pairs"]["putpot:pair"]["status"] == "accepted"
+    assert [
+        attempt["attempt"]
+        for attempt in result["pairs"]["putpot:pair"]["attempts"]
+    ] == ["attempt_001", "attempt_002"]
+    assert len(written) == 2
+
+
 def test_failed_acceptance_check_is_diagnosed_even_if_task_success_was_seen():
     module = _module()
     source = {
