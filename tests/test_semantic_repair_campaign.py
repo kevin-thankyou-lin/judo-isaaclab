@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -74,6 +75,86 @@ def test_putpot_diagnostic_command_disables_render_and_video():
         "--trace-npz",
         "/tmp/trace.npz",
     ]
+
+
+def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    monkeypatch.setattr(module, "_git_head", lambda: "candidate-head")
+
+    def fake_command(*args, output, **kwargs):
+        return [
+            "python",
+            "runner.py",
+            "--render",
+            "--video",
+            str(output / "skill.mp4"),
+            "--result-json",
+            str(output / "skill_result.json"),
+        ]
+
+    monkeypatch.setattr(module, "_command", fake_command)
+
+    def fake_worker_run(command, **kwargs):
+        manifest_path = Path(
+            command[command.index("--request-manifest") + 1]
+        )
+        receipt_path = Path(command[command.index("--receipt-jsonl") + 1])
+        request = json.loads(manifest_path.read_text(encoding="utf-8"))[0]
+        assert "--render" not in request["argv"]
+        assert "--video" not in request["argv"]
+        receipt_path.write_text(
+            json.dumps(
+                {
+                    "type": "attempt",
+                    "request_index": 1,
+                    "pair": request["pair"],
+                    "pid": 123,
+                    "started_at": "start",
+                    "finished_at": "finish",
+                    "code_head": "candidate-head",
+                    "result_json": request["result_json"],
+                    "result_present": True,
+                    "error": "RuntimeError: acceptance checks failed",
+                    "diagnostic_classification": "final_acceptance_candidate",
+                    "render_recommendation": "final_acceptance_candidate",
+                    "runtime": {"reset_index": 1},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_worker_run)
+    rendered_calls = []
+
+    def fake_run_pair(*args, **kwargs):
+        rendered_calls.append(kwargs)
+        return {
+            "attempt": "attempt_002",
+            "status": "accepted",
+            "repair_epoch_attempt": kwargs["repair_epoch_attempt"],
+        }
+
+    monkeypatch.setattr(module, "_run_pair", fake_run_pair)
+    attempts = module._putpot_worker_visit(
+        {"name": "putpot"},
+        {"pair_id": "cooktop_999__pot_999", "dataset": "/target.hdf5"},
+        output_root=tmp_path,
+        python="python",
+        gear_repo="/gear",
+        attempt_limit=4,
+        repair_epoch="epoch-a",
+    )
+
+    assert [attempt["status"] for attempt in attempts] == [
+        "render_candidate",
+        "accepted",
+    ]
+    assert rendered_calls[0]["repair_epoch_attempt"] == 2
+    assert attempts[1]["render_reason"] == "final_acceptance_candidate"
 
 
 def test_failed_acceptance_check_is_diagnosed_even_if_task_success_was_seen():

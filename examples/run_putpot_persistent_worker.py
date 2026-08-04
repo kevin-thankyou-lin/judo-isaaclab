@@ -21,6 +21,7 @@ import traceback
 from typing import Iterator
 
 from judo_isaaclab.putpot_runtime import (
+    diagnostic_classification,
     ensure_fresh_output_paths,
     render_recommendation,
 )
@@ -131,7 +132,8 @@ def main() -> None:
                 if result_path.is_file()
                 else None
             )
-            recommendation = render_recommendation(result)
+            classification = diagnostic_classification(result, error)
+            recommendation = render_recommendation(result, error)
             completed += 1
             receipt = {
                 "type": "attempt",
@@ -144,11 +146,16 @@ def main() -> None:
                 "result_json": str(result_path.resolve()),
                 "result_present": result is not None,
                 "error": error,
+                "diagnostic_classification": classification,
                 "render_recommendation": recommendation,
                 "runtime": putpot._LAST_ATTEMPT_RUNTIME_RECEIPT,
             }
             _append_receipt(receipt_path, receipt)
-            if recommendation is not None:
+            if (
+                recommendation is not None
+                or classification
+                == "deterministic_controller_or_config_exception"
+            ):
                 break
     finally:
         runtime = putpot._PERSISTENT_RUNTIME

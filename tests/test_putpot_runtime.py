@@ -6,6 +6,7 @@ from judo_isaaclab.putpot_runtime import (
     AttemptIdentity,
     PHASE_NAMES,
     PhaseTimers,
+    diagnostic_classification,
     ensure_fresh_output_paths,
     full_render_required_for_merge,
     render_recommendation,
@@ -75,6 +76,15 @@ def test_render_recommendation_is_narrow_and_merge_requires_full_video():
         },
     }
     assert full_render_required_for_merge(rendered)
+
+
+def test_deterministic_controller_exception_never_recommends_render():
+    error = "ValueError: smooth transport requires at least eight steps"
+    assert (
+        diagnostic_classification(None, error)
+        == "deterministic_controller_or_config_exception"
+    )
+    assert render_recommendation(None, error) is None
 
 
 def test_camera_free_scene_policy_removes_sensors_and_restores_builder():

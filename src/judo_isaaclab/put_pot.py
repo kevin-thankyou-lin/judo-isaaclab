@@ -2497,6 +2497,22 @@ def resolve_bimanual_contact_frames_local(
     return left.copy(), right.copy()
 
 
+def transport_reanchor_has_smooth_horizon(
+    trajectory: SkillTrajectory,
+    current_step: int,
+    *,
+    minimum_samples: int = 8,
+) -> bool:
+    """Require enough future samples for a valid smooth feedback replan."""
+
+    if minimum_samples < 1:
+        raise ValueError("minimum_samples must be positive")
+    if "smooth_transport" not in trajectory.waypoint_steps:
+        raise ValueError("transport trajectory is missing smooth_transport")
+    remaining = trajectory.waypoint_steps["smooth_transport"] - int(current_step)
+    return remaining >= minimum_samples
+
+
 def reanchor_bimanual_transport_from_observation(
     trajectory: SkillTrajectory,
     observed_pot_pose: Any,

@@ -154,6 +154,9 @@ fully rendered process is allowed only for an ambiguous failure or a final
 acceptance candidate. A diagnostic result can never merge into the ledger;
 merging still requires a continuous, fully decoded H.264 video plus every
 existing task, bimanual transport, stability, provenance, trace, and HDF5 gate.
+Typed deterministic controller or configuration exceptions are neither physics
+failures nor visual ambiguities: the worker records their exception provenance,
+stops the unchanged worker visit, and never spends a rendered attempt on them.
 
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,

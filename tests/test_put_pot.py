@@ -58,6 +58,7 @@ from judo_isaaclab.put_pot import (
     reinforce_loaded_contact_for_motion,
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
+    transport_reanchor_has_smooth_horizon,
     reanchor_bimanual_contact_hold,
     compensate_retained_contact_tracking,
     reanchor_missing_finger_contact,
@@ -1960,6 +1961,11 @@ def test_handle_and_transport_feedback_follow_observed_pot_without_reset():
         inverse_pose(late_transport.pot_poses[0]),
         late.left_poses[late_step + 1],
     ) == pytest.approx(left_contact)
+    transport_end = trajectory.waypoint_steps["smooth_transport"]
+    assert transport_reanchor_has_smooth_horizon(trajectory, transport_end - 8)
+    assert not transport_reanchor_has_smooth_horizon(
+        trajectory, transport_end - 7
+    )
 
 
 def test_transport_reanchor_repeats_only_after_measured_contact_drift():

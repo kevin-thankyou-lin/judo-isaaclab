@@ -90,8 +90,20 @@ def ensure_fresh_output_paths(paths: list[str | os.PathLike[str] | None]) -> Non
         raise FileExistsError(f"refusing to overwrite attempt artifacts: {existing}")
 
 
-def render_recommendation(result: dict[str, Any] | None) -> str | None:
-    """Select the narrow cases that warrant a fresh fully rendered attempt."""
+def diagnostic_classification(
+    result: dict[str, Any] | None, error: str | None = None
+) -> str:
+    """Classify a camera-free attempt from result and exception provenance."""
+
+    deterministic_prefixes = (
+        "AssertionError:",
+        "FileNotFoundError:",
+        "KeyError:",
+        "TypeError:",
+        "ValueError:",
+    )
+    if error and error.startswith(deterministic_prefixes):
+        return "deterministic_controller_or_config_exception"
 
     if not result:
         return "ambiguous_failure"
@@ -106,6 +118,17 @@ def render_recommendation(result: dict[str, Any] | None) -> str | None:
         "trace"
     ):
         return "ambiguous_failure"
+    return "diagnosed_physics_failure"
+
+
+def render_recommendation(
+    result: dict[str, Any] | None, error: str | None = None
+) -> str | None:
+    """Select only ambiguous failures and strict non-video candidates to render."""
+
+    classification = diagnostic_classification(result, error)
+    if classification in {"ambiguous_failure", "final_acceptance_candidate"}:
+        return classification
     return None
 
 

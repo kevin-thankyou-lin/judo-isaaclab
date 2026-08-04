@@ -2405,6 +2405,7 @@ def main(argv: list[str] | None = None) -> None:
                     reanchor_bimanual_transport_from_observation,
                     reanchor_two_contact_pad_support,
                     resolve_bimanual_contact_frames_local,
+                    transport_reanchor_has_smooth_horizon,
                     transport_contact_reanchor_required,
                 )
 
@@ -2448,34 +2449,39 @@ def main(argv: list[str] | None = None) -> None:
                     )
                     > 1.0e-12
                 )
-                if transport_pad_support_requested or transport_contact_reanchor_required(
-                    trajectory,
-                    step,
-                    sample["pot_pose"],
-                    sample["left_eef_pose"],
-                    sample["right_eef_pose"],
-                    transport_reference_left_contact_local,
-                    transport_reference_right_contact_local,
-                    last_reanchor_step=(
-                        transport_reanchor_evaluation_steps[-1]
-                        if transport_reanchor_evaluation_steps
-                        else None
-                    ),
-                    tracking_tolerance_m=transport_contact_tracking_tolerance_m,
-                    expected_left_tracking_residual_local=(
-                        transport_expected_left_tracking_residual_local
-                    ),
-                    expected_right_tracking_residual_local=(
-                        transport_expected_right_tracking_residual_local
-                    ),
-                    # Contact feedback must run on its measured horizon.  A
-                    # geometry-dependent vertical rise can be much longer and
-                    # allowed a newly acquired second handle to detach before
-                    # the first drift correction.
-                    minimum_interval_steps=(
-                        TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
-                    ),
-                ):
+                if (
+                    transport_pad_support_requested
+                    or transport_contact_reanchor_required(
+                        trajectory,
+                        step,
+                        sample["pot_pose"],
+                        sample["left_eef_pose"],
+                        sample["right_eef_pose"],
+                        transport_reference_left_contact_local,
+                        transport_reference_right_contact_local,
+                        last_reanchor_step=(
+                            transport_reanchor_evaluation_steps[-1]
+                            if transport_reanchor_evaluation_steps
+                            else None
+                        ),
+                        tracking_tolerance_m=(
+                            transport_contact_tracking_tolerance_m
+                        ),
+                        expected_left_tracking_residual_local=(
+                            transport_expected_left_tracking_residual_local
+                        ),
+                        expected_right_tracking_residual_local=(
+                            transport_expected_right_tracking_residual_local
+                        ),
+                        # Contact feedback must run on its measured horizon. A
+                        # geometry-dependent vertical rise can be much longer
+                        # and allowed a newly acquired second handle to detach
+                        # before the first drift correction.
+                        minimum_interval_steps=(
+                            TRANSPORT_CONTACT_REANCHOR_MIN_STEPS
+                        ),
+                    )
+                ) and transport_reanchor_has_smooth_horizon(trajectory, step):
                     transport_reanchor_evaluation_steps.append(step)
                     observed_pot_inverse = inverse_pose(sample["pot_pose"])
                     observed_left_contact_local = compose_pose(
