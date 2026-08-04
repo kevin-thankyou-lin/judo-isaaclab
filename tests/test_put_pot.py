@@ -1075,6 +1075,13 @@ def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
     )
     assert command == pytest.approx(0.026)
     assert residual == pytest.approx(0.025)
+    _, saturated_residual = advance_loaded_contact_hold_lift(
+        initial,
+        _pose(z=0.80),
+        0.024,
+        maximum_residual_m=0.05,
+    )
+    assert saturated_residual == pytest.approx(0.026)
     command, residual = advance_loaded_contact_hold_lift(
         initial, _pose(z=0.854), 0.054
     )

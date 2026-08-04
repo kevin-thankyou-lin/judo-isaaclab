@@ -2002,7 +2002,10 @@ def main() -> None:
                             target_geometry.root_pose,
                             sample["pot_pose"],
                             contact_hold_pick_lift_command_m,
-                            maximum_residual_m=args.max_position_step,
+                            # Saturate the existing Cartesian action limiter;
+                            # CPU loaded-arm tracking otherwise reaches the
+                            # pick height only after the thin left pad unloads.
+                            maximum_residual_m=2.0 * args.max_position_step,
                         )
                     else:
                         hold_lift_residual_m = 0.0
