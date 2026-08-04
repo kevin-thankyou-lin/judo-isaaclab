@@ -445,7 +445,7 @@ def peer_contact_gripper_reseat_distance_m(
     if not np.all(np.isfinite(values)) or np.any(values < 0.0):
         raise ValueError("peer contact reseat distances must be finite and nonnegative")
     if position_locked:
-        return 0.0
+        return float(additional_jaw_centering_translation_m)
     return float(np.max(values))
 
 
