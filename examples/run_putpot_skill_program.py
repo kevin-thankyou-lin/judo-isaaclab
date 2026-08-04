@@ -1218,6 +1218,8 @@ def main() -> None:
         contact_hold_pick_lift_command_m = 0.0
         contact_hold_pick_recovery_correction_m = 0.0
         contact_hold_pick_recovery_steps = []
+        contact_hold_pad_support_correction_m = 0.0
+        contact_hold_pad_support_steps = []
         coded_pick_hold_retime_step = None
         coded_pick_hold_removed_steps = 0
         reference_hold_left_contact_local = None
@@ -1995,6 +1997,33 @@ def main() -> None:
                     left_contacting = (
                         np.asarray(sample["left_finger_forces_n"]) >= 0.1
                     )
+                    if sample["left_grasp"] and sample["right_grasp"]:
+                        from judo_isaaclab.put_pot import (
+                            reanchor_two_contact_pad_support,
+                        )
+
+                        (
+                            reference_hold_left_contact_local,
+                            contact_hold_pad_support_correction_m,
+                            pad_support_residual_m,
+                        ) = reanchor_two_contact_pad_support(
+                            reference_hold_left_contact_local,
+                            sample["pot_pose"],
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_fractions"],
+                            sample["left_pad_axes_world"],
+                            contact_hold_pad_support_correction_m,
+                        )
+                        if abs(pad_support_residual_m) > 0.0:
+                            contact_hold_pad_support_steps.append(
+                                {
+                                    "step": step,
+                                    "signed_residual_m": pad_support_residual_m,
+                                    "cumulative_applied_m": (
+                                        contact_hold_pad_support_correction_m
+                                    ),
+                                }
+                            )
                     if (
                         not sample["left_grasp"]
                         and sample["right_grasp"]
@@ -2955,6 +2984,10 @@ def main() -> None:
                 "contact_hold_pick_recovery_steps": (
                     contact_hold_pick_recovery_steps
                 ),
+                "contact_hold_pad_support_correction_m": (
+                    contact_hold_pad_support_correction_m
+                ),
+                "contact_hold_pad_support_steps": contact_hold_pad_support_steps,
                 "coded_pick_hold_retime_step": coded_pick_hold_retime_step,
                 "coded_pick_hold_removed_steps": (
                     coded_pick_hold_removed_steps

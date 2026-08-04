@@ -60,6 +60,7 @@ from judo_isaaclab.put_pot import (
     reanchor_missing_finger_contact,
     reanchor_missing_finger_pad_depth,
     reanchor_single_contact_pad_fraction,
+    reanchor_two_contact_pad_support,
     retime_loaded_gripper_close_for_pad_reseat,
     reanchor_centered_support,
     reanchor_centered_unload,
@@ -325,6 +326,54 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         complete_peer_contact_transport_steps(0, 80)
     with pytest.raises(ValueError, match="retained_contact_steps"):
         complete_peer_contact_transport_steps(180, -1)
+
+
+def test_two_contact_pad_support_moves_shallow_contact_baseward_with_bound():
+    contact = _pose(x=0.1, z=0.2)
+    corrected, cumulative, residual = reanchor_two_contact_pad_support(
+        contact,
+        _pose(),
+        [4.0, 5.0],
+        [0.05, 0.30],
+        [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        0.0,
+        step_m=0.001,
+        target_fraction=0.20,
+        correction_limit_m=0.0015,
+    )
+    assert residual > 0.0
+    assert cumulative == pytest.approx(-0.001)
+    assert corrected[:3] == pytest.approx([0.1, 0.0, 0.199])
+
+    corrected_again, cumulative_again, _ = reanchor_two_contact_pad_support(
+        corrected,
+        _pose(),
+        [4.0, 5.0],
+        [0.05, 0.30],
+        [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        cumulative,
+        step_m=0.001,
+        target_fraction=0.20,
+        correction_limit_m=0.0015,
+    )
+    assert cumulative_again == pytest.approx(-0.0015)
+    assert corrected_again[2] == pytest.approx(0.1985)
+
+
+def test_two_contact_pad_support_is_inactive_without_two_finite_contacts():
+    contact = _pose(x=0.1, z=0.2)
+    for forces, fractions in (([4.0, 0.0], [0.05, np.nan]), ([4.0, 5.0], [0.3, 0.4])):
+        corrected, cumulative, residual = reanchor_two_contact_pad_support(
+            contact,
+            _pose(),
+            forces,
+            fractions,
+            [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            0.0,
+        )
+        assert corrected == pytest.approx(contact)
+        assert cumulative == pytest.approx(0.0)
+        assert residual == pytest.approx(0.0)
 
 
 def test_loaded_pick_height_acquires_support_clearance_before_transport():

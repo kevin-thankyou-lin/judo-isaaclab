@@ -1617,6 +1617,86 @@ def reanchor_single_contact_pad_fraction(
     )
 
 
+def reanchor_two_contact_pad_support(
+    contact_local: Any,
+    observed_root_pose: Any,
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    pad_axes_world: Any,
+    signed_correction_m: float,
+    *,
+    contact_threshold_n: float = 0.1,
+    step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
+    target_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
+    correction_limit_m: float = MISSING_FINGER_PAD_DEPTH_LIMIT_M,
+) -> tuple[np.ndarray, float, float]:
+    """Keep a two-finger handle contact inside the measured pad interval.
+
+    The pad axes point tip-to-base.  When the shallower observed contact moves
+    below the target fraction, move the wrist oppositely so the fixed handle
+    contact moves baseward; apply the symmetric correction near the pad base.
+    The cumulative signed translation is bounded in the observed world-axis
+    convention and returned as an object-local controller target.
+    """
+
+    local = _pose(contact_local, "contact_local")
+    root = _pose(observed_root_pose, "observed_root_pose")
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    axes = np.asarray(pad_axes_world, dtype=np.float64)
+    if forces.shape != (2,) or not np.all(np.isfinite(forces)):
+        raise ValueError("finger_forces_n must contain two finite values")
+    if fractions.shape != (2,):
+        raise ValueError("pad_fractions must contain two values")
+    if axes.shape != (2, 3) or not np.all(np.isfinite(axes)):
+        raise ValueError("pad_axes_world must contain two finite 3D axes")
+    values = np.asarray(
+        [signed_correction_m, step_m, target_fraction, correction_limit_m],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("pad support parameters must be finite")
+    if step_m <= 0.0 or correction_limit_m < 0.0:
+        raise ValueError("pad support step must be positive and limit nonnegative")
+    if not 0.0 <= target_fraction < 0.5:
+        raise ValueError("target_fraction must be in [0, 0.5)")
+    contacting = forces >= contact_threshold_n
+    if not np.all(contacting) or not np.all(np.isfinite(fractions)):
+        return local.copy(), float(signed_correction_m), 0.0
+
+    low = float(np.min(fractions))
+    high = float(np.max(fractions))
+    if low < target_fraction:
+        residual_m = (target_fraction - low) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    elif high > 1.0 - target_fraction:
+        residual_m = (
+            1.0 - target_fraction - high
+        ) * YAM_FINGER_PAD_AXIS_LENGTH_M
+    else:
+        return local.copy(), float(signed_correction_m), 0.0
+
+    # Positive residual means the contact needs to move baseward, which
+    # requires a wrist target opposite the measured tip-to-base pad axis.
+    requested_delta = -float(np.clip(residual_m, -step_m, step_m))
+    updated = float(
+        np.clip(
+            signed_correction_m + requested_delta,
+            -correction_limit_m,
+            correction_limit_m,
+        )
+    )
+    applied_delta = updated - float(signed_correction_m)
+    if abs(applied_delta) <= 1.0e-12:
+        return local.copy(), updated, float(residual_m)
+    axis = np.mean(axes, axis=0)
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1.0e-9:
+        raise ValueError("mean finger pad axis must be nonzero")
+    world = compose_pose(root, local)
+    world[:3] += applied_delta * axis / norm
+    return compose_pose(inverse_pose(root), world), updated, float(residual_m)
+
+
 def seat_handle_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
     """Move a wrist opposite the YAM pad tip-to-base axis to deepen contact."""
 
