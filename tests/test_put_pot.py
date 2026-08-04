@@ -34,6 +34,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     geometry_conditioned_vertical_rise_fraction,
+    loaded_contact_hold_lift_step_m,
     remaining_contact_vertical_rise_fraction,
     handle_finger_pad_depth_imbalance,
     handle_jaw_center_offset_m,
@@ -1056,6 +1057,34 @@ def test_loaded_vertical_rise_uses_attempt026_remaining_contact_budget():
         8 / 288
     )
     assert remaining_contact_vertical_rise_fraction(180, 0, 0) == 1.0
+
+
+def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
+    initial = _pose(z=0.80)
+    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.80)) == 0.002
+    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.854)) == pytest.approx(
+        0.001
+    )
+    assert loaded_contact_hold_lift_step_m(initial, _pose(z=0.855)) == 0.0
+
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1), _pose(0.1, 1.0), _pose(0.2), _pose(0.2, 1.0),
+        approach_steps=2, left_close_steps=2, right_close_steps=2,
+        contact_hold_steps=3,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["right_handle_grasp"]
+    lifted = reanchor_bimanual_contact_hold(
+        trajectory,
+        step,
+        _pose(z=0.80),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        object_local_lift_step_m=0.002,
+    )
+    assert lifted.left_poses[step + 1, 2] == pytest.approx(0.802)
+    assert lifted.right_poses[step + 1, 2] == pytest.approx(0.802)
 
 
 def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():

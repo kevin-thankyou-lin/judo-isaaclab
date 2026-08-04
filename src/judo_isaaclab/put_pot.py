@@ -55,6 +55,9 @@ HANDLE_JAW_CENTERING_LIMIT_M = 0.040
 # Nine millimetres supplies the missing vertical margin and remains below both
 # the 12.72 mm measured contact tolerance and the half-handle geometry bound.
 LOADED_CONTACT_MOTION_PRELOAD_M = 0.009
+CONTACT_BACKED_PICK_HEIGHT_M = 0.05
+CONTACT_BACKED_PICK_MARGIN_M = 0.005
+LOADED_CONTACT_HOLD_LIFT_STEP_M = 0.002
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
@@ -386,6 +389,28 @@ def remaining_contact_vertical_rise_fraction(
         int(np.ceil(0.5 * remaining_contact_steps)),
     )
     return float(min(1.0, rise_steps / transport_steps))
+
+
+def loaded_contact_hold_lift_step_m(
+    initial_pot_pose: Any,
+    observed_pot_pose: Any,
+    *,
+    pick_height_m: float = CONTACT_BACKED_PICK_HEIGHT_M,
+    margin_m: float = CONTACT_BACKED_PICK_MARGIN_M,
+    maximum_step_m: float = LOADED_CONTACT_HOLD_LIFT_STEP_M,
+) -> float:
+    """Return a bounded upward hold increment until coded pickup has margin."""
+
+    initial = _pose(initial_pot_pose, "initial_pot_pose")
+    observed = _pose(observed_pot_pose, "observed_pot_pose")
+    values = np.asarray([pick_height_m, margin_m, maximum_step_m])
+    if np.any(~np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("pick lift distances must be finite and nonnegative")
+    required_z = initial[2] + pick_height_m + margin_m
+    remaining_m = required_z - observed[2]
+    if remaining_m <= 1.0e-9:
+        return 0.0
+    return float(min(remaining_m, maximum_step_m))
 
 
 def support_boundary_staging_pose(
@@ -2033,6 +2058,8 @@ def reanchor_bimanual_contact_hold(
     observed_pot_pose: Any,
     retained_left_contact_local: Any,
     retained_right_contact_local: Any,
+    *,
+    object_local_lift_step_m: float = 0.0,
 ) -> SkillTrajectory:
     """Follow retained object-local two-arm contacts before transport."""
 
@@ -2052,6 +2079,14 @@ def reanchor_bimanual_contact_hold(
         _pose(observed_pot_pose, "observed_pot_pose"),
         _pose(retained_right_contact_local, "retained_right_contact_local"),
     )
+    if not np.isfinite(object_local_lift_step_m) or object_local_lift_step_m < 0.0:
+        raise ValueError("object_local_lift_step_m must be finite and nonnegative")
+    lift_world = quaternion_rotate(
+        _pose(observed_pot_pose, "observed_pot_pose")[3:],
+        np.asarray([0.0, 0.0, object_local_lift_step_m]),
+    )
+    left_target[:3] += lift_world
+    right_target[:3] += lift_world
     left[start : hold_end + 1] = left_target
     right[start : hold_end + 1] = right_target
     return SkillTrajectory(

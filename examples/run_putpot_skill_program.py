@@ -1194,6 +1194,7 @@ def main() -> None:
         contact_hold_loaded_residual_world_m = None
         contact_hold_retention_local_m = None
         contact_hold_tracking_corrections_local_m = []
+        contact_hold_pick_lift_steps = []
         reference_hold_left_contact_local = None
         reference_hold_right_contact_local = None
         transport_reanchor_steps = []
@@ -1979,12 +1980,36 @@ def main() -> None:
                             "left": contact_hold_retention_local_m.tolist(),
                         }
                     )
+                    from judo_isaaclab.put_pot import (
+                        loaded_contact_hold_lift_step_m,
+                    )
+
+                    hold_lift_step_m = (
+                        loaded_contact_hold_lift_step_m(
+                            target_initial.root_pose,
+                            sample["pot_pose"],
+                        )
+                        if sample["left_grasp"] and sample["right_grasp"]
+                        else 0.0
+                    )
+                    if hold_lift_step_m > 0.0:
+                        contact_hold_pick_lift_steps.append(
+                            {
+                                "step": step,
+                                "object_local_lift_step_m": hold_lift_step_m,
+                                "observed_lift_m": float(
+                                    np.asarray(sample["pot_pose"])[2]
+                                    - target_initial.root_pose[2]
+                                ),
+                            }
+                        )
                     trajectory = reanchor_bimanual_contact_hold(
                         trajectory,
                         step,
                         sample["pot_pose"],
                         retained_hold_left_contact_local,
                         reference_hold_right_contact_local,
+                        object_local_lift_step_m=hold_lift_step_m,
                     )
                     if step + 1 == grasp_complete_step:
                         from judo_isaaclab.put_pot import (
@@ -2832,6 +2857,7 @@ def main() -> None:
                 "contact_hold_tracking_corrections_local_m": (
                     contact_hold_tracking_corrections_local_m
                 ),
+                "contact_hold_pick_lift_steps": contact_hold_pick_lift_steps,
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None
                 ),
