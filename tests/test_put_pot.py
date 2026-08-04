@@ -1048,9 +1048,10 @@ def test_vertical_rise_finishes_inside_measured_contact_window():
 def test_loaded_vertical_rise_uses_attempt026_remaining_contact_budget():
     # Both contacts latched at step 234 and transport began after step 296, so
     # 62 of the 80 geometry-conditioned retention steps were already consumed.
+    # Finish in the first half and retain the second half for controller lag.
     fraction = remaining_contact_vertical_rise_fraction(288, 80, 62)
-    assert fraction == pytest.approx(18 / 288)
-    assert int(np.ceil(288 * fraction)) == 18
+    assert fraction == pytest.approx(9 / 288)
+    assert int(np.ceil(288 * fraction)) == 9
     assert remaining_contact_vertical_rise_fraction(288, 80, 100) == pytest.approx(
         8 / 288
     )

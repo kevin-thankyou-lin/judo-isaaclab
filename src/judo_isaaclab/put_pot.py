@@ -377,9 +377,13 @@ def remaining_contact_vertical_rise_fraction(
         raise ValueError("minimum_rise_steps must be positive")
     if contact_budget_steps == 0:
         return 1.0
+    remaining_contact_steps = max(0, contact_budget_steps - loaded_hold_steps)
+    # Use the first half for the commanded rise and reserve the second half for
+    # CPU Cartesian tracking lag.  Attempt_028 remained 1.5 mm below the pick
+    # threshold after three of eighteen rise steps despite two valid grasps.
     rise_steps = max(
         min(minimum_rise_steps, transport_steps),
-        contact_budget_steps - loaded_hold_steps,
+        int(np.ceil(0.5 * remaining_contact_steps)),
     )
     return float(min(1.0, rise_steps / transport_steps))
 
