@@ -1060,7 +1060,10 @@ def main() -> None:
         target_cooktop_geometry = _geometry(
             target_assets["cooktop"], target["cooktop_pose"][0]
         )
-        from judo_isaaclab.put_pot import loaded_pick_height_for_support_clearance
+        from judo_isaaclab.put_pot import (
+            loaded_pick_height_for_support_clearance,
+            minimum_cooktop_clearance_m,
+        )
 
         loaded_pick_height_m = loaded_pick_height_for_support_clearance(
             target_geometry.root_pose,
