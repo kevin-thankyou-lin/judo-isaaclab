@@ -1207,6 +1207,8 @@ def main() -> None:
         contact_hold_pick_lift_command_m = 0.0
         contact_hold_pick_recovery_correction_m = 0.0
         contact_hold_pick_recovery_steps = []
+        coded_pick_hold_retime_step = None
+        coded_pick_hold_removed_steps = 0
         reference_hold_left_contact_local = None
         reference_hold_right_contact_local = None
         transport_reanchor_steps = []
@@ -2078,6 +2080,24 @@ def main() -> None:
                             CONTACT_HOLD_SUPPORT_ALIGNMENT_FRACTION
                         ),
                     )
+                    if (
+                        sample["stage1"]
+                        and sample["left_grasp"]
+                        and sample["right_grasp"]
+                        and step + 1 < grasp_complete_step
+                    ):
+                        from judo_isaaclab.put_pot import (
+                            finish_contact_hold_after_coded_pick,
+                        )
+
+                        (
+                            trajectory,
+                            coded_pick_hold_removed_steps,
+                        ) = finish_contact_hold_after_coded_pick(
+                            trajectory, step
+                        )
+                        grasp_complete_step = step + 1
+                        coded_pick_hold_retime_step = step
                     if step + 1 == grasp_complete_step:
                         from judo_isaaclab.put_pot import (
                             remaining_contact_vertical_rise_fraction,
@@ -2922,6 +2942,10 @@ def main() -> None:
                 "contact_hold_pick_lift_steps": contact_hold_pick_lift_steps,
                 "contact_hold_pick_recovery_steps": (
                     contact_hold_pick_recovery_steps
+                ),
+                "coded_pick_hold_retime_step": coded_pick_hold_retime_step,
+                "coded_pick_hold_removed_steps": (
+                    coded_pick_hold_removed_steps
                 ),
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None

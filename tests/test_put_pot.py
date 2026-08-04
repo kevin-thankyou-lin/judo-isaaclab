@@ -27,6 +27,7 @@ from judo_isaaclab.put_pot import (
     center_handle_between_finger_pads,
     cooktop_center_error_m,
     expand_handle_pregrasp_clearance,
+    finish_contact_hold_after_coded_pick,
     geometry_conditioned_grasp_hold_steps,
     geometry_conditioned_loaded_jaw_rotation_fraction,
     geometry_gated_milestone_reanchor,
@@ -1963,6 +1964,43 @@ def test_putpot_program_is_one_continuous_named_bimanual_rollout():
         "unload_release",
         "stable_settle",
     }
+
+
+def test_coded_pick_retime_removes_only_unused_contact_hold():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1),
+        _pose(0.1, 1.0),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=2,
+        contact_hold_steps=10,
+    )
+    program.smooth_bimanual_transport_to_center(
+        _pose(z=0.2),
+        _pose(x=0.3, z=0.2),
+        _pose(0.2),
+        _pose(0.2, 1.0),
+        [0.2, 0.2, 0.2],
+        RigidSupportGeometry(_pose(0.3), [0.5, 0.5, 0.1]),
+        steps=8,
+        collision_clearance_m=0.01,
+    )
+    trajectory = program.build()
+    old_hold = trajectory.waypoint_steps["bimanual_contact_hold"]
+    old_transport = trajectory.waypoint_steps["smooth_transport"]
+    current = old_hold - 6
+
+    retimed, removed = finish_contact_hold_after_coded_pick(
+        trajectory, current
+    )
+
+    assert removed == 5
+    assert retimed.waypoint_steps["bimanual_contact_hold"] == current + 1
+    assert retimed.waypoint_steps["smooth_transport"] == old_transport - 5
+    assert len(retimed.left_poses) == len(trajectory.left_poses) - 5
 
 
 def test_center_feedback_reanchors_only_support_lowering_and_release():

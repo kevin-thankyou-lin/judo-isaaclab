@@ -2183,6 +2183,55 @@ def reanchor_bimanual_contact_hold(
     )
 
 
+def finish_contact_hold_after_coded_pick(
+    trajectory: SkillTrajectory, current_step: int
+) -> tuple[SkillTrajectory, int]:
+    """Start transport immediately after the coded bimanual pick latch.
+
+    Geometry-conditioned hold capacity remains available for difficult jaws,
+    but it is a maximum rather than a mandatory delay.  Once the task has
+    already observed its consecutive contact-backed pick window, retaining a
+    loaded pot in place only consumes the measured contact budget.
+    """
+
+    old_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
+    if old_end is None:
+        raise ValueError("trajectory has no bimanual contact hold")
+    if current_step < 0 or current_step >= old_end:
+        raise ValueError("current_step is outside the bimanual contact hold")
+    new_end = current_step + 1
+    removed = old_end - new_end
+    if removed <= 0:
+        return trajectory, 0
+
+    def shortened(values: np.ndarray) -> np.ndarray:
+        return np.concatenate(
+            (values[: new_end + 1], values[old_end + 1 :]), axis=0
+        )
+
+    steps = {}
+    for name, value in trajectory.waypoint_steps.items():
+        if name == "bimanual_contact_hold":
+            steps[name] = new_end
+        elif value > old_end:
+            steps[name] = value - removed
+        else:
+            steps[name] = value
+    return (
+        SkillTrajectory(
+            left_poses=shortened(trajectory.left_poses),
+            right_poses=shortened(trajectory.right_poses),
+            grippers=shortened(trajectory.grippers),
+            stage_names=(
+                trajectory.stage_names[: new_end + 1]
+                + trajectory.stage_names[old_end + 1 :]
+            ),
+            waypoint_steps=steps,
+        ),
+        removed,
+    )
+
+
 def compensate_retained_contact_tracking(
     reference_contact_local: Any,
     observed_pot_pose: Any,
