@@ -319,6 +319,9 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.069219, 0.061195, 0.020012],
         0,
     ) == 122
+    # The strict accepted peer-contact control (PutPot031) also uses 120
+    # smooth transport steps.  Preserve the complete minimum-jerk path while
+    # capping only its sampling horizon to the loaded-contact budget.
     assert contact_budget_transport_steps(365, 80) == 120
     assert contact_budget_transport_steps(50, 80) == 50
     assert contact_budget_transport_steps(180, 0) == 180
