@@ -7,6 +7,7 @@ from judo_isaaclab.putpot_runtime import (
     ensure_fresh_output_paths,
     full_render_required_for_merge,
     render_recommendation,
+    without_scene_camera_sensors,
 )
 
 
@@ -72,3 +73,25 @@ def test_render_recommendation_is_narrow_and_merge_requires_full_video():
         },
     }
     assert full_render_required_for_merge(rendered)
+
+
+def test_camera_free_scene_policy_removes_sensors_and_restores_builder():
+    class Scene:
+        def build_from_spec(self, spec):
+            for name in spec.camera_names:
+                setattr(self, f"{name}_camera", object())
+            return "built"
+
+    class Spec:
+        camera_names = ("top", "left_wrist")
+
+    original = Scene.build_from_spec
+    scene = Scene()
+    with without_scene_camera_sensors(Scene):
+        assert scene.build_from_spec(Spec()) == "built"
+        assert scene.top_camera is None
+        assert scene.left_wrist_camera is None
+    assert Scene.build_from_spec is original
+    fresh = Scene()
+    fresh.build_from_spec(Spec())
+    assert fresh.top_camera is not None

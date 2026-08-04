@@ -10,6 +10,7 @@ inter-stage reset.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -1025,6 +1026,7 @@ def main(argv: list[str] | None = None) -> None:
         AttemptIdentity,
         PhaseTimers,
         ensure_fresh_output_paths,
+        without_scene_camera_sensors,
     )
 
     args = _parser(argv)
@@ -1131,21 +1133,29 @@ def main(argv: list[str] | None = None) -> None:
             observation_modalities = ["proprioception"] + (
                 ["rgb"] if args.render else []
             )
-            env = create_task_environment(
-                task_name="PutPotOnCooktop-v0",
-                assets_instance_paths=target_assets,
-                objects_randomization=None,
-                init_joint_pos_randomization=0.0,
-                mode="replay",
-                device=args.device,
-                observation_modalities=observation_modalities,
-                enable_self_collisions=False,
-                camera_width=args.camera_width,
-                camera_height=args.camera_height,
-                image_downsample_factor=1,
-                enable_gripper_grasp_clamp=False,
-                enable_grasp_ray_viz=False,
+            from dc_study.envs.yam_bimanual_scene import YamBimanualSceneCfg
+
+            camera_policy = (
+                nullcontext()
+                if args.render
+                else without_scene_camera_sensors(YamBimanualSceneCfg)
             )
+            with camera_policy:
+                env = create_task_environment(
+                    task_name="PutPotOnCooktop-v0",
+                    assets_instance_paths=target_assets,
+                    objects_randomization=None,
+                    init_joint_pos_randomization=0.0,
+                    mode="replay",
+                    device=args.device,
+                    observation_modalities=observation_modalities,
+                    enable_self_collisions=False,
+                    camera_width=args.camera_width,
+                    camera_height=args.camera_height,
+                    image_downsample_factor=1,
+                    enable_gripper_grasp_clamp=False,
+                    enable_grasp_ray_viz=False,
+                )
             timers.add("asset_env_load", time.monotonic() - env_load_started)
             if args.persistent_session:
                 _PERSISTENT_RUNTIME = {

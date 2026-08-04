@@ -119,3 +119,29 @@ def full_render_required_for_merge(result: dict[str, Any]) -> bool:
         and checks.get("h264_nonempty") is True
         and checks.get("fully_decodable") is True
     )
+
+
+@contextmanager
+def without_scene_camera_sensors(scene_cfg_type: type[Any]) -> Iterator[None]:
+    """Temporarily make a Gear scene builder omit every camera sensor config.
+
+    Gear builds scene sensors independently from observation terms.  AppLauncher
+    can therefore disable cameras only after this environment-level policy has
+    replaced the freshly rebuilt sensor configs with ``None``.  The class method
+    is restored immediately after environment construction; the constructed
+    scene keeps its camera-free config.
+    """
+
+    original = scene_cfg_type.build_from_spec
+
+    def build_without_cameras(scene: Any, spec: Any) -> Any:
+        result = original(scene, spec)
+        for name in spec.camera_names:
+            setattr(scene, f"{name}_camera", None)
+        return result
+
+    scene_cfg_type.build_from_spec = build_without_cameras
+    try:
+        yield
+    finally:
+        scene_cfg_type.build_from_spec = original
