@@ -81,6 +81,12 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
 ):
     module = _module()
     monkeypatch.setattr(module, "_git_head", lambda: "candidate-head")
+    revised_spec = tmp_path / "revised_spec.json"
+    revised = json.loads(
+        (module.REPO_ROOT / "configs/putpot_semantic_program_v3.json").read_text()
+    )
+    revised["parameters"]["receiving_jaw_reorientation_fraction"] = 0.9
+    revised_spec.write_text(json.dumps(revised))
 
     def fake_command(*args, output, **kwargs):
         return [
@@ -118,6 +124,15 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
                 request = attempts[0]
                 assert "--render" not in request["argv"]
                 assert "--video" not in request["argv"]
+                submitted_spec = json.loads(
+                    Path(request["program_spec_json"]).read_text()
+                )
+                assert (
+                    submitted_spec["parameters"][
+                        "receiving_jaw_reorientation_fraction"
+                    ]
+                    == 0.9
+                )
                 with open(self.receipt_path, "a", encoding="utf-8") as stream:
                     stream.write(
                         json.dumps(
@@ -175,6 +190,7 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
         gear_repo="/gear",
         attempt_limit=4,
         repair_epoch="epoch-a",
+        initial_program_spec_json=revised_spec,
     )
 
     assert [attempt["status"] for attempt in attempts] == [

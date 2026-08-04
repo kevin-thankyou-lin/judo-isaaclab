@@ -614,6 +614,7 @@ def _putpot_worker_visit(
     gear_repo: str,
     attempt_limit: int,
     repair_epoch: str,
+    initial_program_spec_json: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Run an interactive spec-revision queue in one no-camera Isaac worker."""
 
@@ -671,7 +672,11 @@ def _putpot_worker_visit(
         "--receipt-jsonl",
         str(receipt_path),
     ]
-    default_spec = REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+    default_spec = (
+        Path(initial_program_spec_json)
+        if initial_program_spec_json is not None
+        else REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+    )
     attempts: list[dict[str, Any]] = []
     consumed_receipts = 0
     worker_returncode = None
@@ -848,6 +853,7 @@ def main() -> None:
     parser.add_argument("--pair", action="append")
     parser.add_argument("--max-pairs", type=int)
     parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=4)
+    parser.add_argument("--putpot-initial-program-spec-json")
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
@@ -893,6 +899,7 @@ def main() -> None:
                 gear_repo=args.gear_repo,
                 attempt_limit=visit_attempt_limit,
                 repair_epoch=repair_epoch,
+                initial_program_spec_json=args.putpot_initial_program_spec_json,
             )
         else:
             visit_attempts = []
