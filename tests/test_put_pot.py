@@ -672,9 +672,9 @@ def test_loaded_gripper_hold_covers_measured_jaw_centering_horizon():
     trajectory = program.build()
     step = trajectory.waypoint_steps["right_handle_grasp"] + 10
     retimed, hold_steps = retime_loaded_gripper_close_for_pad_reseat(
-        trajectory, step, 0.0828290903209271, reseat_step_m=0.002
+        trajectory, step, 0.0828290903209271
     )
-    assert hold_steps == 42
+    assert hold_steps == 83
     assert retimed.grippers[step : step + hold_steps + 1, 0] == pytest.approx(
         trajectory.grippers[step, 0]
     )

@@ -1826,12 +1826,12 @@ def main(argv: list[str] | None = None) -> None:
                             ),
                         )
                     )
+                    # The receiving wrist is loaded against one pad here.
+                    # Retain the conservative 1 mm/control-step horizon for
+                    # measured jaw translations as well as pad reseating;
+                    # the 2 mm horizon closed before the CPU IK caught up on
+                    # long, object-local corrections.
                     gripper_retime_step_m = 0.001
-                    if (
-                        peer_contact_latch_centering_translation_m > 0.0
-                        or abs(peer_contact_jaw_center_translation_m) > 0.0
-                    ):
-                        gripper_retime_step_m = 0.002
                     trajectory, gripper_hold_steps = (
                         retime_loaded_gripper_close_for_pad_reseat(
                             trajectory,

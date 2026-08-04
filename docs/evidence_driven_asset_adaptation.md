@@ -156,7 +156,8 @@ arbitrary Python changes, a changed asset pair, device, camera capability, or
 code commit are worker boundaries and require a new process.
 
 A measured receiving-jaw translation also retimes the close command by its
-object-local distance, keeping the jaw open while the wrist tracks the correction.
+object-local distance at the conservative 1 mm/control-step loaded-contact
+horizon, keeping the jaw open while the wrist tracks the correction.
 
 Every attempt records both its immutable lifetime attempt number and its
 one-based repair-epoch cycle number. The epoch limit is four diagnose-to-repair
