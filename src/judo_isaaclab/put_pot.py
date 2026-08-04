@@ -1161,6 +1161,7 @@ def reanchor_missing_finger_contact(
     finger_pad_centers_world: Any,
     signed_correction_m: float,
     *,
+    gripper_pose_world: Any | None = None,
     contact_threshold_n: float = 0.1,
     step_m: float = MISSING_FINGER_CONTACT_STEP_M,
     limit_m: float = MISSING_FINGER_CONTACT_LIMIT_M,
@@ -1200,12 +1201,20 @@ def reanchor_missing_finger_contact(
     jaw_axis = centers[1] - centers[0]
     jaw_norm = float(np.linalg.norm(jaw_axis))
     if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
-        # Pot020 attempt 011 showed that the two pad centers converge to only
-        # 3.4 mm while the fingers close.  Their normalized difference is no
-        # longer a physical jaw direction then and drove the fixed contact
-        # target away from the handle.  Keep the last valid object-to-gripper
-        # frame once the measured jaw aperture falls below 50 mm.
-        return local.copy(), float(signed_correction_m)
+        if gripper_pose_world is None:
+            # Preserve the conservative legacy behavior when the caller does
+            # not have a measured wrist pose from which to recover the fixed
+            # YAM jaw geometry.
+            return local.copy(), float(signed_correction_m)
+        gripper = _pose(gripper_pose_world, "gripper_pose_world")
+        # The authored pivot vector points from finger 1 to finger 0 in the
+        # YAM wrist frame, opposite the observed centers[1] - centers[0]
+        # convention above.  Unlike nearly coincident pad centers, this fixed
+        # robot-local axis remains well conditioned after closure.
+        jaw_axis = -quaternion_rotate(
+            gripper[3:], YAM_FINGER_SEPARATION_LOCAL_M
+        )
+        jaw_norm = float(np.linalg.norm(jaw_axis))
     world[:3] += delta * jaw_axis / jaw_norm
     return compose_pose(inverse_pose(root), world), updated
 

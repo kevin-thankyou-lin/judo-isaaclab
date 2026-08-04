@@ -1026,6 +1026,19 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     assert collapsed == pytest.approx(contact)
     assert signed == pytest.approx(0.012)
 
+    closed_jaw, signed = reanchor_missing_finger_contact(
+        contact,
+        root,
+        [2.0, 0.0],
+        [[0.0, 0.0, 0.0], [0.0034, 0.0, 0.0]],
+        0.0,
+        gripper_pose_world=_pose(),
+    )
+    expected_axis = -YAM_FINGER_SEPARATION_LOCAL_M
+    expected_axis /= np.linalg.norm(expected_axis)
+    assert closed_jaw[:3] == pytest.approx(-0.001 * expected_axis)
+    assert signed == pytest.approx(-0.001)
+
 
 def test_positive_imbalance_half_thickness_handle_closes_proven_right_first():
     source = [0.059453, 0.085784, 0.040560]

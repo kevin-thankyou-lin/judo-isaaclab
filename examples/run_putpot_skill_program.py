@@ -1811,6 +1811,7 @@ def main() -> None:
                             sample[f"{arm}_finger_forces_n"],
                             sample[f"{arm}_pad_centers_world"],
                             missing_finger_corrections[arm],
+                            gripper_pose_world=sample[f"{arm}_eef_pose"],
                         )
                     )
                     contact, missing_finger_depth_corrections[arm] = (
@@ -1999,6 +2000,7 @@ def main() -> None:
                             sample["left_finger_forces_n"],
                             sample["left_pad_centers_world"],
                             contact_hold_pick_recovery_correction_m,
+                            gripper_pose_world=sample["left_eef_pose"],
                         )
                         contact_hold_pick_recovery_steps.append(
                             {
