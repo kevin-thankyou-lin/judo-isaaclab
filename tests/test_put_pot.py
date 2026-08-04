@@ -1890,8 +1890,14 @@ def test_retained_contact_tracking_changes_only_next_left_transport_command():
         trajectory, step, observed_pot, retained_left_contact
     )
 
+    planned_delta = compose_pose(
+        original_right[step + 1], inverse_pose(original_right[step])
+    )
     assert tracked.left_poses[step + 1] == pytest.approx(
-        compose_pose(observed_pot, retained_left_contact)
+        compose_pose(
+            planned_delta,
+            compose_pose(observed_pot, retained_left_contact),
+        )
     )
     assert tracked.left_poses[: step + 1] == pytest.approx(
         original_left[: step + 1]

@@ -1215,7 +1215,6 @@ def main() -> None:
         transport_reanchor_evaluation_steps = []
         transport_reanchor_signed_residuals_world_m = []
         transport_reanchor_rejections = []
-        transport_authored_jaw_recovery_steps = []
         transport_reference_left_contact_local = None
         transport_reference_right_contact_local = None
         transport_expected_left_tracking_residual_local = None
@@ -2417,31 +2416,8 @@ def main() -> None:
                 and sample["right_grasp"]
             ):
                 from judo_isaaclab.put_pot import (
-                    reanchor_handle_jaw_center_step,
                     track_retained_contact_from_observed_object,
                 )
-
-                if not sample["left_grasp"]:
-                    observed_left_contact_local = compose_pose(
-                        inverse_pose(sample["pot_pose"]),
-                        sample["left_eef_pose"],
-                    )
-                    (
-                        transport_reference_left_contact_local,
-                        authored_jaw_residual_m,
-                        authored_jaw_applied_m,
-                    ) = reanchor_handle_jaw_center_step(
-                        observed_left_contact_local,
-                        sample["pot_pose"],
-                        target_left_handle_points,
-                    )
-                    transport_authored_jaw_recovery_steps.append(
-                        {
-                            "step": step,
-                            "signed_residual_m": authored_jaw_residual_m,
-                            "applied_m": authored_jaw_applied_m,
-                        }
-                    )
                 observed_left_contact_local = compose_pose(
                     inverse_pose(sample["pot_pose"]),
                     sample["left_eef_pose"],
@@ -3006,9 +2982,6 @@ def main() -> None:
                 ),
                 "loaded_transport_contact_tracking": (
                     loaded_transport_contact_tracking
-                ),
-                "transport_authored_jaw_recovery_steps": (
-                    transport_authored_jaw_recovery_steps
                 ),
                 "center_slide_reanchor_steps": center_slide_reanchor_steps,
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,

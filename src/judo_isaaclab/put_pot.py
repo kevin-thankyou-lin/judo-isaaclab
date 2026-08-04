@@ -2393,11 +2393,10 @@ def track_retained_contact_from_observed_object(
 ) -> SkillTrajectory:
     """Track one retained contact without restarting the transport path.
 
-    The opposite arm continues to execute the authored smooth transport.  Only
-    the next command for this arm is composed from the current observed object
-    pose and its retained object-local contact frame.  Recomputing this after
-    every simulator observation prevents planned-versus-observed object lag
-    from unloading a contact while preserving one continuous rollout.
+    The opposite arm continues to execute the authored smooth transport.  The
+    next command is composed from the current observed contact plus the coded
+    next-step rigid motion of the opposite arm.  Using only the current object
+    pose leaves this arm exactly one controller step behind a moving object.
     """
 
     transport_end = trajectory.waypoint_steps.get("smooth_transport")
@@ -2411,10 +2410,15 @@ def track_retained_contact_from_observed_object(
     if step < grasp_end or step >= transport_end:
         raise ValueError("retained contact tracking step is outside transport")
     left = trajectory.left_poses.copy()
-    left[step + 1] = compose_pose(
+    observed_contact = compose_pose(
         _pose(observed_object_pose, "observed_object_pose"),
         _pose(retained_contact_local, "retained_contact_local"),
     )
+    planned_world_delta = compose_pose(
+        trajectory.right_poses[step + 1],
+        inverse_pose(trajectory.right_poses[step]),
+    )
+    left[step + 1] = compose_pose(planned_world_delta, observed_contact)
     return SkillTrajectory(
         left_poses=left,
         right_poses=trajectory.right_poses.copy(),
