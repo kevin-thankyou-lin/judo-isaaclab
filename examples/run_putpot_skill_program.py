@@ -1986,7 +1986,7 @@ def main() -> None:
 
                     hold_lift_step_m = (
                         loaded_contact_hold_lift_step_m(
-                            target_initial.root_pose,
+                            target_geometry.root_pose,
                             sample["pot_pose"],
                         )
                         if sample["left_grasp"] and sample["right_grasp"]
@@ -1999,7 +1999,7 @@ def main() -> None:
                                 "object_local_lift_step_m": hold_lift_step_m,
                                 "observed_lift_m": float(
                                     np.asarray(sample["pot_pose"])[2]
-                                    - target_initial.root_pose[2]
+                                    - target_geometry.root_pose[2]
                                 ),
                             }
                         )
