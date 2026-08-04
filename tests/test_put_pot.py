@@ -5,6 +5,7 @@ import pytest
 from judo_isaaclab.put_marker import _slerp
 
 from judo_isaaclab.put_pot import (
+    bounded_receiving_jaw_reorientation,
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
     TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
@@ -779,6 +780,45 @@ def test_loaded_jaw_orientation_centers_handle_around_contacting_pad():
     assert handle_jaw_center_offset_m(
         centered, _pose(), handle_points
     ) == pytest.approx(0.0, abs=1.0e-12)
+
+
+def test_receiving_jaw_reorientation_bounds_large_centering_residual():
+    observed = _pose()
+    loaded = _pose(x=0.02)
+    pad_centers = [[0.0, -0.04, 0.0], [0.0, 0.04, 0.0]]
+    oriented, angle, pivoted, fraction = bounded_receiving_jaw_reorientation(
+        observed,
+        loaded,
+        [0.0, 8.0],
+        pad_centers,
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        0.055,
+    )
+    expected, expected_angle = twist_jaw_away_from_limited_axis(
+        loaded,
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        rotation_fraction=LOADED_JAW_REACH_AVOIDANCE_FRACTION,
+    )
+    assert fraction == pytest.approx(LOADED_JAW_REACH_AVOIDANCE_FRACTION)
+    assert not pivoted
+    assert angle == pytest.approx(expected_angle)
+    assert oriented == pytest.approx(expected)
+
+
+def test_receiving_jaw_reorientation_leaves_centered_target_unchanged():
+    pose = _pose(x=0.02)
+    oriented, angle, pivoted, fraction = bounded_receiving_jaw_reorientation(
+        _pose(),
+        pose,
+        [0.0, 8.0],
+        [[0.0, -0.04, 0.0], [0.0, 0.04, 0.0]],
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        0.002,
+    )
+    assert fraction == 0.0
+    assert not pivoted
+    assert angle == pytest.approx(0.0)
+    assert oriented == pytest.approx(pose)
 
 
 def test_loaded_pad_tracking_reanchors_only_next_left_wrist_target():

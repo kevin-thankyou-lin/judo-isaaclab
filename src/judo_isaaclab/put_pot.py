@@ -1035,6 +1035,47 @@ def twist_loaded_jaw_about_observed_contact(
     return twisted, angle, True
 
 
+def bounded_receiving_jaw_reorientation(
+    observed_pose: Any,
+    loaded_target_pose: Any,
+    finger_forces_n: Any,
+    finger_pad_centers_world: Any,
+    pad_axes_world: Any,
+    jaw_center_residual_m: float,
+    *,
+    jaw_center_tolerance_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
+) -> tuple[np.ndarray, float, bool, float]:
+    """Apply only the proven bounded wrist twist while one pad is loaded.
+
+    A large authored jaw-center residual is a translation error, not evidence
+    that the receiving arm should copy an arbitrary peer-wrist orientation.
+    Keep the reach-avoidance turn at its bounded base fraction and leave the
+    subsequent measured jaw-centering loop free to translate the target.  A
+    jaw already centered within the geometric margin needs no turn at all.
+    """
+
+    if not np.isfinite(jaw_center_residual_m):
+        raise ValueError("jaw_center_residual_m must be finite")
+    if not np.isfinite(jaw_center_tolerance_m) or jaw_center_tolerance_m < 0.0:
+        raise ValueError(
+            "jaw_center_tolerance_m must be finite and nonnegative"
+        )
+    fraction = (
+        0.0
+        if abs(jaw_center_residual_m) <= jaw_center_tolerance_m
+        else LOADED_JAW_REACH_AVOIDANCE_FRACTION
+    )
+    oriented, angle, pivoted = twist_loaded_jaw_about_observed_contact(
+        observed_pose,
+        loaded_target_pose,
+        finger_forces_n,
+        finger_pad_centers_world,
+        pad_axes_world,
+        fraction,
+    )
+    return oriented, angle, pivoted, fraction
+
+
 def orient_loaded_jaw_around_authored_handle(
     observed_pose: Any,
     loaded_target_pose: Any,

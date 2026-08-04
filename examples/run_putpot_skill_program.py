@@ -1655,17 +1655,14 @@ def main(argv: list[str] | None = None) -> None:
                     reanchor_missing_finger_contact,
                     reanchor_missing_finger_pad_depth,
                     reanchor_single_contact_pad_fraction,
-                        geometry_conditioned_loaded_jaw_rotation_fraction,
-                        peer_contact_gripper_reseat_distance_m,
-                        retime_loaded_gripper_close_for_pad_reseat,
+                    peer_contact_gripper_reseat_distance_m,
+                    retime_loaded_gripper_close_for_pad_reseat,
                     single_contact_pad_base_residual_m,
-                    twist_loaded_jaw_about_observed_contact,
                     preserve_loaded_contact_target,
                     peer_contact_latch_supported,
                     single_finger_contact_observed,
                     track_bimanual_handle_targets,
                     track_loaded_pad_center_from_observation,
-                    LOADED_JAW_REACH_AVOIDANCE_FRACTION,
                     single_contact_pad_reseat_saturated,
                 )
 
@@ -1747,8 +1744,8 @@ def main(argv: list[str] | None = None) -> None:
                     )
                     from judo_isaaclab.put_pot import (
                         HANDLE_PAD_GEOMETRIC_MARGIN_M,
+                        bounded_receiving_jaw_reorientation,
                         handle_jaw_center_offset_m,
-                        orient_loaded_jaw_around_authored_handle,
                     )
 
                     peer_contact_pre_twist_jaw_residual_m = (
@@ -1765,73 +1762,21 @@ def main(argv: list[str] | None = None) -> None:
                     jaw_residual_for_twist_m = (
                         peer_contact_pre_twist_jaw_residual_m
                     )
-                    if not peer_contact_authored_jaw_center_locked:
-                        latch_pose_before_centering = loaded_left_world.copy()
-                        (
-                            loaded_left_world,
-                            peer_contact_handle_center_rotation_rad,
-                            peer_contact_handle_center_post_pivot_residual_m,
-                        ) = orient_loaded_jaw_around_authored_handle(
-                            sample["left_eef_pose"],
-                            loaded_left_world,
-                            sample["pot_pose"],
-                            target_left_handle_points,
-                            sample["left_finger_forces_n"],
-                            sample["left_pad_centers_world"],
-                            sample["left_pad_axes_world"],
-                        )
-                        peer_contact_latch_centering_applied_m = (
-                            peer_contact_handle_center_post_pivot_residual_m
-                        )
-                        peer_contact_latch_centering_translation_m = float(
-                            np.linalg.norm(
-                                loaded_left_world[:3]
-                                - latch_pose_before_centering[:3]
-                            )
-                        )
-                        jaw_residual_for_twist_m = (
-                            handle_jaw_center_offset_m(
-                                loaded_left_world,
-                                sample["pot_pose"],
-                                target_left_handle_points,
-                            )
-                        )
-                        # The target already pivots about the measured loaded
-                        # pad.  Apply that contact frame directly: repeatedly
-                        # replanning a long interpolation horizon moves the
-                        # pad before the jaw can finish rotating.
-                        milestone_feedback_horizon_steps = 1
-                        peer_contact_pad_reseat_m = (
-                            milestone_open_pad_reseat_m
-                        )
-                        peer_contact_jaw_twist_rad = (
-                            peer_contact_handle_center_rotation_rad
-                        )
-                        peer_contact_jaw_twist_fraction = None
-                        peer_contact_position_locked = False
-                    else:
-                        milestone_feedback_horizon_steps = 1
-                        peer_contact_jaw_twist_fraction = (
-                            geometry_conditioned_loaded_jaw_rotation_fraction(
-                                sample["left_finger_forces_n"],
-                                sample["left_pad_fractions"],
-                                jaw_center_residual_m=(
-                                    jaw_residual_for_twist_m
-                                ),
-                            )
-                        )
-                        (
-                            loaded_left_world,
-                            peer_contact_jaw_twist_rad,
-                            peer_contact_position_locked,
-                        ) = twist_loaded_jaw_about_observed_contact(
-                            sample["left_eef_pose"],
-                            loaded_left_world,
-                            sample["left_finger_forces_n"],
-                            sample["left_pad_centers_world"],
-                            sample["left_pad_axes_world"],
-                            peer_contact_jaw_twist_fraction,
-                        )
+                    milestone_feedback_horizon_steps = 1
+                    peer_contact_pad_reseat_m = milestone_open_pad_reseat_m
+                    (
+                        loaded_left_world,
+                        peer_contact_jaw_twist_rad,
+                        peer_contact_position_locked,
+                        peer_contact_jaw_twist_fraction,
+                    ) = bounded_receiving_jaw_reorientation(
+                        sample["left_eef_pose"],
+                        loaded_left_world,
+                        sample["left_finger_forces_n"],
+                        sample["left_pad_centers_world"],
+                        sample["left_pad_axes_world"],
+                        jaw_residual_for_twist_m,
+                    )
                     peer_contact_position_locked = bool(
                         peer_contact_position_locked
                         or peer_contact_authored_jaw_center_locked
