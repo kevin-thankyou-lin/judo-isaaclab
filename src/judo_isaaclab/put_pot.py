@@ -588,7 +588,14 @@ def reinforce_loaded_contact_for_motion(
     *,
     requested_preload_m: float = LOADED_CONTACT_MOTION_PRELOAD_M,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Add bounded preload along a measured object-local compression residual."""
+    """Rebase on measured contact and retain a bounded compression preload.
+
+    A loaded jaw can carry the object far from the contact pose authored before
+    closing.  The observed object-local contact is therefore the authority at
+    the transport boundary; the older command contributes only its compression
+    direction.  This keeps the first transport target continuous while still
+    loading the handle by a geometry-bounded amount.
+    """
 
     contact = _pose(contact_local, "contact_local")
     observed = _pose(observed_contact_local, "observed_contact_local")
@@ -602,15 +609,16 @@ def reinforce_loaded_contact_for_motion(
     residual = contact[:3] - observed[:3]
     norm = float(np.linalg.norm(residual))
     if norm <= 1.0e-9 or requested_preload_m == 0.0:
-        return contact.copy(), np.zeros(3, dtype=np.float64)
+        return observed.copy(), np.zeros(3, dtype=np.float64)
     transverse = [axis for axis in range(3) if axis != handle_axis]
     preload_m = min(
         requested_preload_m,
         0.5 * min(float(size[axis]) for axis in transverse),
     )
     preload = preload_m * residual / norm
-    result = contact.copy()
+    result = observed.copy()
     result[:3] += preload
+    result[3:] = contact[3:]
     return result, preload
 
 

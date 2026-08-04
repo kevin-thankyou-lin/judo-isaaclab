@@ -880,7 +880,8 @@ def test_motion_preload_follows_loaded_residual_and_handle_geometry():
         0,
     )
     assert preload == pytest.approx([0.006, 0.0, 0.0])
-    assert reinforced[:3] == pytest.approx([0.126, 0.20, 0.30])
+    assert reinforced[:3] == pytest.approx([0.106, 0.20, 0.30])
+    assert reinforced[3:] == pytest.approx(loaded[3:])
 
     bounded, bounded_preload = reinforce_loaded_contact_for_motion(
         loaded,
@@ -889,7 +890,26 @@ def test_motion_preload_follows_loaded_residual_and_handle_geometry():
         0,
     )
     assert np.linalg.norm(bounded_preload) == pytest.approx(0.004)
-    assert bounded[0] == pytest.approx(0.124)
+    assert bounded[0] == pytest.approx(0.104)
+
+
+def test_motion_preload_rebases_stale_attempt024_contact_on_observation():
+    # attempt_024 reached a physical bimanual grasp, but the contact authored
+    # before closing was 8.7 cm from the measured object-local jaw at transport
+    # entry.  Only the direction, not that stale displacement, may survive.
+    observed = _pose()
+    loaded = _pose(0.055869096, 0.007902598, 0.066114762)
+    reinforced, preload = reinforce_loaded_contact_for_motion(
+        loaded,
+        observed,
+        [0.057326, 0.083289, 0.021211],
+        0,
+    )
+
+    assert np.linalg.norm(loaded[:3] - observed[:3]) > 0.08
+    assert np.linalg.norm(preload) == pytest.approx(0.006)
+    assert reinforced[:3] == pytest.approx(preload)
+    assert np.linalg.norm(reinforced[:3] - observed[:3]) < 0.01
 
 
 def test_loaded_transport_reference_opposes_drift_without_becoming_observation():
