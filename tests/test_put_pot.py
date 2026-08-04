@@ -77,6 +77,7 @@ from judo_isaaclab.put_pot import (
     track_bimanual_handle_targets,
     track_loaded_pad_center_from_observation,
     track_retained_contact_from_observed_object,
+    transfer_peer_contact_pose_in_receiving_jaw_frame,
     twist_jaw_away_from_limited_axis,
     twist_loaded_jaw_about_observed_contact,
     transfer_handle_approach_orientation,
@@ -805,6 +806,37 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
 
     assert offset != pytest.approx(0.0)
     assert result[3:] == pytest.approx(left_pose[3:])
+    assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
+        0.0, abs=1.0e-9
+    )
+
+
+def test_observed_peer_contact_transfers_full_pose_before_receiving_jaw_centering():
+    right_handle = _pose(x=0.16)
+    left_handle = np.asarray([-0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+    right_pose = np.asarray(
+        [0.16, -0.04, 0.08, 0.92387953, 0.0, 0.0, 0.38268343]
+    )
+    handle_points = np.asarray(
+        [
+            [-0.20, -0.03, -0.02],
+            [-0.20, -0.03, 0.02],
+            [-0.14, 0.01, -0.02],
+            [-0.14, 0.01, 0.02],
+        ]
+    )
+
+    result, offset = transfer_peer_contact_pose_in_receiving_jaw_frame(
+        right_pose,
+        right_handle,
+        left_handle,
+        _pose(),
+        handle_points,
+    )
+    transferred = transfer_pose(right_pose, right_handle, left_handle)
+
+    assert offset != pytest.approx(0.0)
+    assert result[3:] == pytest.approx(transferred[3:])
     assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
         0.0, abs=1.0e-9
     )

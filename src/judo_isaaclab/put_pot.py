@@ -634,6 +634,34 @@ def mirror_handle_position_in_receiving_jaw_frame(
     return center_handle_between_finger_pads(result, offset), offset
 
 
+def transfer_peer_contact_pose_in_receiving_jaw_frame(
+    reference_pose: Any,
+    reference_handle_frame: Any,
+    receiving_handle_frame: Any,
+    pot_root_pose: Any,
+    receiving_handle_points_local: Any,
+) -> tuple[np.ndarray, float]:
+    """Transfer an observed peer contact pose into the receiving handle frame.
+
+    Once one arm has physically latched a matching handle, its complete
+    handle-local wrist relation is stronger evidence than the receiving arm's
+    source-authored orientation.  Transfer that observed relation (position
+    and orientation) across the target pot, then remove the receiving jaw's
+    measured centering residual.  The result remains an object-local controller
+    target; it does not move the pot or either wrist directly.
+    """
+
+    result = transfer_pose(
+        _pose(reference_pose, "reference_pose"),
+        _pose(reference_handle_frame, "reference_handle_frame"),
+        _pose(receiving_handle_frame, "receiving_handle_frame"),
+    )
+    offset = handle_jaw_center_offset_m(
+        result, pot_root_pose, receiving_handle_points_local
+    )
+    return center_handle_between_finger_pads(result, offset), offset
+
+
 def single_finger_contact_observed(
     finger_forces_n: Any,
     pad_fractions: Any,

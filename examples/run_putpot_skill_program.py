@@ -1365,10 +1365,10 @@ def main() -> None:
                 from judo_isaaclab.put_pot import (
                     HANDLE_PAD_DEPTH_MARGIN_M,
                     geometry_conditioned_peer_contact_transfer,
-                    mirror_handle_position_in_receiving_jaw_frame,
                     reanchor_authored_handle_in_observed_jaw,
                     retime_loaded_gripper_close_for_pad_reseat,
                     select_geometry_conditioned_milestone_reanchor,
+                    transfer_peer_contact_pose_in_receiving_jaw_frame,
                 )
 
                 original_left_contact = left_handle_contact.copy()
@@ -1399,10 +1399,9 @@ def main() -> None:
                         else target_parts.positive_handle_frame
                     )
                     candidate_left_world, milestone_jaw_center_residual_m = (
-                        mirror_handle_position_in_receiving_jaw_frame(
+                        transfer_peer_contact_pose_in_receiving_jaw_frame(
                             sample["right_eef_pose"],
                             compose_pose(sample["pot_pose"], right_part_frame),
-                            sample["left_eef_pose"],
                             compose_pose(sample["pot_pose"], left_part_frame),
                             sample["pot_pose"],
                             target_left_handle_points,
