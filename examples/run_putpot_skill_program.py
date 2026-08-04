@@ -2021,7 +2021,11 @@ def main() -> None:
                             remaining_contact_vertical_rise_fraction(
                                 trajectory.waypoint_steps["smooth_transport"]
                                 - step,
-                                peer_contact_hold_steps,
+                                int(
+                                    handle_grasp_geometry["left"][
+                                        "peer_contact_hold_steps"
+                                    ]
+                                ),
                                 (
                                     0
                                     if contact_hold_latch_step is None
