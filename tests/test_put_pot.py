@@ -883,7 +883,7 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
     )
 
 
-def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
+def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():
     right_handle = _pose(x=0.16)
     left_handle = np.asarray([-0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
     right_pose = np.asarray([0.16, -0.04, 0.08, 0.92387953, 0.0, 0.0, 0.38268343])
@@ -912,6 +912,20 @@ def test_target_symmetric_position_transfer_can_preserve_arm_orientation():
 
     assert offset != pytest.approx(0.0)
     assert result[3:] == pytest.approx(left_pose[3:])
+    # The matching peer handle proves the receiving target position, but its
+    # wrist orientation is arm-specific.  Transferring the peer's full pose for
+    # this geometry differs by more than a radian and regressed the receiving
+    # arm from sustained grasps to zero grasp frames.
+    full_pose, _ = transfer_peer_contact_pose_in_receiving_jaw_frame(
+        right_pose,
+        right_handle,
+        left_handle,
+        _pose(),
+        handle_points,
+    )
+    orientation_dot = abs(float(np.dot(result[3:], full_pose[3:])))
+    orientation_error = 2.0 * np.arccos(np.clip(orientation_dot, 0.0, 1.0))
+    assert orientation_error > 1.0
     assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
         0.0, abs=1.0e-9
     )
