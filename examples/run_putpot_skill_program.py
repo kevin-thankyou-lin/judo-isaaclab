@@ -2415,9 +2415,6 @@ def main() -> None:
                 < trajectory.waypoint_steps["smooth_transport"]
                 and sample["right_grasp"]
             ):
-                from judo_isaaclab.put_pot import (
-                    track_retained_contact_from_observed_object,
-                )
                 observed_left_contact_local = compose_pose(
                     inverse_pose(sample["pot_pose"]),
                     sample["left_eef_pose"],
@@ -2438,12 +2435,6 @@ def main() -> None:
                             - transport_reference_left_contact_local[:3]
                         ).tolist(),
                     }
-                )
-                trajectory = track_retained_contact_from_observed_object(
-                    trajectory,
-                    step,
-                    sample["pot_pose"],
-                    transport_reference_left_contact_local,
                 )
             if trajectory is not None and "smooth_transport" in trajectory.waypoint_steps and step == trajectory.waypoint_steps["smooth_transport"]:
                 from judo_isaaclab.put_pot import reanchor_centered_lowering
