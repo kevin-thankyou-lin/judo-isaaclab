@@ -65,11 +65,7 @@ def main() -> None:
                 errors.append("checks.smooth_collision_aware_transport is not true")
             if result_checks.get("transport_no_internal_stops") is not True:
                 errors.append("checks.transport_no_internal_stops is not true")
-            adapted_target = result.get("direct_replay_baseline") is not None
-            if (
-                adapted_target
-                and result_checks.get("bimanual_transport_completed") is not True
-            ):
+            if result_checks.get("bimanual_transport_completed") is not True:
                 errors.append("checks.bimanual_transport_completed is not true")
             transport = result.get("metrics", {}).get("transport_plan", {})
             internal_stops = transport.get("internal_stop_count")

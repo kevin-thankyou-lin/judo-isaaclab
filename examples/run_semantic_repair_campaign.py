@@ -117,13 +117,36 @@ def _semantic_sources(
     return values
 
 
-def _strict_semantic_success(source: dict[str, Any]) -> bool:
+def _requires_putpot_bimanual_transport(
+    task: str | None, source: dict[str, Any]
+) -> bool:
+    """Identify target-direct PutPot repairs governed by the transport gate."""
+
+    return task == "putpot" and source.get("source") == "semantic_repair"
+
+
+def _putpot_bimanual_transport_satisfied(
+    task: str | None, source: dict[str, Any]
+) -> bool:
+    return bool(
+        not _requires_putpot_bimanual_transport(task, source)
+        or source["result"].get("checks", {}).get(
+            "bimanual_transport_completed"
+        )
+        is True
+    )
+
+
+def _strict_semantic_success(
+    source: dict[str, Any], task: str | None = None
+) -> bool:
     result = source["result"]
     return bool(
         result.get("mode") == "skill"
         and result.get("status") == "passed"
         and _task_success(result)
         and all(result.get("acceptance_checks", {}).values())
+        and _putpot_bimanual_transport_satisfied(task, source)
         and result.get("provenance", {}).get("demonstration")
     )
 
@@ -139,10 +162,15 @@ def _preserved_primary_success(primary: dict[str, Any], result: dict[str, Any]) 
     )
 
 
-def _semantic_motion_success(source: dict[str, Any]) -> bool:
+def _semantic_motion_success(
+    source: dict[str, Any], task: str | None = None
+) -> bool:
     from run_replay_success_semantic_audit import semantic_acceptance_satisfied
 
-    return semantic_acceptance_satisfied(source["result"])
+    return bool(
+        _putpot_bimanual_transport_satisfied(task, source)
+        and semantic_acceptance_satisfied(source["result"])
+    )
 
 
 def _validate_demo_receipt(
@@ -268,17 +296,22 @@ def refresh_ledger(
             preserved_primary = _preserved_primary_success(
                 primary_entry, primary_result
             )
-            successes = [source for source in sources if _strict_semantic_success(source)]
+            successes = [
+                source
+                for source in sources
+                if _strict_semantic_success(source, task["name"])
+            ]
             motion_successes = [
                 source
                 for source in sources
-                if not _strict_semantic_success(source) and _semantic_motion_success(source)
+                if not _strict_semantic_success(source, task["name"])
+                and _semantic_motion_success(source, task["name"])
             ]
             failures = [
                 source
                 for source in sources
-                if not _strict_semantic_success(source)
-                and not _semantic_motion_success(source)
+                if not _strict_semantic_success(source, task["name"])
+                and not _semantic_motion_success(source, task["name"])
             ]
             audit_motion_successes = [
                 source
@@ -466,7 +499,8 @@ def _run_pair(
             "result_path": str(result_path),
             "result": result,
             "trace_path": str(attempt_root / "skill_trace.npz"),
-        }
+        },
+        task["name"],
     ):
         demonstration = result["provenance"]["demonstration"]
         attempt["demonstration"] = validate_demo(demonstration["path"], record["assets"])

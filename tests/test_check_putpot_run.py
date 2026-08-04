@@ -72,12 +72,12 @@ def test_checker_rejects_old_edge_biased_putpot_result(tmp_path):
     assert "center error 0.174847 m exceeds 0.03 m" in checked.stderr
 
 
-def test_checker_requires_bimanual_completion_for_adapted_target(tmp_path):
+def test_checker_requires_bimanual_completion_without_embedded_replay(tmp_path):
     checked = _run_checker(
         tmp_path,
         0.02,
         bimanual_transport_completed=False,
-        adapted_target=True,
+        adapted_target=False,
     )
     assert checked.returncode == 2
     assert "checks.bimanual_transport_completed is not true" in checked.stderr

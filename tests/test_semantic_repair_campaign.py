@@ -31,6 +31,29 @@ def test_strict_semantic_success_requires_demo_and_all_acceptance_checks():
     assert not module._strict_semantic_success(source)
 
 
+def test_putpot_semantic_repair_requires_bimanual_transport_without_replay():
+    module = _module()
+    source = {
+        "source": "semantic_repair",
+        "result": {
+            "mode": "skill",
+            "status": "passed",
+            "checks": {
+                "coded_task_success": True,
+                "bimanual_transport_completed": False,
+            },
+            "acceptance_checks": {"coded_task_success": True},
+            "direct_replay_baseline": None,
+            "provenance": {"demonstration": {"path": "/tmp/demo.hdf5"}},
+        },
+    }
+
+    assert not module._strict_semantic_success(source, "putpot")
+    assert not module._semantic_motion_success(source, "putpot")
+    source["result"]["checks"]["bimanual_transport_completed"] = True
+    assert module._strict_semantic_success(source, "putpot")
+
+
 def test_failed_acceptance_check_is_diagnosed_even_if_task_success_was_seen():
     module = _module()
     source = {

@@ -2774,12 +2774,6 @@ def main() -> None:
             acceptance_checks["expected_coded_task_failure"] = not bool(final["task_success"])
         else:
             acceptance_checks = checks
-            if trajectory is not None and direct_replay is None:
-                # Source proof validates the smooth semantic program and coded
-                # task success.  Full bimanual retention is the adaptation gate
-                # for the selected replay-failing target below.
-                acceptance_checks = dict(acceptance_checks)
-                acceptance_checks.pop("bimanual_transport_completed")
             if direct_replay is not None:
                 acceptance_checks = dict(acceptance_checks)
                 acceptance_checks["direct_source_action_replay_failed"] = bool(
