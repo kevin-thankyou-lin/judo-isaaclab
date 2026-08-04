@@ -1228,6 +1228,8 @@ def main() -> None:
         transport_reanchor_evaluation_steps = []
         transport_reanchor_signed_residuals_world_m = []
         transport_reanchor_rejections = []
+        transport_pad_support_correction_m = 0.0
+        transport_pad_support_steps = []
         transport_reference_left_contact_local = None
         transport_reference_right_contact_local = None
         transport_expected_left_tracking_residual_local = None
@@ -2275,10 +2277,30 @@ def main() -> None:
                     compensate_retained_contact_tracking,
                     maximum_bimanual_position_step_m,
                     reanchor_bimanual_transport_from_observation,
+                    reanchor_two_contact_pad_support,
                     transport_contact_reanchor_required,
                 )
 
-                if transport_contact_reanchor_required(
+                (
+                    pad_supported_left_contact_local,
+                    candidate_pad_support_correction_m,
+                    transport_pad_support_residual_m,
+                ) = reanchor_two_contact_pad_support(
+                    transport_reference_left_contact_local,
+                    sample["pot_pose"],
+                    sample["left_finger_forces_n"],
+                    sample["left_pad_fractions"],
+                    sample["left_pad_axes_world"],
+                    transport_pad_support_correction_m,
+                )
+                transport_pad_support_requested = bool(
+                    abs(
+                        candidate_pad_support_correction_m
+                        - transport_pad_support_correction_m
+                    )
+                    > 1.0e-12
+                )
+                if transport_pad_support_requested or transport_contact_reanchor_required(
                     trajectory,
                     step,
                     sample["pot_pose"],
@@ -2315,13 +2337,17 @@ def main() -> None:
                         observed_pot_inverse, sample["right_eef_pose"]
                     )
                     retained_left_contact_local = (
-                        observed_left_contact_local
-                        if transport_reference_left_contact_local is None
-                        else compensate_retained_contact_tracking(
-                            transport_reference_left_contact_local,
-                            sample["pot_pose"],
-                            sample["left_eef_pose"],
-                        )[0]
+                        pad_supported_left_contact_local
+                        if transport_pad_support_requested
+                        else (
+                            observed_left_contact_local
+                            if transport_reference_left_contact_local is None
+                            else compensate_retained_contact_tracking(
+                                transport_reference_left_contact_local,
+                                sample["pot_pose"],
+                                sample["left_eef_pose"],
+                            )[0]
+                        )
                     )
                     retained_right_contact_local = (
                         observed_right_contact_local
@@ -2410,6 +2436,28 @@ def main() -> None:
                     )
                     if candidate_maximum_step_m <= transport_reanchor_position_limit_m:
                         trajectory = candidate_trajectory
+                        if transport_pad_support_requested:
+                            transport_reference_left_contact_local = (
+                                pad_supported_left_contact_local
+                            )
+                            transport_pad_support_correction_m = (
+                                candidate_pad_support_correction_m
+                            )
+                            transport_expected_left_tracking_residual_local = (
+                                transport_reference_left_contact_local[:3]
+                                - observed_left_contact_local[:3]
+                            )
+                            transport_pad_support_steps.append(
+                                {
+                                    "step": step,
+                                    "signed_residual_m": (
+                                        transport_pad_support_residual_m
+                                    ),
+                                    "cumulative_applied_m": (
+                                        transport_pad_support_correction_m
+                                    ),
+                                }
+                            )
                         if transport_reference_left_contact_local is None:
                             transport_reference_left_contact_local = (
                                 observed_left_contact_local
@@ -3001,6 +3049,10 @@ def main() -> None:
                 "transport_reanchor_position_limit_m": transport_reanchor_position_limit_m,
                 "transport_reanchor_signed_residuals_world_m": transport_reanchor_signed_residuals_world_m,
                 "transport_reanchor_rejections": transport_reanchor_rejections,
+                "transport_pad_support_correction_m": (
+                    transport_pad_support_correction_m
+                ),
+                "transport_pad_support_steps": transport_pad_support_steps,
                 "transport_reanchor_minimum_interval_steps": (
                     None
                     if transport_plan is None

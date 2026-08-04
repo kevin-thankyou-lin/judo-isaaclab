@@ -8,6 +8,7 @@ from judo_isaaclab.put_pot import (
     CENTERED_ON_COOKTOP_TOLERANCE_M,
     CONTACT_FEEDBACK_HORIZON_STEPS,
     TRANSPORT_CONTACT_REANCHOR_MIN_STEPS,
+    TWO_CONTACT_PAD_SUPPORT_LIMIT_M,
     HANDLE_PAD_DEPTH_MARGIN_M,
     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
@@ -364,6 +365,25 @@ def test_two_contact_pad_support_moves_shallow_contact_baseward_with_bound():
     )
     assert cumulative_again == pytest.approx(-0.0015)
     assert corrected_again[2] == pytest.approx(0.1985)
+
+
+def test_two_contact_pad_support_default_authority_matches_pad_depth_margin():
+    assert TWO_CONTACT_PAD_SUPPORT_LIMIT_M == pytest.approx(
+        HANDLE_PAD_DEPTH_MARGIN_M
+    )
+    contact = _pose(z=0.2)
+    cumulative = 0.0
+    for _ in range(32):
+        contact, cumulative, _ = reanchor_two_contact_pad_support(
+            contact,
+            _pose(),
+            [4.0, 5.0],
+            [-0.10, 0.30],
+            [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            cumulative,
+        )
+    assert cumulative == pytest.approx(-HANDLE_PAD_DEPTH_MARGIN_M)
+    assert contact[2] == pytest.approx(0.2 - HANDLE_PAD_DEPTH_MARGIN_M)
 
 
 def test_two_contact_pad_support_is_inactive_without_two_finite_contacts():

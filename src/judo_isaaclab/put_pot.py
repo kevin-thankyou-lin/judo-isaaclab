@@ -41,6 +41,10 @@ HANDLE_PAD_TRACKING_COMPENSATION_M = 0.013
 HANDLE_PAD_DEPTH_MARGIN_M = (
     HANDLE_PAD_GEOMETRIC_MARGIN_M + HANDLE_PAD_TRACKING_COMPENSATION_M
 )
+# A measured two-pad contact may begin at the finger tip and continue sliding
+# while the pot becomes loaded.  Keep the corrective authority inside the same
+# authored pad-depth margin used to admit a peer-contact reanchor.
+TWO_CONTACT_PAD_SUPPORT_LIMIT_M = HANDLE_PAD_DEPTH_MARGIN_M
 YAM_LEFT_FINGER_PIVOT_LOCAL_M = np.asarray([-0.045060, 0.024000, 0.054560])
 YAM_FINGER_SEPARATION_LOCAL_M = np.asarray([0.090120, -0.048000, 0.0])
 YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
@@ -1645,7 +1649,7 @@ def reanchor_two_contact_pad_support(
     contact_threshold_n: float = 0.1,
     step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
     target_fraction: float = SINGLE_CONTACT_PAD_RESEAT_TARGET_FRACTION,
-    correction_limit_m: float = MISSING_FINGER_PAD_DEPTH_LIMIT_M,
+    correction_limit_m: float = TWO_CONTACT_PAD_SUPPORT_LIMIT_M,
 ) -> tuple[np.ndarray, float, float]:
     """Keep a two-finger handle contact inside the measured pad interval.
 
