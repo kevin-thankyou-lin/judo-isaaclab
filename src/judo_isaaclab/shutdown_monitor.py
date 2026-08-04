@@ -28,11 +28,23 @@ def _append_jsonl(path: Path, value: dict[str, Any]) -> None:
         os.fsync(stream.fileno())
 
 
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    with open(temporary, "x", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--started-monotonic", type=float, required=True)
-    parser.add_argument("--receipt-jsonl", required=True)
+    receipts = parser.add_mutually_exclusive_group(required=True)
+    receipts.add_argument("--receipt-jsonl")
+    receipts.add_argument("--receipt-json")
     parser.add_argument("--payload-json", required=True)
     parser.add_argument("--timeout-s", type=float, default=120.0)
     args = parser.parse_args(argv)
@@ -52,7 +64,12 @@ def main(argv: list[str] | None = None) -> None:
         ),
         "monitor_pid": os.getpid(),
     }
-    _append_jsonl(Path(args.receipt_jsonl), payload)
+    if isinstance(payload.get("phase_timings_s"), dict):
+        payload["phase_timings_s"]["shutdown"] = payload["shutdown"]["shutdown_s"]
+    if args.receipt_jsonl:
+        _append_jsonl(Path(args.receipt_jsonl), payload)
+    else:
+        _write_json(Path(args.receipt_json), payload)
 
 
 if __name__ == "__main__":

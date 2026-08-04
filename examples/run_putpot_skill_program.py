@@ -3339,6 +3339,7 @@ def main(argv: list[str] | None = None) -> None:
         traceback.print_exc()
         raise
     finally:
+        runtime_receipt_via_monitor = False
         if encoder is not None:
             render_started = time.monotonic()
             encoder.close()
@@ -3349,6 +3350,38 @@ def main(argv: list[str] | None = None) -> None:
             shutdown_started = time.monotonic()
             if env is not None:
                 env.close()
+            if args.runtime_receipt_json:
+                provisional_receipt = {
+                    "pid": os.getpid(),
+                    "persistent": False,
+                    "runtime_reused": runtime_reused,
+                    "reset_index": reset_index,
+                    "attempt_identity": (
+                        None
+                        if attempt_identity is None
+                        else attempt_identity.receipt()
+                    ),
+                    "phase_timings_s": timers.receipt(),
+                }
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(REPO_ROOT / "src/judo_isaaclab/shutdown_monitor.py"),
+                        "--pid",
+                        str(os.getpid()),
+                        "--started-monotonic",
+                        repr(shutdown_started),
+                        "--receipt-json",
+                        args.runtime_receipt_json,
+                        "--payload-json",
+                        json.dumps(provisional_receipt, sort_keys=True),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                runtime_receipt_via_monitor = True
             simulation_app.close()
             timers.add("shutdown", time.monotonic() - shutdown_started)
         _LAST_ATTEMPT_RUNTIME_RECEIPT = {
@@ -3361,7 +3394,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
             "phase_timings_s": timers.receipt(),
         }
-        if args.runtime_receipt_json:
+        if args.runtime_receipt_json and not runtime_receipt_via_monitor:
             receipt_path = Path(args.runtime_receipt_json)
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
             receipt_tmp = receipt_path.with_name(receipt_path.name + ".tmp")

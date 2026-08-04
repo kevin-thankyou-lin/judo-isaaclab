@@ -117,3 +117,22 @@ def test_shutdown_monitor_writes_completion_for_gone_process(tmp_path):
     assert value["shutdown"]["completion"] == "process_exit_observed"
     assert value["shutdown"]["attempts"] == 2
     assert value["shutdown"]["shutdown_s"] >= 0.0
+
+
+def test_shutdown_monitor_atomically_writes_phase_timing_json(tmp_path):
+    receipt = tmp_path / "runtime.json"
+    shutdown_monitor.main(
+        [
+            "--pid",
+            "999999999",
+            "--started-monotonic",
+            str(__import__("time").monotonic()),
+            "--receipt-json",
+            str(receipt),
+            "--payload-json",
+            '{"phase_timings_s":{"shutdown":0.0}}',
+        ]
+    )
+    value = __import__("json").loads(receipt.read_text(encoding="utf-8"))
+    assert value["shutdown"]["completion"] == "process_exit_observed"
+    assert value["phase_timings_s"]["shutdown"] >= 0.0

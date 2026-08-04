@@ -173,8 +173,10 @@ def main() -> None:
             subprocess.Popen(
                 [
                     sys.executable,
-                    "-m",
-                    "judo_isaaclab.shutdown_monitor",
+                    str(
+                        Path(__file__).resolve().parents[1]
+                        / "src/judo_isaaclab/shutdown_monitor.py"
+                    ),
                     "--pid",
                     str(worker_pid),
                     "--started-monotonic",
