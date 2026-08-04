@@ -354,9 +354,9 @@ def contact_budget_transport_steps(
     planned_steps: int,
     retained_contact_steps: int,
     *,
-    budget_multiplier: float = 0.75,
+    budget_multiplier: float = 1.5,
 ) -> int:
-    """Keep a thin-handle support sweep inside measured contact retention."""
+    """Pace a thin-handle support sweep from measured contact retention."""
 
     if planned_steps < 1:
         raise ValueError("planned_steps must be positive")
