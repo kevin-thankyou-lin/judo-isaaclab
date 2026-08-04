@@ -879,8 +879,8 @@ def test_motion_preload_follows_loaded_residual_and_handle_geometry():
         [0.057, 0.083, 0.0212],
         0,
     )
-    assert preload == pytest.approx([0.006, 0.0, 0.0])
-    assert reinforced[:3] == pytest.approx([0.106, 0.20, 0.30])
+    assert preload == pytest.approx([0.009, 0.0, 0.0])
+    assert reinforced[:3] == pytest.approx([0.109, 0.20, 0.30])
     assert reinforced[3:] == pytest.approx(loaded[3:])
 
     bounded, bounded_preload = reinforce_loaded_contact_for_motion(
@@ -907,7 +907,7 @@ def test_motion_preload_rebases_stale_attempt024_contact_on_observation():
     )
 
     assert np.linalg.norm(loaded[:3] - observed[:3]) > 0.08
-    assert np.linalg.norm(preload) == pytest.approx(0.006)
+    assert np.linalg.norm(preload) == pytest.approx(0.009)
     assert reinforced[:3] == pytest.approx(preload)
     assert np.linalg.norm(reinforced[:3] - observed[:3]) < 0.01
 

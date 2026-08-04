@@ -49,7 +49,12 @@ YAM_RIGHT_FINGER_PIVOT_LOCAL_M = (
 YAM_FINGER_PAD_AXIS_LENGTH_M = float(np.linalg.norm([0.068, 0.0, -0.003]))
 HANDLE_PAD_RELATIVE_DEPTH_M = 0.003
 HANDLE_JAW_CENTERING_LIMIT_M = 0.040
-LOADED_CONTACT_MOTION_PRELOAD_M = 0.006
+# PutPot023 attempt_025 kept both physical grasps into transport after rebasing
+# on the measured loaded contact, but peaked 1.35 mm below the coded 50 mm pick
+# threshold.  Its 6 mm object-local preload contributed 4.56 mm vertically.
+# Nine millimetres supplies the missing vertical margin and remains below both
+# the 12.72 mm measured contact tolerance and the half-handle geometry bound.
+LOADED_CONTACT_MOTION_PRELOAD_M = 0.009
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
