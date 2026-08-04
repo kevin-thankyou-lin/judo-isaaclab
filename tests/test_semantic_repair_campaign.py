@@ -235,6 +235,15 @@ def test_fail_fast_lane_stops_only_after_a_failed_attempt():
     assert not module._stop_after_attempt(False, {"status": "pending"})
 
 
+def test_hard_case_pending_survives_nonaccepting_refresh_classification():
+    module = _module()
+
+    assert module._pending_status({"status": "hard_case_pending"}) == (
+        "hard_case_pending"
+    )
+    assert module._pending_status({"status": "pending"}) == "pending"
+
+
 def test_repair_policy_is_target_direct_and_preserves_successes(tmp_path, monkeypatch):
     module = _module()
     monkeypatch.setattr(module, "_git_head", lambda: "rev")

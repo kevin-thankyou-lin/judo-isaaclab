@@ -263,6 +263,16 @@ def _stop_after_attempt(stop_on_failure: bool, record: dict[str, Any]) -> bool:
     return bool(stop_on_failure and record.get("status") != "accepted")
 
 
+def _pending_status(previous: dict[str, Any]) -> str:
+    """Preserve an operator-classified hard case across ledger refreshes."""
+
+    return (
+        "hard_case_pending"
+        if previous.get("status") == "hard_case_pending"
+        else "pending"
+    )
+
+
 def refresh_ledger(
     config: dict[str, Any], output_root: Path, ledger_path: Path
 ) -> dict[str, Any]:
@@ -325,6 +335,7 @@ def refresh_ledger(
                 and primary_demo
             )
             accepted = bool(successes or preserved_primary or combined_audit_success)
+            pending_status = _pending_status(previous)
             record = {
                 "task": task["name"],
                 "pair_id": pair_id,
@@ -335,7 +346,7 @@ def refresh_ledger(
                     if accepted
                     else "semantic_success_artifact_pending"
                     if motion_successes
-                    else "pending"
+                    else pending_status
                 ),
                 "attempts": previous.get("attempts", []),
                 "diagnoses": [_diagnosis(task["name"], source) for source in failures],
@@ -427,7 +438,11 @@ def refresh_ledger(
         "summary": {
             "total": len(records),
             "accepted": status_counts.get("accepted", 0),
-            "pending": status_counts.get("pending", 0),
+            "pending": (
+                status_counts.get("pending", 0)
+                + status_counts.get("hard_case_pending", 0)
+            ),
+            "hard_case_pending": status_counts.get("hard_case_pending", 0),
             "semantic_success_artifact_pending": status_counts.get(
                 "semantic_success_artifact_pending", 0
             ),
