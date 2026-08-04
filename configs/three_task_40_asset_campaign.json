@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy": "source action replay first; deterministic semantic skill only on coded failure; no MPC",
+  "policy": "source action replay first; deterministic semantic skill only on coded failure; no MPC; PutPot round-robin visits cap fresh physics attempts at four",
   "tasks": [
     {
       "name": "putpot",

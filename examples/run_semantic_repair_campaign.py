@@ -3,6 +3,8 @@
 This runner never overwrites the primary campaign or comparison-audit artifacts.
 Each new execution is written to a numbered ``semantic_repair/attempt_*``
 directory and recorded atomically before the next pair is started.
+PutPot round-robin visits are fail-closed and capped at four fresh physics
+attempts before the asset must rotate to hard-case review.
 """
 
 from __future__ import annotations
@@ -30,6 +32,21 @@ from run_three_task_asset_campaign import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT = 4
+
+
+def _validate_fresh_attempts_per_asset_visit(
+    value: int, selected_tasks: set[str]
+) -> int:
+    if value < 1:
+        raise ValueError("fresh attempts per asset visit must be positive")
+    if (
+        not selected_tasks or "putpot" in selected_tasks
+    ) and value > PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT:
+        raise ValueError(
+            "PutPot asset visits are capped at four fresh physics attempts"
+        )
+    return value
 
 
 def _trace(path: Path) -> dict[str, np.ndarray] | None:
@@ -429,7 +446,8 @@ def refresh_ledger(
             "source demonstration supplies phase/contact intent but source semantic success "
             "is not required; reanchor contact milestones; separate task and motion gates; "
             "numbered immutable attempts; preserve hash-verified successes; stop on first "
-            "failed pair; one heavy Isaac process"
+            "failed pair; PutPot round-robin visits capped at four fresh physics attempts; "
+            "one heavy Isaac process"
         ),
         "code_head": _git_head(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -533,6 +551,7 @@ def main() -> None:
     parser.add_argument("--task", action="append")
     parser.add_argument("--pair", action="append")
     parser.add_argument("--max-pairs", type=int)
+    parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=1)
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
@@ -549,6 +568,9 @@ def main() -> None:
 
     selected_tasks = set(args.task or [])
     selected_pairs = set(args.pair or [])
+    visit_attempt_limit = _validate_fresh_attempts_per_asset_visit(
+        args.fresh_attempts_per_asset_visit, selected_tasks
+    )
     task_map = {task["name"]: task for task in config["tasks"]}
     pending = [
         (key, record)
@@ -561,21 +583,27 @@ def main() -> None:
         pending = pending[: args.max_pairs]
     for key, record in pending:
         print(f"SEMANTIC_REPAIR_START={key}", flush=True)
-        attempt = _run_pair(
-            task_map[record["task"]],
-            record,
-            output_root=output_root,
-            python=args.python,
-            gear_repo=args.gear_repo,
-        )
-        record["attempts"].append(attempt)
-        _atomic_json(ledger_path, ledger)
-        print(
-            "SEMANTIC_REPAIR_ATTEMPT="
-            + json.dumps({"pair": key, **attempt}, sort_keys=True),
-            flush=True,
-        )
-        ledger = refresh_ledger(config, output_root, ledger_path)
+        for visit_attempt in range(1, visit_attempt_limit + 1):
+            attempt = _run_pair(
+                task_map[record["task"]],
+                record,
+                output_root=output_root,
+                python=args.python,
+                gear_repo=args.gear_repo,
+            )
+            attempt["asset_visit_attempt"] = visit_attempt
+            attempt["asset_visit_attempt_limit"] = visit_attempt_limit
+            record["attempts"].append(attempt)
+            _atomic_json(ledger_path, ledger)
+            print(
+                "SEMANTIC_REPAIR_ATTEMPT="
+                + json.dumps({"pair": key, **attempt}, sort_keys=True),
+                flush=True,
+            )
+            ledger = refresh_ledger(config, output_root, ledger_path)
+            record = ledger["pairs"][key]
+            if record["status"] == "accepted":
+                break
         if _stop_after_attempt(args.stop_on_failure, ledger["pairs"][key]):
             print(f"SEMANTIC_REPAIR_STOP_ON_FAILURE={key}", flush=True)
             break

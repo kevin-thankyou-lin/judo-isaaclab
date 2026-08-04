@@ -244,6 +244,16 @@ def test_hard_case_pending_survives_nonaccepting_refresh_classification():
     assert module._pending_status({"status": "pending"}) == "pending"
 
 
+def test_putpot_round_robin_visit_is_capped_at_four_fresh_attempts():
+    module = _module()
+
+    assert module._validate_fresh_attempts_per_asset_visit(4, {"putpot"}) == 4
+    with pytest.raises(ValueError, match="capped at four"):
+        module._validate_fresh_attempts_per_asset_visit(5, {"putpot"})
+    with pytest.raises(ValueError, match="must be positive"):
+        module._validate_fresh_attempts_per_asset_visit(0, {"putpot"})
+
+
 def test_repair_policy_is_target_direct_and_preserves_successes(tmp_path, monkeypatch):
     module = _module()
     monkeypatch.setattr(module, "_git_head", lambda: "rev")
