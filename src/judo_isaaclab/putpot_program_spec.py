@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PROGRAM_NAME = "putpot_semantic_support_frames"
 
 
@@ -34,6 +34,7 @@ PARAMETER_RULES: dict[str, _Rule] = {
     "withdraw_steps": _Rule(int, 1, 1000),
     "settle_steps": _Rule(int, 1, 1000),
     "center_repair_steps": _Rule(int, 1, 1000),
+    "missing_finger_contact_limit_m": _Rule(float, 0.001, 0.15),
     "receiving_jaw_center_translation_fraction": _Rule(float, 0.0, 1.0),
     "receiving_jaw_reorientation_fraction": _Rule(float, 0.0, 1.0),
 }

@@ -11,7 +11,7 @@ from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 
 
 REPO_ROOT = Path(__file__).parents[1]
-DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v2.json"
+DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v3.json"
 
 
 def _spec(tmp_path, index):

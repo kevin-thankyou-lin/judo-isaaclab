@@ -1271,6 +1271,17 @@ def test_single_finger_contact_reanchors_toward_missing_finger_with_a_cap():
     assert unchanged == pytest.approx(contact)
     assert signed == pytest.approx(MISSING_FINGER_CONTACT_LIMIT_M)
 
+    extended, signed = reanchor_missing_finger_contact(
+        contact,
+        root,
+        [0.0, 2.0],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        MISSING_FINGER_CONTACT_LIMIT_M,
+        limit_m=0.075,
+    )
+    assert extended[:3] == pytest.approx([0.001, 0.0, 0.0])
+    assert signed == pytest.approx(MISSING_FINGER_CONTACT_LIMIT_M + 0.001)
+
     collapsed, signed = reanchor_missing_finger_contact(
         contact,
         root,
