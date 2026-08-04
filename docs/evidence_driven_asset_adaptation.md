@@ -206,7 +206,9 @@ writes the worker queue: the coding
 agent must still inspect the trace and use the guarded submission CLI, which
 continues to reject unacknowledged, unchanged, duplicate, and fifth-cycle
 requests. Wake attempts are recorded in an atomic state file and are bounded
-per receipt.
+per receipt. Remote snapshot calls have a finite timeout and transient SSH,
+timeout, or malformed-response failures are logged and retried; a connection
+blip cannot terminate the daemon.
 
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,

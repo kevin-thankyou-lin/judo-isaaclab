@@ -165,7 +165,9 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
-def _snapshot(ssh: list[str], results_root: str) -> dict[str, Any]:
+def _snapshot(
+    ssh: list[str], results_root: str, *, timeout_seconds: float
+) -> dict[str, Any]:
     completed = subprocess.run(
         [*ssh, "python3", "-", results_root],
         input=REMOTE_SNAPSHOT_SCRIPT,
@@ -173,6 +175,7 @@ def _snapshot(ssh: list[str], results_root: str) -> dict[str, Any]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
+        timeout=timeout_seconds,
     )
     return json.loads(completed.stdout)
 
@@ -248,6 +251,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--agent-tmux", required=True)
     parser.add_argument("--state-json", required=True)
     parser.add_argument("--poll-seconds", type=float, default=30.0)
+    parser.add_argument("--ssh-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--grace-seconds", type=float, default=600.0)
     parser.add_argument("--rotation-grace-seconds", type=float, default=30.0)
     parser.add_argument("--repeat-seconds", type=float, default=1200.0)
@@ -260,6 +264,7 @@ def main(argv: list[str] | None = None) -> None:
         or args.rotation_grace_seconds < 0
         or args.repeat_seconds <= 0
         or args.max_wakes < 1
+        or args.ssh_timeout_seconds <= 0
     ):
         raise ValueError("invalid watchdog timing or wake limit")
 
@@ -269,8 +274,37 @@ def main(argv: list[str] | None = None) -> None:
         if state_path.is_file()
         else {"schema_version": 1, "boundaries": {}}
     )
+    consecutive_snapshot_failures = 0
     while True:
-        snapshot = _snapshot(shlex.split(args.ssh_command), args.results_root)
+        try:
+            snapshot = _snapshot(
+                shlex.split(args.ssh_command),
+                args.results_root,
+                timeout_seconds=args.ssh_timeout_seconds,
+            )
+            consecutive_snapshot_failures = 0
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+        ) as error:
+            consecutive_snapshot_failures += 1
+            print(
+                "PUTPOT_HANDOFF_WATCHDOG_SNAPSHOT_ERROR="
+                + json.dumps(
+                    {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "consecutive_failures": consecutive_snapshot_failures,
+                        "error": f"{type(error).__name__}: {error}",
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            if args.once:
+                raise
+            time.sleep(args.poll_seconds)
+            continue
         summary = snapshot.get("ledger_summary", {})
         if summary.get("accepted") == summary.get("total") and summary.get("total"):
             print("PUTPOT_HANDOFF_WATCHDOG_COMPLETE=" + json.dumps(summary, sort_keys=True))

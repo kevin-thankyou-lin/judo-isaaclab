@@ -1,5 +1,8 @@
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 
 def _module():
@@ -153,3 +156,71 @@ def test_tmux_wake_waits_for_paste_before_carriage_return(monkeypatch):
         ("sleep", 0.25),
         ("tmux", "send-keys", "-t", "agent", "C-m"),
     ]
+
+
+def test_daemon_retries_transient_remote_snapshot_failure(
+    tmp_path, monkeypatch, capsys
+):
+    module = _module()
+    calls = []
+
+    def fake_snapshot(_ssh, _root, *, timeout_seconds):
+        calls.append(timeout_seconds)
+        if len(calls) == 1:
+            raise module.subprocess.CalledProcessError(255, ["ssh"])
+        return {
+            "ledger_summary": {"accepted": 120, "total": 120},
+            "boundary": None,
+        }
+
+    monkeypatch.setattr(module, "_snapshot", fake_snapshot)
+    monkeypatch.setattr(module.time, "sleep", lambda _value: None)
+
+    module.main(
+        [
+            "--ssh-command",
+            "ssh host",
+            "--results-root",
+            "/results",
+            "--agent-tmux",
+            "agent",
+            "--state-json",
+            str(tmp_path / "state.json"),
+            "--poll-seconds",
+            "0",
+            "--ssh-timeout-seconds",
+            "7",
+        ]
+    )
+
+    assert calls == [7.0, 7.0]
+    output = capsys.readouterr().out.splitlines()
+    error = json.loads(output[0].split("=", 1)[1])
+    assert error["consecutive_failures"] == 1
+    assert output[-1].startswith("PUTPOT_HANDOFF_WATCHDOG_COMPLETE=")
+
+
+def test_once_mode_surfaces_remote_snapshot_failure(tmp_path, monkeypatch):
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            module.subprocess.TimeoutExpired(["ssh"], 3)
+        ),
+    )
+
+    with pytest.raises(module.subprocess.TimeoutExpired):
+        module.main(
+            [
+                "--ssh-command",
+                "ssh host",
+                "--results-root",
+                "/results",
+                "--agent-tmux",
+                "agent",
+                "--state-json",
+                str(tmp_path / "state.json"),
+                "--once",
+            ]
+        )
