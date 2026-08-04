@@ -2205,8 +2205,14 @@ def finish_contact_hold_after_coded_pick(
         return trajectory, 0
 
     def shortened(values: np.ndarray) -> np.ndarray:
-        return np.concatenate(
+        core = np.concatenate(
             (values[: new_end + 1], values[old_end + 1 :]), axis=0
+        )
+        # The Isaac execution loop has a fixed reset-to-terminal horizon.
+        # Convert removed loaded-hold frames into extra stable terminal frames
+        # instead of changing that one-reset rollout length.
+        return np.concatenate(
+            (core, np.repeat(core[-1:], removed, axis=0)), axis=0
         )
 
     steps = {}
@@ -2225,6 +2231,7 @@ def finish_contact_hold_after_coded_pick(
             stage_names=(
                 trajectory.stage_names[: new_end + 1]
                 + trajectory.stage_names[old_end + 1 :]
+                + (trajectory.stage_names[-1],) * removed
             ),
             waypoint_steps=steps,
         ),

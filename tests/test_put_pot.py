@@ -2000,7 +2000,8 @@ def test_coded_pick_retime_removes_only_unused_contact_hold():
     assert removed == 5
     assert retimed.waypoint_steps["bimanual_contact_hold"] == current + 1
     assert retimed.waypoint_steps["smooth_transport"] == old_transport - 5
-    assert len(retimed.left_poses) == len(trajectory.left_poses) - 5
+    assert len(retimed.left_poses) == len(trajectory.left_poses)
+    assert retimed.stage_names[-5:] == ("smooth_bimanual_transport",) * 5
 
 
 def test_center_feedback_reanchors_only_support_lowering_and_release():
