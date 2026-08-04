@@ -2466,6 +2466,37 @@ def compensate_retained_contact_tracking(
     return target, correction
 
 
+def resolve_bimanual_contact_frames_local(
+    observed_root_pose: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+    reference_left_contact_local: Any | None,
+    reference_right_contact_local: Any | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Resolve missing loaded-contact references from one observed root frame.
+
+    A peer jaw can finish closing on the first transport sample, after the
+    contact-hold initialization window has ended.  In that flow neither saved
+    object-local contact may exist yet; initialize only the unset references
+    from synchronized observations before transport feedback consumes them.
+    """
+
+    inverse_root = inverse_pose(_pose(observed_root_pose, "observed_root_pose"))
+    left = (
+        compose_pose(inverse_root, _pose(observed_left_pose, "observed_left_pose"))
+        if reference_left_contact_local is None
+        else _pose(reference_left_contact_local, "reference_left_contact_local")
+    )
+    right = (
+        compose_pose(
+            inverse_root, _pose(observed_right_pose, "observed_right_pose")
+        )
+        if reference_right_contact_local is None
+        else _pose(reference_right_contact_local, "reference_right_contact_local")
+    )
+    return left.copy(), right.copy()
+
+
 def reanchor_bimanual_transport_from_observation(
     trajectory: SkillTrajectory,
     observed_pot_pose: Any,

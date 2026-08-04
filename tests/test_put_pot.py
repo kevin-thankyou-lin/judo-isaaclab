@@ -64,6 +64,7 @@ from judo_isaaclab.put_pot import (
     reanchor_missing_finger_pad_depth,
     reanchor_single_contact_pad_fraction,
     reanchor_two_contact_pad_support,
+    resolve_bimanual_contact_frames_local,
     retime_loaded_gripper_close_for_pad_reseat,
     reanchor_centered_support,
     reanchor_centered_unload,
@@ -998,6 +999,28 @@ def test_loaded_contact_reanchor_preserves_bounded_tracking_residual():
     assert residual == pytest.approx([0.015, 0.02, 0.0])
     assert result[:3] == pytest.approx(residual)
     assert result[3:] == pytest.approx(commanded[3:])
+
+
+def test_unset_transport_contact_frames_initialize_from_observed_root():
+    root = _pose(0.4, -0.2, 0.8)
+    left_world = _pose(0.6, -0.1, 0.9)
+    right_world = _pose(0.5, -0.3, 0.85)
+
+    left_local, right_local = resolve_bimanual_contact_frames_local(
+        root, left_world, right_world, None, None
+    )
+
+    assert left_local.shape == (7,)
+    assert right_local.shape == (7,)
+    assert compose_pose(root, left_local) == pytest.approx(left_world)
+    assert compose_pose(root, right_local) == pytest.approx(right_world)
+
+    saved_left = _pose(0.1, 0.2, 0.3)
+    resolved_left, resolved_right = resolve_bimanual_contact_frames_local(
+        root, left_world, right_world, saved_left, None
+    )
+    assert resolved_left == pytest.approx(saved_left)
+    assert compose_pose(root, resolved_right) == pytest.approx(right_world)
 
 
 def test_loaded_contact_residual_survives_object_local_hold_reanchor():

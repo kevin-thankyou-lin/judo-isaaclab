@@ -1230,6 +1230,7 @@ def main() -> None:
         transport_reanchor_rejections = []
         transport_pad_support_correction_m = 0.0
         transport_pad_support_steps = []
+        transport_reference_observation_init_steps = []
         transport_reference_left_contact_local = None
         transport_reference_right_contact_local = None
         transport_expected_left_tracking_residual_local = None
@@ -2272,9 +2273,31 @@ def main() -> None:
                     maximum_bimanual_position_step_m,
                     reanchor_bimanual_transport_from_observation,
                     reanchor_two_contact_pad_support,
+                    resolve_bimanual_contact_frames_local,
                     transport_contact_reanchor_required,
                 )
 
+                if (
+                    transport_reference_left_contact_local is None
+                    or transport_reference_right_contact_local is None
+                ):
+                    (
+                        transport_reference_left_contact_local,
+                        transport_reference_right_contact_local,
+                    ) = resolve_bimanual_contact_frames_local(
+                        sample["pot_pose"],
+                        sample["left_eef_pose"],
+                        sample["right_eef_pose"],
+                        transport_reference_left_contact_local,
+                        transport_reference_right_contact_local,
+                    )
+                    transport_expected_left_tracking_residual_local = (
+                        np.zeros(3, dtype=np.float64)
+                    )
+                    transport_expected_right_tracking_residual_local = (
+                        np.zeros(3, dtype=np.float64)
+                    )
+                    transport_reference_observation_init_steps.append(step)
                 (
                     pad_supported_left_contact_local,
                     candidate_pad_support_correction_m,
@@ -3047,6 +3070,9 @@ def main() -> None:
                     transport_pad_support_correction_m
                 ),
                 "transport_pad_support_steps": transport_pad_support_steps,
+                "transport_reference_observation_init_steps": (
+                    transport_reference_observation_init_steps
+                ),
                 "transport_reanchor_minimum_interval_steps": (
                     None
                     if transport_plan is None
