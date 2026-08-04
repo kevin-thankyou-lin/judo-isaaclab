@@ -2092,6 +2092,7 @@ def reanchor_bimanual_contact_hold(
     retained_right_contact_local: Any,
     *,
     object_local_lift_residual_m: float = 0.0,
+    support_normal_world: Any = (0.0, 0.0, 1.0),
 ) -> SkillTrajectory:
     """Follow retained object-local two-arm contacts before transport."""
 
@@ -2118,10 +2119,13 @@ def reanchor_bimanual_contact_hold(
         raise ValueError(
             "object_local_lift_residual_m must be finite and nonnegative"
         )
-    lift_world = quaternion_rotate(
-        _pose(observed_pot_pose, "observed_pot_pose")[3:],
-        np.asarray([0.0, 0.0, object_local_lift_residual_m]),
-    )
+    normal = np.asarray(support_normal_world, dtype=np.float64)
+    if normal.shape != (3,) or not np.all(np.isfinite(normal)):
+        raise ValueError("support_normal_world must contain three finite values")
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= 1.0e-9:
+        raise ValueError("support_normal_world must be nonzero")
+    lift_world = object_local_lift_residual_m * normal / normal_norm
     left_target[:3] += lift_world
     right_target[:3] += lift_world
     left[start : hold_end + 1] = left_target

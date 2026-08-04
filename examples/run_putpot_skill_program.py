@@ -1144,6 +1144,7 @@ def main() -> None:
             from judo_isaaclab.put_marker import (
                 compose_pose,
                 inverse_pose,
+                quaternion_rotate,
             )
 
             left_handle_contact = compose_pose(
@@ -2028,6 +2029,10 @@ def main() -> None:
                         retained_hold_left_contact_local,
                         reference_hold_right_contact_local,
                         object_local_lift_residual_m=hold_lift_residual_m,
+                        support_normal_world=quaternion_rotate(
+                            target_cooktop_geometry.root_pose[3:],
+                            np.asarray([0.0, 0.0, 1.0]),
+                        ),
                     )
                     if step + 1 == grasp_complete_step:
                         from judo_isaaclab.put_pot import (

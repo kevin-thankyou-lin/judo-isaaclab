@@ -1101,6 +1101,7 @@ def test_loaded_contact_hold_lifts_to_coded_pick_with_margin():
         _pose(0.2),
         _pose(0.2, 1.0),
         object_local_lift_residual_m=0.002,
+        support_normal_world=[0.0, 0.0, 1.0],
     )
     assert lifted.left_poses[step + 1, 2] == pytest.approx(0.802)
     assert lifted.right_poses[step + 1, 2] == pytest.approx(0.802)
