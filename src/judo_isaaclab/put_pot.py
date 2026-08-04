@@ -390,6 +390,23 @@ def complete_peer_contact_transport_steps(
     return planned_steps
 
 
+def peer_contact_transfer_horizon_steps(
+    translation_m: float,
+    *,
+    base_steps: int = CONTACT_FEEDBACK_HORIZON_STEPS,
+    maximum_step_m: float = 0.005,
+) -> int:
+    """Pace a large observed peer-to-receiver target by Cartesian distance."""
+
+    if not np.isfinite(translation_m) or translation_m < 0.0:
+        raise ValueError("translation_m must be finite and nonnegative")
+    if base_steps < 1:
+        raise ValueError("base_steps must be positive")
+    if not np.isfinite(maximum_step_m) or maximum_step_m <= 0.0:
+        raise ValueError("maximum_step_m must be positive and finite")
+    return max(base_steps, int(np.ceil(translation_m / maximum_step_m)))
+
+
 def geometry_conditioned_vertical_rise_fraction(
     transport_steps: int, retained_contact_steps: int
 ) -> float:

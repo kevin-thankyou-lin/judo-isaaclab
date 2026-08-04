@@ -1464,14 +1464,14 @@ def main() -> None:
                         - np.asarray(sample["left_eef_pose"])[:3]
                     )
                 )
-                milestone_feedback_horizon_steps = max(
-                    1,
-                    int(
-                        np.ceil(
-                            milestone_applied_translation_m
-                            / args.max_position_step
-                        )
-                    ),
+                from judo_isaaclab.put_pot import (
+                    peer_contact_transfer_horizon_steps,
+                )
+
+                milestone_feedback_horizon_steps = (
+                    peer_contact_transfer_horizon_steps(
+                        milestone_applied_translation_m
+                    )
                 )
                 milestone_reanchor_step = step
                 if peer_contact_transfer:

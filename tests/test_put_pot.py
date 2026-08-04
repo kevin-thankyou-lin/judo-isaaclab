@@ -50,6 +50,7 @@ from judo_isaaclab.put_pot import (
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     orient_loaded_jaw_around_authored_handle,
+    peer_contact_transfer_horizon_steps,
     peer_contact_latch_supported,
     preserve_loaded_contact_target,
     reinforce_loaded_contact_for_motion,
@@ -326,6 +327,11 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         complete_peer_contact_transport_steps(0, 80)
     with pytest.raises(ValueError, match="retained_contact_steps"):
         complete_peer_contact_transport_steps(180, -1)
+    assert peer_contact_transfer_horizon_steps(0.02) == 10
+    assert peer_contact_transfer_horizon_steps(0.197) == 40
+    assert peer_contact_transfer_horizon_steps(0.197, maximum_step_m=0.01) == 20
+    with pytest.raises(ValueError, match="translation_m"):
+        peer_contact_transfer_horizon_steps(-0.001)
 
 
 def test_two_contact_pad_support_moves_shallow_contact_baseward_with_bound():
