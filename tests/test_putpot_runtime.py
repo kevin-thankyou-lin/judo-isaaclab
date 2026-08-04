@@ -1,5 +1,7 @@
 import pytest
 
+import judo_isaaclab.shutdown_monitor as shutdown_monitor
+
 from judo_isaaclab.putpot_runtime import (
     AttemptIdentity,
     PHASE_NAMES,
@@ -95,3 +97,23 @@ def test_camera_free_scene_policy_removes_sensors_and_restores_builder():
     fresh = Scene()
     fresh.build_from_spec(Spec())
     assert fresh.top_camera is not None
+
+
+def test_shutdown_monitor_writes_completion_for_gone_process(tmp_path):
+    receipt = tmp_path / "receipt.jsonl"
+    shutdown_monitor.main(
+        [
+            "--pid",
+            "999999999",
+            "--started-monotonic",
+            "0",
+            "--receipt-jsonl",
+            str(receipt),
+            "--payload-json",
+            '{"type":"worker_summary","shutdown":{"attempts":2}}',
+        ]
+    )
+    value = __import__("json").loads(receipt.read_text(encoding="utf-8"))
+    assert value["shutdown"]["completion"] == "process_exit_observed"
+    assert value["shutdown"]["attempts"] == 2
+    assert value["shutdown"]["shutdown_s"] >= 0.0

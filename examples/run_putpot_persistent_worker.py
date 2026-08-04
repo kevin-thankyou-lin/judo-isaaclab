@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import traceback
 from typing import Iterator
 
@@ -150,17 +151,45 @@ def main() -> None:
             if recommendation is not None:
                 break
     finally:
-        shutdown = putpot.close_persistent_runtime()
-        _append_receipt(
-            receipt_path,
-            {
-                "type": "worker_summary",
-                "pid": worker_pid,
-                "code_head": startup_head,
-                "completed_attempts": completed,
-                "shutdown": shutdown,
-            },
-        )
+        runtime = putpot._PERSISTENT_RUNTIME
+        summary = {
+            "type": "worker_summary",
+            "pid": worker_pid,
+            "code_head": startup_head,
+            "completed_attempts": completed,
+            "shutdown": (
+                None
+                if runtime is None
+                else {
+                    "runtime_key": runtime["key"],
+                    "attempts": runtime["attempts"],
+                }
+            ),
+        }
+        if runtime is None:
+            _append_receipt(receipt_path, summary)
+        else:
+            shutdown_started = time.monotonic()
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "judo_isaaclab.shutdown_monitor",
+                    "--pid",
+                    str(worker_pid),
+                    "--started-monotonic",
+                    repr(shutdown_started),
+                    "--receipt-jsonl",
+                    str(receipt_path),
+                    "--payload-json",
+                    json.dumps(summary, sort_keys=True),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            putpot.close_persistent_runtime()
 
 
 if __name__ == "__main__":
