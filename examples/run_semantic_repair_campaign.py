@@ -157,6 +157,8 @@ def _putpot_bimanual_transport_satisfied(
 def _strict_semantic_success(
     source: dict[str, Any], task: str | None = None
 ) -> bool:
+    from judo_isaaclab.putpot_runtime import full_render_required_for_merge
+
     result = source["result"]
     return bool(
         result.get("mode") == "skill"
@@ -165,6 +167,7 @@ def _strict_semantic_success(
         and all(result.get("acceptance_checks", {}).values())
         and _putpot_bimanual_transport_satisfied(task, source)
         and result.get("provenance", {}).get("demonstration")
+        and (task != "putpot" or full_render_required_for_merge(result))
     )
 
 
@@ -478,6 +481,10 @@ def _next_attempt(pair_root: Path) -> Path:
     return repair_root / f"attempt_{max(numbers, default=0) + 1:03d}"
 
 
+def _attempt_number(path: Path) -> int:
+    return int(path.name.split("_")[-1])
+
+
 def _run_pair(
     task: dict[str, Any],
     record: dict[str, Any],
@@ -485,6 +492,8 @@ def _run_pair(
     output_root: Path,
     python: str,
     gear_repo: str,
+    repair_epoch: str | None = None,
+    repair_epoch_attempt: int | None = None,
 ) -> dict[str, Any]:
     pair_root = output_root / task["name"] / record["pair_id"]
     attempt_root = _next_attempt(pair_root)
@@ -506,6 +515,21 @@ def _run_pair(
         # source replay is evidence, not a reason to reject a valid skill demo.
         direct_replay_result=None,
     )
+    if repair_epoch is not None:
+        command.extend(
+            [
+                "--runtime-receipt-json",
+                str(attempt_root / "skill_runtime.json"),
+                "--lifetime-attempt-number",
+                str(_attempt_number(attempt_root)),
+                "--repair-epoch",
+                repair_epoch,
+                "--repair-epoch-attempt",
+                str(repair_epoch_attempt),
+                "--repair-epoch-attempt-limit",
+                str(PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT),
+            ]
+        )
     started = datetime.now(timezone.utc).isoformat()
     with open(attempt_root / "skill.log", "w", encoding="utf-8") as stream:
         stream.write("COMMAND=" + json.dumps(command) + "\n")
@@ -524,7 +548,20 @@ def _run_pair(
         "command": command,
         "result": str(result_path.resolve()),
         "video": str((attempt_root / "skill.mp4").resolve()),
+        "runtime_receipt": (
+            str((attempt_root / "skill_runtime.json").resolve())
+            if repair_epoch is not None
+            else None
+        ),
         "status": "failed",
+        "lifetime_attempt": _attempt_number(attempt_root),
+        "repair_epoch": repair_epoch,
+        "repair_epoch_attempt": repair_epoch_attempt,
+        "repair_epoch_attempt_limit": (
+            PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT
+            if repair_epoch is not None
+            else None
+        ),
     }
     if returncode == 0 and _strict_semantic_success(
         {
@@ -541,6 +578,167 @@ def _run_pair(
     return attempt
 
 
+def _without_render(command: list[str]) -> list[str]:
+    """Remove camera/video arguments for a true diagnostic worker request."""
+
+    result: list[str] = []
+    index = 0
+    while index < len(command):
+        value = command[index]
+        if value == "--render":
+            index += 1
+            continue
+        if value == "--video":
+            index += 2
+            continue
+        result.append(value)
+        index += 1
+    return result
+
+
+def _putpot_worker_visit(
+    task: dict[str, Any],
+    record: dict[str, Any],
+    *,
+    output_root: Path,
+    python: str,
+    gear_repo: str,
+    attempt_limit: int,
+    repair_epoch: str,
+) -> list[dict[str, Any]]:
+    """Run same-pair diagnostics in one no-camera Isaac worker, then escalate."""
+
+    pair_root = output_root / task["name"] / record["pair_id"]
+    repair_root = pair_root / "semantic_repair"
+    first_root = _next_attempt(pair_root)
+    first_number = _attempt_number(first_root)
+    source_keyframes = output_root / task["name"] / "source_keyframes.json"
+    code_head = _git_head()
+    requests = []
+    for epoch_attempt in range(1, attempt_limit + 1):
+        lifetime = first_number + epoch_attempt - 1
+        attempt_root = repair_root / f"attempt_{lifetime:03d}"
+        rendered_command = _command(
+            task,
+            python=python,
+            gear_repo=gear_repo,
+            target=record["dataset"],
+            mode="skill",
+            output=attempt_root,
+            source_keyframes=source_keyframes,
+            direct_replay_result=None,
+        )
+        argv = _without_render(rendered_command)[2:]
+        argv.extend(
+            [
+                "--runtime-receipt-json",
+                str(attempt_root / "skill_runtime.json"),
+                "--lifetime-attempt-number",
+                str(lifetime),
+                "--repair-epoch",
+                repair_epoch,
+                "--repair-epoch-attempt",
+                str(epoch_attempt),
+                "--repair-epoch-attempt-limit",
+                str(PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT),
+            ]
+        )
+        requests.append(
+            {
+                "pair": record["pair_id"],
+                "code_head": code_head,
+                "argv": argv,
+                "log": str(attempt_root / "skill.log"),
+                "result_json": str(attempt_root / "skill_result.json"),
+                "lifetime_attempt": lifetime,
+                "repair_epoch": repair_epoch,
+                "repair_epoch_attempt": epoch_attempt,
+            }
+        )
+
+    epoch_root = repair_root / "repair_epochs" / repair_epoch
+    epoch_root.mkdir(parents=True, exist_ok=False)
+    manifest_path = epoch_root / "requests.json"
+    receipt_path = epoch_root / "worker_receipts.jsonl"
+    _atomic_json(manifest_path, requests)
+    worker_command = [
+        python,
+        str((REPO_ROOT / "examples/run_putpot_persistent_worker.py").resolve()),
+        "--request-manifest",
+        str(manifest_path),
+        "--receipt-jsonl",
+        str(receipt_path),
+    ]
+    with open(epoch_root / "worker.log", "x", encoding="utf-8") as stream:
+        worker_returncode = subprocess.run(
+            worker_command,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            check=False,
+        ).returncode
+    receipts = [
+        json.loads(line)
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    request_by_index = {index: value for index, value in enumerate(requests, 1)}
+    attempts: list[dict[str, Any]] = []
+    render_recommendation = None
+    for receipt in receipts:
+        if receipt.get("type") != "attempt":
+            continue
+        request = request_by_index[receipt["request_index"]]
+        result_path = Path(request["result_json"])
+        attempts.append(
+            {
+                "attempt": result_path.parent.name,
+                "code_head": receipt["code_head"],
+                "started_at": receipt["started_at"],
+                "finished_at": receipt["finished_at"],
+                "returncode": 0 if receipt["error"] is None else 1,
+                "command": worker_command,
+                "worker_request": request,
+                "worker_receipt": receipt,
+                "result": str(result_path.resolve()),
+                "video": None,
+                "runtime_receipt": str(
+                    (result_path.parent / "skill_runtime.json").resolve()
+                ),
+                "status": (
+                    "render_candidate"
+                    if receipt["render_recommendation"]
+                    else "diagnostic_failed"
+                ),
+                "lifetime_attempt": request["lifetime_attempt"],
+                "repair_epoch": repair_epoch,
+                "repair_epoch_attempt": request["repair_epoch_attempt"],
+                "repair_epoch_attempt_limit": (
+                    PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT
+                ),
+            }
+        )
+        render_recommendation = receipt["render_recommendation"]
+
+    consumed = len(attempts)
+    if render_recommendation is not None and consumed < attempt_limit:
+        rendered = _run_pair(
+            task,
+            record,
+            output_root=output_root,
+            python=python,
+            gear_repo=gear_repo,
+            repair_epoch=repair_epoch,
+            repair_epoch_attempt=consumed + 1,
+        )
+        rendered["render_reason"] = render_recommendation
+        attempts.append(rendered)
+    if worker_returncode != 0 and not attempts:
+        raise RuntimeError(
+            f"persistent PutPot worker failed before producing receipts: {epoch_root}"
+        )
+    return attempts
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -551,7 +749,7 @@ def main() -> None:
     parser.add_argument("--task", action="append")
     parser.add_argument("--pair", action="append")
     parser.add_argument("--max-pairs", type=int)
-    parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=1)
+    parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=4)
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
@@ -583,14 +781,37 @@ def main() -> None:
         pending = pending[: args.max_pairs]
     for key, record in pending:
         print(f"SEMANTIC_REPAIR_START={key}", flush=True)
-        for visit_attempt in range(1, visit_attempt_limit + 1):
-            attempt = _run_pair(
+        if record["task"] == "putpot":
+            repair_epoch = (
+                datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                + "-"
+                + record["pair_id"]
+            )
+            visit_attempts = _putpot_worker_visit(
                 task_map[record["task"]],
                 record,
                 output_root=output_root,
                 python=args.python,
                 gear_repo=args.gear_repo,
+                attempt_limit=visit_attempt_limit,
+                repair_epoch=repair_epoch,
             )
+        else:
+            visit_attempts = []
+            for visit_attempt in range(1, visit_attempt_limit + 1):
+                attempt = _run_pair(
+                    task_map[record["task"]],
+                    record,
+                    output_root=output_root,
+                    python=args.python,
+                    gear_repo=args.gear_repo,
+                )
+                attempt["asset_visit_attempt"] = visit_attempt
+                attempt["asset_visit_attempt_limit"] = visit_attempt_limit
+                visit_attempts.append(attempt)
+                if attempt["status"] == "accepted":
+                    break
+        for visit_attempt, attempt in enumerate(visit_attempts, 1):
             attempt["asset_visit_attempt"] = visit_attempt
             attempt["asset_visit_attempt_limit"] = visit_attempt_limit
             record["attempts"].append(attempt)

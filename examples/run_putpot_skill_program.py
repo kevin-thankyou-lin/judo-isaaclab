@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import traceback
 
 import numpy as np
@@ -25,7 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "examples"))
 
 
-def _parser() -> argparse.Namespace:
+def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gear-repo", required=True)
     parser.add_argument("--source-dataset", required=True)
@@ -65,7 +66,37 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--direct-replay-result")
-    return parser.parse_args()
+    parser.add_argument("--persistent-session", action="store_true")
+    parser.add_argument("--lifetime-attempt-number", type=int)
+    parser.add_argument("--repair-epoch")
+    parser.add_argument("--repair-epoch-attempt", type=int)
+    parser.add_argument("--repair-epoch-attempt-limit", type=int, default=4)
+    parser.add_argument("--runtime-receipt-json")
+    return parser.parse_args(argv)
+
+
+_PERSISTENT_RUNTIME: dict[str, object] | None = None
+_LAST_ATTEMPT_RUNTIME_RECEIPT: dict[str, object] | None = None
+
+
+def close_persistent_runtime() -> dict[str, object] | None:
+    """Close the one loaded PutPot runtime at an explicit worker boundary."""
+
+    global _PERSISTENT_RUNTIME
+    runtime = _PERSISTENT_RUNTIME
+    if runtime is None:
+        return None
+    started = time.monotonic()
+    runtime["env"].close()
+    runtime["simulation_app"].close()
+    receipt = {
+        "pid": os.getpid(),
+        "runtime_key": runtime["key"],
+        "attempts": runtime["attempts"],
+        "shutdown_s": time.monotonic() - started,
+    }
+    _PERSISTENT_RUNTIME = None
+    return receipt
 
 
 def _sha256(path: str | os.PathLike[str]) -> str:
@@ -988,8 +1019,34 @@ def _transition_trace(samples):
     return result
 
 
-def main() -> None:
-    args = _parser()
+def main(argv: list[str] | None = None) -> None:
+    global _LAST_ATTEMPT_RUNTIME_RECEIPT, _PERSISTENT_RUNTIME
+    from judo_isaaclab.putpot_runtime import (
+        AttemptIdentity,
+        PhaseTimers,
+        ensure_fresh_output_paths,
+    )
+
+    args = _parser(argv)
+    timers = PhaseTimers()
+    attempt_identity = None
+    identity_values = (
+        args.lifetime_attempt_number,
+        args.repair_epoch,
+        args.repair_epoch_attempt,
+    )
+    if any(value is not None for value in identity_values):
+        if not all(value is not None for value in identity_values):
+            raise ValueError(
+                "lifetime attempt, repair epoch, and repair-epoch attempt "
+                "must be supplied together"
+            )
+        attempt_identity = AttemptIdentity(
+            args.lifetime_attempt_number,
+            args.repair_epoch,
+            args.repair_epoch_attempt,
+            args.repair_epoch_attempt_limit,
+        )
     if args.render and not args.video:
         raise ValueError("--render requires --video")
     if args.mode in {"skill", "replay_center"} and not args.source_keyframes:
@@ -1007,17 +1064,60 @@ def main() -> None:
         ) < 1
     ):
         raise ValueError("support/transport clearances are invalid")
-    for path in (args.result_json, args.trace_npz, args.video, args.write_keyframes):
-        if path and os.path.isfile(path):
-            os.unlink(path)
+    output_paths = (
+        args.result_json,
+        args.trace_npz,
+        args.demo_hdf5,
+        args.video,
+        args.write_keyframes,
+        args.runtime_receipt_json,
+    )
+    if args.persistent_session:
+        ensure_fresh_output_paths(list(output_paths))
+    else:
+        for path in output_paths:
+            if path and os.path.isfile(path):
+                os.unlink(path)
     # Validate cheap dataset/asset provenance before the expensive app launch.
+    asset_load_started = time.monotonic()
     source_assets = _dataset_assets(args.source_dataset, args.objects_root)
     target_assets = _dataset_assets(args.target_dataset, args.objects_root)
+    timers.add("asset_env_load", time.monotonic() - asset_load_started)
     sys.path.insert(0, os.path.abspath(args.gear_repo))
     from isaaclab.app import AppLauncher
 
-    simulation_app = AppLauncher({"headless": True, "device": args.device, "enable_cameras": True}).app
-    env = encoder = None
+    runtime_key = {
+        "target_assets": target_assets,
+        "device": args.device,
+        "render": bool(args.render),
+        "camera_width": args.camera_width if args.render else None,
+        "camera_height": args.camera_height if args.render else None,
+    }
+    runtime_reused = False
+    reset_index = 1
+    if args.persistent_session and _PERSISTENT_RUNTIME is not None:
+        if _PERSISTENT_RUNTIME["key"] != runtime_key:
+            raise RuntimeError(
+                "persistent PutPot worker boundary changed; restart worker for "
+                "assets, device, or camera capability"
+            )
+        simulation_app = _PERSISTENT_RUNTIME["simulation_app"]
+        env = _PERSISTENT_RUNTIME["env"]
+        offline_ground = _PERSISTENT_RUNTIME["offline_ground"]
+        runtime_reused = True
+        reset_index = int(_PERSISTENT_RUNTIME["attempts"]) + 1
+    else:
+        app_started = time.monotonic()
+        simulation_app = AppLauncher(
+            {
+                "headless": True,
+                "device": args.device,
+                "enable_cameras": bool(args.render),
+            }
+        ).app
+        timers.add("app_startup", time.monotonic() - app_started)
+        env = None
+    encoder = None
     try:
         import torch
         from dc_study.utils.task_creation import create_task_environment
@@ -1025,22 +1125,37 @@ def main() -> None:
             _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state,
         )
 
-        offline_ground = _configure_offline_ground()
-        env = create_task_environment(
-            task_name="PutPotOnCooktop-v0",
-            assets_instance_paths=target_assets,
-            objects_randomization=None,
-            init_joint_pos_randomization=0.0,
-            mode="replay",
-            device=args.device,
-            observation_modalities=["proprioception"] + (["rgb"] if args.render else []),
-            enable_self_collisions=False,
-            camera_width=args.camera_width,
-            camera_height=args.camera_height,
-            image_downsample_factor=1,
-            enable_gripper_grasp_clamp=False,
-            enable_grasp_ray_viz=False,
-        )
+        if not runtime_reused:
+            env_load_started = time.monotonic()
+            offline_ground = _configure_offline_ground()
+            observation_modalities = ["proprioception"] + (
+                ["rgb"] if args.render else []
+            )
+            env = create_task_environment(
+                task_name="PutPotOnCooktop-v0",
+                assets_instance_paths=target_assets,
+                objects_randomization=None,
+                init_joint_pos_randomization=0.0,
+                mode="replay",
+                device=args.device,
+                observation_modalities=observation_modalities,
+                enable_self_collisions=False,
+                camera_width=args.camera_width,
+                camera_height=args.camera_height,
+                image_downsample_factor=1,
+                enable_gripper_grasp_clamp=False,
+                enable_grasp_ray_viz=False,
+            )
+            timers.add("asset_env_load", time.monotonic() - env_load_started)
+            if args.persistent_session:
+                _PERSISTENT_RUNTIME = {
+                    "key": runtime_key,
+                    "simulation_app": simulation_app,
+                    "env": env,
+                    "offline_ground": offline_ground,
+                    "attempts": 0,
+                }
+        reset_started = time.monotonic()
         env.reset(warm_up=False, seed=args.seed)
         source = _load_dataset(args.source_dataset, args.episode, env.device)
         target = _load_dataset(args.target_dataset, args.episode, env.device)
@@ -1049,6 +1164,8 @@ def main() -> None:
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
         env.sim.forward()
         env.reset_success_check(env_ids)
+        timers.add("reset", time.monotonic() - reset_started)
+        trajectory_started = time.monotonic()
         source_geometry = _geometry(source_assets["pot"], source["pot_pose"][0])
         target_geometry = _geometry(target_assets["pot"], target["pot_pose"][0])
         from semantic_asset_geometry import collision_components, jsonable, pot_parts
@@ -1299,6 +1416,7 @@ def main() -> None:
             if repair_prefix_steps is not None
             else trajectory.steps if trajectory is not None else len(source["actions"])
         )
+        timers.add("trajectory_build", time.monotonic() - trajectory_started)
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
         demo_recorder = DemonstrationRecorder()
@@ -1307,8 +1425,11 @@ def main() -> None:
         actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
         frame_stats = []
         if args.render:
+            render_started = time.monotonic()
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
+            timers.add("render_encode", time.monotonic() - render_started)
+        rollout_started = time.monotonic()
         for step in range(total_steps):
             if repair_prefix_steps is not None and step < repair_prefix_steps:
                 action = source["actions"][step : step + 1]
@@ -2726,7 +2847,11 @@ def main() -> None:
                     sample["right_eef_pose"],
                 )
             if encoder is not None:
-                frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
+                render_started = time.monotonic()
+                frame = _frame(env, sample)
+                encoder.write(frame)
+                frame_stats.append((float(frame.mean()), float(frame.std())))
+                timers.add("render_encode", time.monotonic() - render_started)
             if (step + 1) % 50 == 0 or sample["task_success"]:
                 print("PUTPOT_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "task_success", "left_grasp", "right_grasp", "pot_pose", "support_error_m", "center_error_m", "xy_error_m")}, sort_keys=True), flush=True)
             if bool(truncated[0].item()):
@@ -2746,7 +2871,15 @@ def main() -> None:
                 )
                 raise RuntimeError(f"unexpected failure termination at step {step}")
         if encoder is not None:
+            render_started = time.monotonic()
             encoder.close(); encoder = None
+            timers.add("render_encode", time.monotonic() - render_started)
+        rollout_total_s = time.monotonic() - rollout_started
+        timers.add(
+            "rollout",
+            max(0.0, rollout_total_s - timers.seconds["render_encode"]),
+        )
+        trace_started = time.monotonic()
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
             args.trace_npz,
@@ -2797,6 +2930,7 @@ def main() -> None:
                 else ["direct_source_action_replay"] * len(actions)
             ),
         )
+        timers.add("trace_demo", time.monotonic() - trace_started)
         final = samples[-1]
         extracted = None
         if args.mode == "replay" and final["task_success"]:
@@ -2805,6 +2939,8 @@ def main() -> None:
                 Path(args.write_keyframes).parent.mkdir(parents=True, exist_ok=True)
                 with open(args.write_keyframes, "w", encoding="utf-8") as stream:
                     json.dump(extracted, stream, indent=2, sort_keys=True)
+        validation_started = time.monotonic()
+        trace_demo_at_validation_start_s = timers.seconds["trace_demo"]
         video = _probe(args.video) if args.render else None
         desired_error = []
         if trajectory is not None:
@@ -2890,8 +3026,15 @@ def main() -> None:
             "terminal_pot_speed_within_threshold": bool(
                 float(np.linalg.norm(final["pot_velocity"][:3])) <= 0.05
             ),
-            "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
-            "fully_decodable": video is None or video["full_decode_returncode"] == 0,
+            "h264_nonempty": bool(
+                video is not None
+                and video["codec"] == "h264"
+                and video["size_bytes"] > 0
+                and video["frame_count"] == len(frame_stats)
+            ),
+            "fully_decodable": bool(
+                video is not None and video["full_decode_returncode"] == 0
+            ),
         }
         if args.classification_run:
             if args.mode != "replay":
@@ -2921,6 +3064,7 @@ def main() -> None:
         if args.demo_hdf5 and checks["accepted_task_success"] and all(acceptance_checks.values()):
             from judo_isaaclab.demo_artifact import relative_asset_paths
 
+            demo_started = time.monotonic()
             demo_recorder.write(
                 args.demo_hdf5,
                 assets_instance_paths=relative_asset_paths(target_assets, args.objects_root),
@@ -2939,6 +3083,7 @@ def main() -> None:
                 },
             )
             demo_artifact = {"path": os.path.abspath(args.demo_hdf5), "sha256": _sha256(args.demo_hdf5)}
+            timers.add("trace_demo", time.monotonic() - demo_started)
         from run_putmarker_skill_program import _asset_provenance
         result = {
             "status": "passed" if all(acceptance_checks.values()) else "failed",
@@ -2957,6 +3102,20 @@ def main() -> None:
                 "control_rate_hz": 30,
                 "steps": len(actions),
                 "seed": args.seed,
+                "attempt_identity": (
+                    None if attempt_identity is None else attempt_identity.receipt()
+                ),
+                "persistent_runtime": {
+                    "pid": os.getpid(),
+                    "reused": runtime_reused,
+                    "reset_index": reset_index,
+                    "app_cameras_enabled": bool(args.render),
+                    "observation_modalities": ["proprioception"]
+                    + (["rgb"] if args.render else []),
+                    "worker_boundary": (
+                        "same assets, device, camera capability, and code head"
+                    ),
+                },
                 "grasp_assistance": "none",
                 "milestone_feedback_horizon_steps": (
                     milestone_feedback_horizon_steps
@@ -3147,6 +3306,19 @@ def main() -> None:
             "direct_replay_baseline": direct_replay,
             "offline_ground_override": offline_ground,
         }
+        timers.add(
+            "validation_decode_hash",
+            max(
+                0.0,
+                time.monotonic()
+                - validation_started
+                - (
+                    timers.seconds["trace_demo"]
+                    - trace_demo_at_validation_start_s
+                ),
+            ),
+        )
+        result["protocol"]["phase_timings_s"] = timers.receipt()
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         with open(args.result_json, "w", encoding="utf-8") as stream:
             json.dump(result, stream, indent=2, sort_keys=True)
@@ -3158,10 +3330,41 @@ def main() -> None:
         raise
     finally:
         if encoder is not None:
+            render_started = time.monotonic()
             encoder.close()
-        if env is not None:
-            env.close()
-        simulation_app.close()
+            timers.add("render_encode", time.monotonic() - render_started)
+        if args.persistent_session and _PERSISTENT_RUNTIME is not None:
+            _PERSISTENT_RUNTIME["attempts"] = reset_index
+        else:
+            shutdown_started = time.monotonic()
+            if env is not None:
+                env.close()
+            simulation_app.close()
+            timers.add("shutdown", time.monotonic() - shutdown_started)
+        _LAST_ATTEMPT_RUNTIME_RECEIPT = {
+            "pid": os.getpid(),
+            "persistent": bool(args.persistent_session),
+            "runtime_reused": runtime_reused,
+            "reset_index": reset_index,
+            "attempt_identity": (
+                None if attempt_identity is None else attempt_identity.receipt()
+            ),
+            "phase_timings_s": timers.receipt(),
+        }
+        if args.runtime_receipt_json:
+            receipt_path = Path(args.runtime_receipt_json)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_tmp = receipt_path.with_name(receipt_path.name + ".tmp")
+            with open(receipt_tmp, "x", encoding="utf-8") as stream:
+                json.dump(
+                    _LAST_ATTEMPT_RUNTIME_RECEIPT,
+                    stream,
+                    indent=2,
+                    sort_keys=True,
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(receipt_tmp, receipt_path)
 
 
 if __name__ == "__main__":

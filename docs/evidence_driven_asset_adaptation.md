@@ -134,6 +134,32 @@ bimanual handle grasp
 The authoritative success check remains the task's existing two-stage predicate:
 latched bimanual pick followed by released, stable on-top placement.
 
+### PutPot repair runtime and render policy
+
+One PutPot asset visit owns one persistent Isaac worker. The worker loads Kit,
+the task, and one target asset pair once, then performs each retry with a full
+environment reset and fresh task predicates, controller program, recorder,
+trace, and encoder state. A changed code revision, asset pair, device, or camera
+capability is a worker boundary and requires a new process; this keeps code and
+controller revisions reloadable without mutating a live Isaac module graph.
+
+Every attempt records both its immutable lifetime attempt number and its
+one-based repair-epoch attempt number. The epoch limit is four fresh physics
+attempts. After four nonaccepting attempts the scheduler rotates the asset into
+hard-case review; it never reuses or overwrites an attempt directory.
+
+Diagnostics are true no-render runs: cameras are disabled in `AppLauncher`, RGB
+is absent from environment observations, and no encoder is created. A fresh
+fully rendered process is allowed only for an ambiguous failure or a final
+acceptance candidate. A diagnostic result can never merge into the ledger;
+merging still requires a continuous, fully decoded H.264 video plus every
+existing task, bimanual transport, stability, provenance, trace, and HDF5 gate.
+
+Runtime receipts report wall-clock seconds for app startup, asset/environment
+load, reset, trajectory build, rollout, render/encode, trace/demo,
+validation/decode/hash, and shutdown. CPU deployment is sized to the remote
+cgroup quota of eight cores; host CPU inventory is not treated as usable quota.
+
 ## HangMug deployment
 
 `configs/hangmug_evidence_agent.json` defines the HangMug proof. Its semantic

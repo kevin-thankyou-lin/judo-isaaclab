@@ -41,10 +41,13 @@ def test_putpot_semantic_repair_requires_bimanual_transport_without_replay():
             "checks": {
                 "coded_task_success": True,
                 "bimanual_transport_completed": False,
+                "h264_nonempty": True,
+                "fully_decodable": True,
             },
             "acceptance_checks": {"coded_task_success": True},
             "direct_replay_baseline": None,
             "provenance": {"demonstration": {"path": "/tmp/demo.hdf5"}},
+            "video": {"path": "/tmp/skill.mp4"},
         },
     }
 
@@ -52,6 +55,25 @@ def test_putpot_semantic_repair_requires_bimanual_transport_without_replay():
     assert not module._semantic_motion_success(source, "putpot")
     source["result"]["checks"]["bimanual_transport_completed"] = True
     assert module._strict_semantic_success(source, "putpot")
+
+
+def test_putpot_diagnostic_command_disables_render_and_video():
+    module = _module()
+    command = [
+        "python",
+        "runner.py",
+        "--render",
+        "--video",
+        "/tmp/skill.mp4",
+        "--trace-npz",
+        "/tmp/trace.npz",
+    ]
+    assert module._without_render(command) == [
+        "python",
+        "runner.py",
+        "--trace-npz",
+        "/tmp/trace.npz",
+    ]
 
 
 def test_failed_acceptance_check_is_diagnosed_even_if_task_success_was_seen():
