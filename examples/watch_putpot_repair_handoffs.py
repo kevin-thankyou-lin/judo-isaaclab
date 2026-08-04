@@ -205,8 +205,15 @@ def _should_wake(
     grace_seconds: float,
     repeat_seconds: float,
     max_wakes: int,
+    rotation_grace_seconds: float | None = None,
 ) -> bool:
-    if now - float(boundary["ready_since_epoch_s"]) < grace_seconds:
+    effective_grace = (
+        rotation_grace_seconds
+        if boundary["action"] == "rotate_after_visit"
+        and rotation_grace_seconds is not None
+        else grace_seconds
+    )
+    if now - float(boundary["ready_since_epoch_s"]) < effective_grace:
         return False
     prior = state.get("boundaries", {}).get(boundary["fingerprint"], {})
     wake_count = int(prior.get("wake_count", 0))
@@ -242,12 +249,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--state-json", required=True)
     parser.add_argument("--poll-seconds", type=float, default=30.0)
     parser.add_argument("--grace-seconds", type=float, default=600.0)
+    parser.add_argument("--rotation-grace-seconds", type=float, default=30.0)
     parser.add_argument("--repeat-seconds", type=float, default=1200.0)
     parser.add_argument("--max-wakes", type=int, default=2)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    if args.grace_seconds < 0 or args.repeat_seconds <= 0 or args.max_wakes < 1:
+    if (
+        args.grace_seconds < 0
+        or args.rotation_grace_seconds < 0
+        or args.repeat_seconds <= 0
+        or args.max_wakes < 1
+    ):
         raise ValueError("invalid watchdog timing or wake limit")
 
     state_path = Path(args.state_json)
@@ -271,6 +284,7 @@ def main(argv: list[str] | None = None) -> None:
             grace_seconds=args.grace_seconds,
             repeat_seconds=args.repeat_seconds,
             max_wakes=args.max_wakes,
+            rotation_grace_seconds=args.rotation_grace_seconds,
         ):
             prompt = _prompt(boundary)
             if not args.dry_run:

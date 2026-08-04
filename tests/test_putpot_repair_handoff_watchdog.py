@@ -90,6 +90,31 @@ def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
     )
 
 
+def test_completed_visit_uses_short_rotation_grace():
+    module = _module()
+    boundary = _boundary(
+        action="rotate_after_visit",
+        fingerprint="epoch:worker_summary",
+    )
+
+    assert not module._should_wake(
+        boundary,
+        {"boundaries": {}},
+        now=129.0,
+        grace_seconds=600.0,
+        rotation_grace_seconds=30.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
+    assert module._should_wake(
+        boundary,
+        {"boundaries": {}},
+        now=130.0,
+        grace_seconds=600.0,
+        rotation_grace_seconds=30.0,
+        repeat_seconds=1200.0,
+        max_wakes=2,
+    )
 def test_prompt_requires_diagnosis_and_duplicate_preflight():
     module = _module()
 
