@@ -58,7 +58,7 @@ LOADED_CONTACT_MOTION_PRELOAD_M = 0.009
 CONTACT_BACKED_PICK_HEIGHT_M = 0.05
 CONTACT_BACKED_PICK_MARGIN_M = 0.005
 LOADED_CONTACT_HOLD_LIFT_STEP_M = 0.002
-CONTACT_BACKED_PICK_SETTLE_STEPS = 40
+CONTACT_BACKED_PICK_SETTLE_STEPS = 100
 # Pot020 attempt_005 tracked its jaw correction within 7 mm but left the
 # missing finger near -0.04 along the pad axis.  Its authored positive depth
 # imbalance is +37.5 mm at 49.4% retained transverse thickness, so it needs the
@@ -347,7 +347,7 @@ def contact_budget_transport_steps(
     planned_steps: int,
     retained_contact_steps: int,
     *,
-    budget_multiplier: float = 1.5,
+    budget_multiplier: float = 0.75,
 ) -> int:
     """Keep a thin-handle support sweep inside measured contact retention."""
 

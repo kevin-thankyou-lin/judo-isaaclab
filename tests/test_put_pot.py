@@ -309,8 +309,8 @@ def test_transport_duration_scales_with_measured_handle_cross_section():
         [0.069219, 0.061195, 0.020012],
         0,
     ) == 122
-    assert contact_budget_transport_steps(365, 80) == 120
-    assert contact_budget_transport_steps(100, 80) == 100
+    assert contact_budget_transport_steps(365, 80) == 60
+    assert contact_budget_transport_steps(50, 80) == 50
     assert contact_budget_transport_steps(180, 0) == 180
 
 
