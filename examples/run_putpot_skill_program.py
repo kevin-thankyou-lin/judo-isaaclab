@@ -1205,6 +1205,8 @@ def main() -> None:
         contact_hold_tracking_corrections_local_m = []
         contact_hold_pick_lift_steps = []
         contact_hold_pick_lift_command_m = 0.0
+        contact_hold_pick_recovery_correction_m = 0.0
+        contact_hold_pick_recovery_steps = []
         reference_hold_left_contact_local = None
         reference_hold_right_contact_local = None
         transport_reanchor_steps = []
@@ -1976,6 +1978,36 @@ def main() -> None:
                         contact_hold_loaded_residual.tolist()
                     )
                 if reference_hold_left_contact_local is not None:
+                    left_contacting = (
+                        np.asarray(sample["left_finger_forces_n"]) >= 0.1
+                    )
+                    if (
+                        not sample["left_grasp"]
+                        and sample["right_grasp"]
+                        and int(np.sum(left_contacting)) == 1
+                    ):
+                        from judo_isaaclab.put_pot import (
+                            reanchor_missing_finger_contact,
+                        )
+
+                        (
+                            reference_hold_left_contact_local,
+                            contact_hold_pick_recovery_correction_m,
+                        ) = reanchor_missing_finger_contact(
+                            reference_hold_left_contact_local,
+                            sample["pot_pose"],
+                            sample["left_finger_forces_n"],
+                            sample["left_pad_centers_world"],
+                            contact_hold_pick_recovery_correction_m,
+                        )
+                        contact_hold_pick_recovery_steps.append(
+                            {
+                                "step": step,
+                                "signed_correction_m": (
+                                    contact_hold_pick_recovery_correction_m
+                                ),
+                            }
+                        )
                     (
                         retained_hold_left_contact_local,
                         contact_hold_retention_local_m,
@@ -1994,7 +2026,7 @@ def main() -> None:
                         advance_loaded_contact_hold_lift,
                     )
 
-                    if sample["left_grasp"] and sample["right_grasp"]:
+                    if sample["right_grasp"] and np.any(left_contacting):
                         (
                             contact_hold_pick_lift_command_m,
                             hold_lift_residual_m,
@@ -2035,9 +2067,6 @@ def main() -> None:
                         support_normal_world=quaternion_rotate(
                             target_cooktop_geometry.root_pose[3:],
                             np.asarray([0.0, 0.0, 1.0]),
-                        ),
-                        support_aligned_object_orientation_wxyz=(
-                            target_geometry.root_pose[3:]
                         ),
                     )
                     if step + 1 == grasp_complete_step:
@@ -2887,6 +2916,9 @@ def main() -> None:
                     contact_hold_tracking_corrections_local_m
                 ),
                 "contact_hold_pick_lift_steps": contact_hold_pick_lift_steps,
+                "contact_hold_pick_recovery_steps": (
+                    contact_hold_pick_recovery_steps
+                ),
                 "transport_reanchor_step": (
                     transport_reanchor_steps[0] if transport_reanchor_steps else None
                 ),
