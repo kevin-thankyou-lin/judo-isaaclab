@@ -7,13 +7,43 @@ from judo_isaaclab.putpot_runtime import (
     PHASE_NAMES,
     PhaseTimers,
     diagnostic_classification,
+    append_jsonl,
     ensure_fresh_output_paths,
     full_render_required_for_merge,
     instantiated_scene_sensor_inventory,
     render_recommendation,
+    read_jsonl,
     timing_accounting,
+    validate_same_spec_retry,
     without_scene_camera_sensors,
 )
+
+
+def test_jsonl_reader_ignores_partial_trailing_append(tmp_path):
+    path = tmp_path / "queue.jsonl"
+    append_jsonl(path, {"request_id": "complete"})
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write('{"request_id":"partial"')
+
+    assert read_jsonl(path) == [{"request_id": "complete"}]
+
+
+def test_same_spec_retry_requires_ambiguous_receipt_and_explicit_reason():
+    diagnosed = {
+        "program_spec": {"sha256": "same"},
+        "diagnostic_classification": "diagnosed_physics_failure",
+    }
+    with pytest.raises(ValueError, match="prior ambiguous_failure"):
+        validate_same_spec_retry(diagnosed, "same", "looks stochastic")
+
+    ambiguous = {
+        "program_spec": {"sha256": "same"},
+        "diagnostic_classification": "ambiguous_failure",
+    }
+    with pytest.raises(ValueError, match="explicit ambiguity reason"):
+        validate_same_spec_retry(ambiguous, "same", None)
+    validate_same_spec_retry(ambiguous, "same", "trace ended before first contact")
+    validate_same_spec_retry(diagnosed, "different", None)
 
 
 def test_attempt_identity_separates_lifetime_and_four_attempt_epoch():
@@ -26,8 +56,11 @@ def test_attempt_identity_separates_lifetime_and_four_attempt_epoch():
     }
     with pytest.raises(ValueError, match="exceeds"):
         AttemptIdentity(38, "epoch-20260804-a", 5)
-    with pytest.raises(ValueError, match="exactly four"):
-        AttemptIdentity(38, "epoch-20260804-a", 1, 3)
+    assert AttemptIdentity(38, "epoch-20260804-a", 1, 3).receipt()[
+        "repair_epoch_attempt_limit"
+    ] == 3
+    with pytest.raises(ValueError, match="capped at four"):
+        AttemptIdentity(38, "epoch-20260804-a", 1, 5)
 
 
 def test_phase_timers_expose_every_required_phase():

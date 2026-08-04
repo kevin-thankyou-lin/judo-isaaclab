@@ -137,16 +137,41 @@ latched bimanual pick followed by released, stable on-top placement.
 ### PutPot repair runtime and render policy
 
 One PutPot asset visit owns one persistent Isaac worker. The worker loads Kit,
-the task, and one target asset pair once, then performs each retry with a full
-environment reset and fresh task predicates, controller program, recorder,
-trace, and encoder state. A changed code revision, asset pair, device, or camera
-capability is a worker boundary and requires a new process; this keeps code and
-controller revisions reloadable without mutating a live Isaac module graph.
+the task, and one target asset pair once. The campaign creates an interactive
+session and appends only cycle 1 to `requests.jsonl`. After the durable attempt
+ack appears in `worker_receipts.jsonl`, the worker stays alive and idle while
+the supervisor diagnoses that receipt. It never receives a static batch of
+prebuilt retries.
+
+Semantic trajectory/controller parameters live in the versioned, validated
+`configs/putpot_semantic_program_v1.json` program spec. The worker reloads that
+JSON file on every request after a full environment reset and fresh task
+predicates, controller state, recorder, trace, and encoder state. The SHA-256 of
+the exact immutable spec copy is recorded in the result, runtime receipt, and
+worker ack. Parameter-only revisions therefore reuse the loaded Isaac process;
+arbitrary Python changes, a changed asset pair, device, camera capability, or
+code commit are worker boundaries and require a new process.
 
 Every attempt records both its immutable lifetime attempt number and its
-one-based repair-epoch attempt number. The epoch limit is four fresh physics
-attempts. After four nonaccepting attempts the scheduler rotates the asset into
-hard-case review; it never reuses or overwrites an attempt directory.
+one-based repair-epoch cycle number. The epoch limit is four diagnose-to-repair
+cycles, not four identical-code retries. A same-spec repeat is rejected unless
+the preceding receipt is classified `ambiguous_failure` and the submitted
+request includes an explicit ambiguity reason. After four nonaccepting cycles
+the scheduler rotates the asset into hard-case review; it never reuses or
+overwrites an attempt directory.
+
+To append exactly one revised request to a waiting worker:
+
+```bash
+python examples/submit_putpot_program_request.py \
+  --session-json /path/to/interactive_session.json \
+  --program-spec-json /path/to/revised_program.json
+```
+
+Use `--ambiguity-reason '...'` only for a justified same-spec stochastic probe.
+Use `--shutdown-reason '...'` at an artifact-safe worker boundary. The append
+CLI refuses a new cycle until the previous request has an ack, refuses a fifth
+cycle, and copies each submitted spec into the repair epoch before enqueueing.
 
 Diagnostics are true no-render runs: cameras are disabled in `AppLauncher`, RGB
 is absent from environment observations, and no encoder is created. Receipts
@@ -159,7 +184,10 @@ merging still requires a continuous, fully decoded H.264 video plus every
 existing task, bimanual transport, stability, provenance, trace, and HDF5 gate.
 Typed deterministic controller or configuration exceptions are neither physics
 failures nor visual ambiguities: the worker records their exception provenance,
-stops the unchanged worker visit, and never spends a rendered attempt on them.
+stays at the acknowledged boundary for supervisor action, and never spends a
+rendered attempt on them. A Python fix is deployed by shutting down and
+restarting that worker; a parameter-only fix is submitted through the live
+queue.
 
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,

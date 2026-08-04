@@ -45,19 +45,7 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--episode", default="demo_0")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
-    parser.add_argument("--damping", type=float, default=0.045)
-    parser.add_argument("--max-joint-delta", type=float, default=0.16)
-    parser.add_argument("--max-position-step", type=float, default=0.025)
-    parser.add_argument("--max-rotation-step", type=float, default=0.16)
-    parser.add_argument("--support-clearance-m", type=float, default=0.006)
-    parser.add_argument("--transport-clearance-m", type=float, default=0.025)
-    parser.add_argument("--collision-clearance-m", type=float, default=0.025)
-    parser.add_argument("--transport-steps", type=int, default=180)
-    parser.add_argument("--lower-steps", type=int, default=40)
-    parser.add_argument("--release-steps", type=int, default=20)
-    parser.add_argument("--withdraw-steps", type=int, default=30)
-    parser.add_argument("--settle-steps", type=int, default=35)
-    parser.add_argument("--center-repair-steps", type=int, default=60)
+    parser.add_argument("--program-spec-json")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -1026,8 +1014,23 @@ def main(argv: list[str] | None = None) -> None:
         timing_accounting,
         without_scene_camera_sensors,
     )
+    from judo_isaaclab.putpot_program_spec import (
+        apply_program_spec,
+        load_program_spec,
+    )
 
     args = _parser(argv)
+    if args.mode in {"skill", "replay_center"} and not args.program_spec_json:
+        raise ValueError(f"{args.mode} mode requires --program-spec-json")
+    selected_program_spec = (
+        Path(args.program_spec_json)
+        if args.program_spec_json
+        else REPO_ROOT / "configs/putpot_semantic_program_v1.json"
+    )
+    # Deliberately reload on every main() call.  Persistent Isaac state is
+    # reusable; semantic trajectory/controller parameters are not cached.
+    program_spec = load_program_spec(selected_program_spec)
+    apply_program_spec(args, program_spec)
     timers = PhaseTimers()
     attempt_identity = None
     identity_values = (
@@ -1776,6 +1779,9 @@ def main(argv: list[str] | None = None) -> None:
                         sample["left_pad_centers_world"],
                         sample["left_pad_axes_world"],
                         jaw_residual_for_twist_m,
+                        rotation_fraction=(
+                            args.receiving_jaw_reorientation_fraction
+                        ),
                     )
                     peer_contact_position_locked = bool(
                         peer_contact_position_locked
@@ -3087,6 +3093,9 @@ def main(argv: list[str] | None = None) -> None:
                 "attempt_identity": (
                     None if attempt_identity is None else attempt_identity.receipt()
                 ),
+                "program_spec": (
+                    None if program_spec is None else program_spec.receipt()
+                ),
                 "persistent_runtime": {
                     "pid": os.getpid(),
                     "reused": runtime_reused,
@@ -3245,9 +3254,12 @@ def main(argv: list[str] | None = None) -> None:
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,
                 "release_signed_residual_world_m": release_signed_residual_world_m,
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "loaded_jaw_reach_avoidance_fraction": LOADED_JAW_REACH_AVOIDANCE_FRACTION, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None), "supported_center_slide": bool(trajectory is not None and "center_slide" in trajectory.waypoint_steps) or repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "loaded_jaw_reach_avoidance_fraction": LOADED_JAW_REACH_AVOIDANCE_FRACTION, "receiving_jaw_reorientation_fraction": args.receiving_jaw_reorientation_fraction, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": MISSING_FINGER_CONTACT_LIMIT_M, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None), "supported_center_slide": bool(trajectory is not None and "center_slide" in trajectory.waypoint_steps) or repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {
+                "program_spec": (
+                    None if program_spec is None else program_spec.receipt()
+                ),
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
                 "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)},
                 "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()},
@@ -3339,6 +3351,9 @@ def main(argv: list[str] | None = None) -> None:
                         attempt_wall_started_monotonic
                     ),
                     "scene_sensor_inventory": scene_sensor_inventory,
+                    "program_spec": (
+                        None if program_spec is None else program_spec.receipt()
+                    ),
                 }
                 subprocess.Popen(
                     [
@@ -3376,6 +3391,9 @@ def main(argv: list[str] | None = None) -> None:
                 phase_timings,
             ),
             "scene_sensor_inventory": scene_sensor_inventory,
+            "program_spec": (
+                None if program_spec is None else program_spec.receipt()
+            ),
         }
         if args.runtime_receipt_json and not runtime_receipt_via_monitor:
             receipt_path = Path(args.runtime_receipt_json)

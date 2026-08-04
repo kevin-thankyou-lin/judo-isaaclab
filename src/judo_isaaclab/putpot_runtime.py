@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import time
@@ -119,8 +120,8 @@ class AttemptIdentity:
             raise ValueError("repair epoch must be nonempty")
         if self.repair_epoch_attempt < 1:
             raise ValueError("repair epoch attempt must be positive")
-        if self.repair_epoch_attempt_limit != 4:
-            raise ValueError("PutPot repair epochs must contain exactly four attempts")
+        if not 1 <= self.repair_epoch_attempt_limit <= 4:
+            raise ValueError("PutPot repair epochs are capped at four cycles")
         if self.repair_epoch_attempt > self.repair_epoch_attempt_limit:
             raise ValueError("repair epoch attempt exceeds the four-attempt limit")
 
@@ -139,6 +140,61 @@ def ensure_fresh_output_paths(paths: list[str | os.PathLike[str] | None]) -> Non
     existing = [str(Path(path)) for path in paths if path and Path(path).exists()]
     if existing:
         raise FileExistsError(f"refusing to overwrite attempt artifacts: {existing}")
+
+
+def append_jsonl(path: str | os.PathLike[str], value: Mapping[str, Any]) -> None:
+    """Durably append one complete JSON object to an interactive queue."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(dict(value), sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def read_jsonl(path: str | os.PathLike[str]) -> list[dict[str, Any]]:
+    """Read only complete newline-terminated objects from an append-only queue."""
+
+    target = Path(path)
+    if not target.is_file():
+        return []
+    text = target.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    result: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.endswith("\n") or not line.strip():
+            continue
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ValueError("interactive PutPot queue entries must be JSON objects")
+        result.append(value)
+    return result
+
+
+def validate_same_spec_retry(
+    previous_receipt: Mapping[str, Any] | None,
+    program_spec_sha256: str,
+    ambiguity_reason: str | None,
+) -> None:
+    """Fail closed on identical-spec retries without proven ambiguity."""
+
+    if previous_receipt is None:
+        return
+    previous_spec = previous_receipt.get("program_spec", {})
+    previous_hash = (
+        previous_spec.get("sha256") if isinstance(previous_spec, Mapping) else None
+    )
+    if previous_hash != program_spec_sha256:
+        return
+    classification = previous_receipt.get("diagnostic_classification")
+    if classification != "ambiguous_failure" or not (
+        isinstance(ambiguity_reason, str) and ambiguity_reason.strip()
+    ):
+        raise ValueError(
+            "same-spec PutPot retry requires prior ambiguous_failure receipt "
+            "and an explicit ambiguity reason"
+        )
 
 
 def diagnostic_classification(

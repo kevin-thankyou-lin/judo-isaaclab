@@ -2,7 +2,6 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -96,38 +95,67 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
 
     monkeypatch.setattr(module, "_command", fake_command)
 
-    def fake_worker_run(command, **kwargs):
-        manifest_path = Path(
-            command[command.index("--request-manifest") + 1]
-        )
-        receipt_path = Path(command[command.index("--receipt-jsonl") + 1])
-        request = json.loads(manifest_path.read_text(encoding="utf-8"))[0]
-        assert "--render" not in request["argv"]
-        assert "--video" not in request["argv"]
-        receipt_path.write_text(
-            json.dumps(
-                {
-                    "type": "attempt",
-                    "request_index": 1,
-                    "pair": request["pair"],
-                    "pid": 123,
-                    "started_at": "start",
-                    "finished_at": "finish",
-                    "code_head": "candidate-head",
-                    "result_json": request["result_json"],
-                    "result_present": True,
-                    "error": "RuntimeError: acceptance checks failed",
-                    "diagnostic_classification": "final_acceptance_candidate",
-                    "render_recommendation": "final_acceptance_candidate",
-                    "runtime": {"reset_index": 1},
-                }
+    class FakeWorker:
+        def __init__(self, command, **_kwargs):
+            self.request_path = Path(
+                command[command.index("--request-jsonl") + 1]
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        return SimpleNamespace(returncode=0)
+            self.receipt_path = Path(
+                command[command.index("--receipt-jsonl") + 1]
+            )
+            self.returncode = None
+            self.wrote_attempt = False
+            self.wrote_boundary = False
 
-    monkeypatch.setattr(module.subprocess, "run", fake_worker_run)
+        def poll(self):
+            queue = [
+                json.loads(line)
+                for line in self.request_path.read_text(encoding="utf-8").splitlines()
+            ]
+            attempts = [row for row in queue if row["type"] == "attempt"]
+            if attempts and not self.wrote_attempt:
+                assert len(attempts) == 1
+                request = attempts[0]
+                assert "--render" not in request["argv"]
+                assert "--video" not in request["argv"]
+                with open(self.receipt_path, "a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "type": "attempt",
+                                "request_index": 1,
+                                "request_id": request["request_id"],
+                                "pair": request["pair"],
+                                "pid": 123,
+                                "started_at": "start",
+                                "finished_at": "finish",
+                                "code_head": "candidate-head",
+                                "result_json": request["result_json"],
+                                "result_present": True,
+                                "error": "RuntimeError: acceptance checks failed",
+                                "diagnostic_classification": "final_acceptance_candidate",
+                                "render_recommendation": "final_acceptance_candidate",
+                                "runtime": {"reset_index": 1},
+                                "program_spec": {
+                                    "path": request["program_spec_json"],
+                                    "sha256": request["program_spec_sha256"],
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
+                self.wrote_attempt = True
+            if any(row["type"] == "shutdown" for row in queue) and not self.wrote_boundary:
+                with open(self.receipt_path, "a", encoding="utf-8") as stream:
+                    stream.write(json.dumps({"type": "worker_boundary"}) + "\n")
+                self.wrote_boundary = True
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return self.returncode
+
+    monkeypatch.setattr(module.subprocess, "Popen", FakeWorker)
     rendered_calls = []
 
     def fake_run_pair(*args, **kwargs):
@@ -153,7 +181,8 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
         "render_candidate",
         "accepted",
     ]
-    assert rendered_calls[0]["repair_epoch_attempt"] == 2
+    assert rendered_calls[0]["repair_epoch"] == "epoch-a-render"
+    assert rendered_calls[0]["repair_epoch_attempt"] == 1
     assert attempts[1]["render_reason"] == "final_acceptance_candidate"
 
 
@@ -400,7 +429,7 @@ def test_hard_case_pending_survives_nonaccepting_refresh_classification():
     assert module._pending_status({"status": "pending"}) == "pending"
 
 
-def test_putpot_round_robin_visit_is_capped_at_four_fresh_attempts():
+def test_putpot_round_robin_visit_is_capped_at_four_repair_cycles():
     module = _module()
 
     assert module._validate_fresh_attempts_per_asset_visit(4, {"putpot"}) == 4

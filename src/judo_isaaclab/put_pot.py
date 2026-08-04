@@ -1043,6 +1043,7 @@ def bounded_receiving_jaw_reorientation(
     pad_axes_world: Any,
     jaw_center_residual_m: float,
     *,
+    rotation_fraction: float = LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     jaw_center_tolerance_m: float = HANDLE_PAD_GEOMETRIC_MARGIN_M,
 ) -> tuple[np.ndarray, float, bool, float]:
     """Apply only the proven bounded wrist twist while one pad is loaded.
@@ -1060,10 +1061,12 @@ def bounded_receiving_jaw_reorientation(
         raise ValueError(
             "jaw_center_tolerance_m must be finite and nonnegative"
         )
+    if not np.isfinite(rotation_fraction) or not 0.0 <= rotation_fraction <= 1.0:
+        raise ValueError("rotation_fraction must be in [0, 1]")
     fraction = (
         0.0
         if abs(jaw_center_residual_m) <= jaw_center_tolerance_m
-        else LOADED_JAW_REACH_AVOIDANCE_FRACTION
+        else float(rotation_fraction)
     )
     oriented, angle, pivoted = twist_loaded_jaw_about_observed_contact(
         observed_pose,

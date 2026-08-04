@@ -1,9 +1,9 @@
-"""Run same-pair PutPot retries in one persistent Isaac process.
+"""Run interactive PutPot diagnose-to-repair requests in one Isaac process.
 
-The request manifest is a JSON list.  Every item contains an ``argv`` list for
-``run_putpot_skill_program.main`` plus immutable ``log``, ``pair``, and
-``code_head`` receipts.  The worker stops at a code/capability boundary or when
-a diagnostic result warrants a fresh fully rendered process.
+The supervisor appends one request to ``request_jsonl`` and waits for its
+durable receipt/ack before diagnosing and appending a revised program spec.
+The worker never executes prebuilt identical requests.  Python/code boundaries
+still require restart; validated program-spec changes are reloaded per request.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -21,11 +22,15 @@ import traceback
 from typing import Iterator
 
 from judo_isaaclab.putpot_runtime import (
+    append_jsonl,
     diagnostic_classification,
     ensure_fresh_output_paths,
+    read_jsonl,
     render_recommendation,
     timing_accounting,
+    validate_same_spec_retry,
 )
+from judo_isaaclab.putpot_program_spec import load_program_spec
 import run_putpot_skill_program as putpot
 
 
@@ -75,25 +80,24 @@ def _attempt_log(path: Path) -> Iterator[None]:
 
 
 def _append_receipt(path: Path, value: dict[str, object]) -> None:
-    with open(path, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(value, sort_keys=True) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    append_jsonl(path, value)
 
 
 def main() -> None:
     worker_started_monotonic = _process_started_monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--request-manifest", required=True)
+    parser.add_argument("--request-jsonl", required=True)
     parser.add_argument("--receipt-jsonl", required=True)
+    parser.add_argument("--poll-interval-s", type=float, default=0.1)
     args = parser.parse_args()
 
-    manifest_path = Path(args.request_manifest)
+    request_path = Path(args.request_jsonl)
     receipt_path = Path(args.receipt_jsonl)
     ensure_fresh_output_paths([receipt_path])
-    requests = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(requests, list) or not requests:
-        raise ValueError("persistent worker request manifest must be a nonempty list")
+    if args.poll_interval_s <= 0.0:
+        raise ValueError("poll interval must be positive")
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.touch(exist_ok=True)
     startup_head = _git_head()
     startup_status = _git_status()
     if startup_status:
@@ -105,8 +109,66 @@ def main() -> None:
         time.monotonic() - worker_started_monotonic
     )
     completed = 0
+    consumed_queue_entries = 0
+    previous_attempt_receipt = None
+
+    def terminate_at_boundary(_signum, _frame):
+        raise SystemExit(143)
+
+    signal.signal(signal.SIGTERM, terminate_at_boundary)
+    _append_receipt(
+        receipt_path,
+        {
+            "type": "worker_ready",
+            "pid": worker_pid,
+            "code_head": startup_head,
+            "request_jsonl": str(request_path.resolve()),
+            "max_diagnose_repair_cycles": 4,
+        },
+    )
     try:
-        for index, request in enumerate(requests, start=1):
+        while True:
+            queue = read_jsonl(request_path)
+            if consumed_queue_entries >= len(queue):
+                time.sleep(args.poll_interval_s)
+                continue
+            request = queue[consumed_queue_entries]
+            consumed_queue_entries += 1
+            request_type = request.get("type", "attempt")
+            if request_type == "shutdown":
+                _append_receipt(
+                    receipt_path,
+                    {
+                        "type": "worker_boundary",
+                        "pid": worker_pid,
+                        "code_head": startup_head,
+                        "request_id": request.get("request_id"),
+                        "reason": "supervisor_shutdown",
+                    },
+                )
+                break
+            if request_type != "attempt":
+                _append_receipt(
+                    receipt_path,
+                    {
+                        "type": "request_rejected",
+                        "pid": worker_pid,
+                        "request_id": request.get("request_id"),
+                        "reason": f"unknown_request_type:{request_type}",
+                    },
+                )
+                continue
+            if completed >= 4:
+                _append_receipt(
+                    receipt_path,
+                    {
+                        "type": "request_rejected",
+                        "pid": worker_pid,
+                        "request_id": request.get("request_id"),
+                        "reason": "four_diagnose_repair_cycle_limit",
+                    },
+                )
+                continue
             expected_head = request["code_head"]
             current_head = _git_head()
             current_status = _git_status()
@@ -129,6 +191,29 @@ def main() -> None:
                     },
                 )
                 break
+            try:
+                program_spec = load_program_spec(request["program_spec_json"])
+                if program_spec.sha256 != request["program_spec_sha256"]:
+                    raise ValueError(
+                        "request program-spec hash does not match file bytes"
+                    )
+                validate_same_spec_retry(
+                    previous_attempt_receipt,
+                    program_spec.sha256,
+                    request.get("ambiguity_reason"),
+                )
+            except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+                _append_receipt(
+                    receipt_path,
+                    {
+                        "type": "request_rejected",
+                        "pid": worker_pid,
+                        "request_id": request.get("request_id"),
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                continue
+            index = completed + 1
             attempt_started_monotonic = time.monotonic()
             started = datetime.now(timezone.utc).isoformat()
             result_path = Path(request["result_json"])
@@ -151,6 +236,31 @@ def main() -> None:
             recommendation = render_recommendation(result, error)
             attempt_wall_time_s = time.monotonic() - attempt_started_monotonic
             runtime_receipt = putpot._LAST_ATTEMPT_RUNTIME_RECEIPT
+            runtime_spec = (
+                runtime_receipt.get("program_spec")
+                if isinstance(runtime_receipt, dict)
+                else None
+            )
+            result_spec = (
+                result.get("provenance", {}).get("program_spec")
+                if isinstance(result, dict)
+                else None
+            )
+            observed_hashes = {
+                value.get("sha256")
+                for value in (runtime_spec, result_spec)
+                if isinstance(value, dict)
+            }
+            missing_hash_receipt = not isinstance(runtime_spec, dict) or (
+                isinstance(result, dict) and not isinstance(result_spec, dict)
+            )
+            if missing_hash_receipt or observed_hashes != {program_spec.sha256}:
+                error = (
+                    "ValueError: missing or mismatched program-spec hash across "
+                    "request, runtime, and result receipts"
+                )
+                classification = diagnostic_classification(result, error)
+                recommendation = render_recommendation(result, error)
             phase_timings = (
                 runtime_receipt.get("phase_timings_s", {})
                 if isinstance(runtime_receipt, dict)
@@ -160,6 +270,7 @@ def main() -> None:
             receipt = {
                 "type": "attempt",
                 "request_index": index,
+                "request_id": request.get("request_id"),
                 "pair": request["pair"],
                 "pid": worker_pid,
                 "started_at": started,
@@ -177,14 +288,13 @@ def main() -> None:
                     worker_bootstrap_import_and_validation_s if index == 1 else 0.0
                 ),
                 "runtime": runtime_receipt,
+                "program_spec": program_spec.receipt(),
+                "observed_program_spec_hashes": sorted(observed_hashes),
+                "ambiguity_reason": request.get("ambiguity_reason"),
+                "acknowledged": True,
             }
             _append_receipt(receipt_path, receipt)
-            if (
-                recommendation is not None
-                or classification
-                == "deterministic_controller_or_config_exception"
-            ):
-                break
+            previous_attempt_receipt = receipt
     finally:
         runtime = putpot._PERSISTENT_RUNTIME
         summary = {
