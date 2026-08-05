@@ -31,25 +31,33 @@ def sha256_file(path: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
-def jsonable(value: Any) -> Any:
-    """Convert numpy/torch-like controller data to strict JSON values."""
+def jsonable(value: Any, *, nonfinite: str = "error") -> Any:
+    """Convert controller data to JSON, optionally nulling sensor sentinels."""
+
+    if nonfinite not in {"error", "null"}:
+        raise ValueError("nonfinite policy must be error or null")
 
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
+            if nonfinite == "null":
+                return None
             raise ValueError("controller IPC values must be finite")
         return value
     if isinstance(value, Mapping):
-        return {str(key): jsonable(item) for key, item in value.items()}
+        return {
+            str(key): jsonable(item, nonfinite=nonfinite)
+            for key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
-        return [jsonable(item) for item in value]
+        return [jsonable(item, nonfinite=nonfinite) for item in value]
     if hasattr(value, "detach"):
         value = value.detach().cpu()
     if hasattr(value, "tolist"):
-        return jsonable(value.tolist())
+        return jsonable(value.tolist(), nonfinite=nonfinite)
     if hasattr(value, "item"):
-        return jsonable(value.item())
+        return jsonable(value.item(), nonfinite=nonfinite)
     raise TypeError(f"controller IPC value is not JSON serializable: {type(value)!r}")
 
 
@@ -189,7 +197,10 @@ class ControllerPluginClient:
             "protocol_version": PROTOCOL_VERSION,
             "id": self._sequence,
             "type": kind,
-            "payload": jsonable(payload),
+            # Simulator observations legitimately use NaN for unavailable pad
+            # fractions before contact.  JSON null preserves missingness without
+            # allowing non-finite controller commands back into the host.
+            "payload": jsonable(payload, nonfinite="null"),
         }
         assert self._process.stdin is not None
         assert self._process.stdout is not None

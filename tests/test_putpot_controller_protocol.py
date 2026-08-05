@@ -6,6 +6,7 @@ import pytest
 
 from judo_isaaclab.putpot_controller_protocol import (
     ControllerPluginClient,
+    jsonable,
     sha256_file,
     validate_command_response,
 )
@@ -89,6 +90,14 @@ def test_command_schema_rejects_nonfinite_or_partial_targets():
         validate_command_response(
             {"kind": "cartesian", "stage": "bad", "terminate": False}
         )
+
+
+def test_observation_codec_nulls_nonfinite_sensor_sentinels_only_when_requested():
+    assert jsonable({"pad_fraction": float("nan")}, nonfinite="null") == {
+        "pad_fraction": None
+    }
+    with pytest.raises(ValueError, match="must be finite"):
+        jsonable({"command": float("nan")})
     with pytest.raises(ValueError, match="finite"):
         validate_command_response(
             {

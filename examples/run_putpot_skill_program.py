@@ -1035,7 +1035,10 @@ def _controller_observation(sample):
     )
     from judo_isaaclab.putpot_controller_protocol import jsonable
 
-    return jsonable({key: sample[key] for key in keys if key in sample})
+    return jsonable(
+        {key: sample[key] for key in keys if key in sample},
+        nonfinite="null",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
