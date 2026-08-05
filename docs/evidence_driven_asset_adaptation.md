@@ -144,10 +144,13 @@ the supervisor diagnoses that receipt. It never receives a static batch of
 prebuilt retries.
 
 Semantic trajectory/controller parameters live in the versioned, validated
-`configs/putpot_semantic_program_v3.json` program spec. Schema v2 added a bounded
+`configs/putpot_semantic_program_v4.json` program spec. Schema v2 added a bounded
 object-local receiving-jaw centering translation fraction; schema v3 makes the
-pre-close missing-finger correction limit reloadable. Older schemas remain
-preserved for provenance but are no longer accepted for new requests. The worker
+pre-close missing-finger correction limit reloadable. Schema v4 adds a
+contact-triggered `receiving_jaw_close_horizon_steps`: zero preserves the slow
+full-contact-hold default used by pot 023, while a positive value closes over a
+bounded number of control steps after the measured single-pad latch. Older
+schemas remain preserved for provenance but are no longer accepted for new requests. The worker
 reloads that JSON file on every request after a full environment reset and fresh task
 predicates, controller state, recorder, trace, and encoder state. The SHA-256 of
 the exact immutable spec copy is recorded in the result, runtime receipt, and
@@ -166,6 +169,12 @@ the preceding receipt is classified `ambiguous_failure` and the submitted
 request includes an explicit ambiguity reason. After four nonaccepting cycles
 the scheduler rotates the asset into hard-case review; it never reuses or
 overwrites an attempt directory.
+
+A different spec hash is not sufficient evidence of a material repair. For a
+changed-parameter request, every changed parameter must appear in the previous
+worker ack's `failed_stage_program_parameter_observations`. The close-horizon
+observation includes its requested and applied step counts plus close-start,
+close-end, and grasp-end steps. Missing or mismatched observations fail closed.
 
 To append exactly one revised request to a waiting worker:
 

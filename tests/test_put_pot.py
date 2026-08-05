@@ -648,6 +648,35 @@ def test_loaded_gripper_close_without_reseat_uses_full_remaining_window():
     assert np.all(np.diff(retimed.grippers[step : grasp_end + 1, 0]) >= 0.0)
 
 
+def test_pair021_bounded_receiving_close_precedes_historical_contact_latch():
+    """The reloadable fast path closes before pair-021's old two-pad latch."""
+
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(), _pose(y=1.0), _pose(x=0.1), _pose(x=0.1, y=1.0),
+        approach_steps=2, left_close_steps=4, right_close_steps=4,
+        right_first=True, contact_hold_steps=100,
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["right_handle_grasp"] + 10
+    grasp_end = trajectory.waypoint_steps["bimanual_contact_hold"]
+    trajectory.grippers[step : grasp_end + 1, 0] = -0.0475
+    historical_contact_latch = min(step + 48, grasp_end)
+    fast, fast_hold = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, 0.0, close_steps=1
+    )
+    default, default_hold = retime_loaded_gripper_close_for_pad_reseat(
+        trajectory, step, 0.0
+    )
+    assert fast_hold == default_hold == 0
+    assert fast.grippers[step + 1, 0] == pytest.approx(0.0)
+    assert fast.grippers[historical_contact_latch, 0] == pytest.approx(0.0)
+    assert default.grippers[historical_contact_latch, 0] < 0.0
+    assert default.grippers[step : grasp_end + 1, 0] == pytest.approx(
+        np.linspace(trajectory.grippers[step, 0], 0.0, grasp_end - step + 1)
+    )
+
+
 def test_loaded_gripper_open_hold_scales_from_measured_peer_approach():
     program = PutPotSkillProgram(_pose(), _pose(y=1.0))
     program.bimanual_handle_grasp(

@@ -197,6 +197,145 @@ def validate_same_spec_retry(
         )
 
 
+def validate_material_spec_revision(
+    previous_receipt: Mapping[str, Any] | None,
+    program_spec_sha256: str,
+    parameters: Mapping[str, int | float],
+) -> None:
+    """Require every changed parameter to have failed-stage observations.
+
+    A different JSON hash can come from formatting or from parameters that did
+    not execute before the failure.  Neither is a material diagnose-to-repair
+    revision.  The previous worker receipt is therefore the authority for
+    which parameter values were physically observed at its first failed stage.
+    """
+
+    if previous_receipt is None:
+        return
+    previous_spec = previous_receipt.get("program_spec", {})
+    if not isinstance(previous_spec, Mapping):
+        raise ValueError("previous PutPot receipt has no program-spec mapping")
+    if previous_spec.get("sha256") == program_spec_sha256:
+        return
+    previous_parameters = previous_spec.get("parameters")
+    if not isinstance(previous_parameters, Mapping):
+        raise ValueError("previous PutPot receipt has no effective parameters")
+    changed = sorted(
+        name
+        for name in set(previous_parameters) | set(parameters)
+        if previous_parameters.get(name) != parameters.get(name)
+    )
+    if not changed:
+        raise ValueError(
+            "different PutPot spec hash has no effective parameter change"
+        )
+    observations = previous_receipt.get(
+        "failed_stage_program_parameter_observations"
+    )
+    if not isinstance(observations, Mapping):
+        raise ValueError(
+            "material PutPot revision requires failed-stage parameter observations"
+        )
+    unobserved = [name for name in changed if name not in observations]
+    if unobserved:
+        raise ValueError(
+            "changed PutPot parameters were not observed at the failed stage: "
+            + repr(unobserved)
+        )
+
+
+def failed_stage_program_parameter_observations(
+    result: Mapping[str, Any] | None,
+    parameters: Mapping[str, int | float],
+) -> tuple[str | None, dict[str, dict[str, Any]]]:
+    """Extract executed parameter evidence at the first failed task stage."""
+
+    if not isinstance(result, Mapping):
+        return None, {}
+    checks = result.get("checks")
+    if not isinstance(checks, Mapping):
+        return None, {}
+    if checks.get("bimanual_pick_observed") is not True:
+        failed_stage = "bimanual_handle_grasp"
+    elif checks.get("bimanual_transport_completed") is not True:
+        failed_stage = "smooth_bimanual_transport"
+    elif (
+        checks.get("centered_on_cooktop") is not True
+        or checks.get("coded_task_success") is not True
+    ):
+        failed_stage = "support_alignment"
+    elif (
+        checks.get("pot_released") is not True
+        or checks.get("stable_support_window") is not True
+    ):
+        failed_stage = "release_and_settle"
+    else:
+        return None, {}
+
+    protocol = result.get("protocol")
+    if not isinstance(protocol, Mapping):
+        return failed_stage, {}
+    executed = protocol.get("parameters")
+    executed = executed if isinstance(executed, Mapping) else {}
+    observed: dict[str, dict[str, Any]] = {}
+
+    common = ("damping", "max_joint_delta", "max_position_step", "max_rotation_step")
+    stage_parameters = {
+        "bimanual_handle_grasp": (
+            "missing_finger_contact_limit_m",
+            "receiving_jaw_center_translation_fraction",
+            "receiving_jaw_reorientation_fraction",
+        ),
+        "smooth_bimanual_transport": (
+            "transport_clearance_m",
+            "collision_clearance_m",
+            "transport_steps",
+        ),
+        "support_alignment": (
+            "support_clearance_m",
+            "lower_steps",
+            "center_repair_steps",
+        ),
+        "release_and_settle": (
+            "release_steps",
+            "withdraw_steps",
+            "settle_steps",
+        ),
+    }
+    for name in (*common, *stage_parameters[failed_stage]):
+        if name in parameters and name in executed:
+            observed[name] = {
+                "requested": parameters[name],
+                "observed": executed[name],
+            }
+
+    if failed_stage == "bimanual_handle_grasp":
+        retime = protocol.get("peer_contact_gripper_retime")
+        if isinstance(retime, Mapping) and all(
+            key in retime
+            for key in (
+                "requested_close_horizon_steps",
+                "applied_close_steps",
+                "close_start_step",
+                "close_end_step",
+                "grasp_end_step",
+            )
+        ):
+            requested = parameters["receiving_jaw_close_horizon_steps"]
+            if retime["requested_close_horizon_steps"] != requested:
+                raise ValueError(
+                    "receiving-jaw close-horizon result receipt mismatches spec"
+                )
+            observed["receiving_jaw_close_horizon_steps"] = {
+                "requested": requested,
+                "applied_close_steps": retime["applied_close_steps"],
+                "close_start_step": retime["close_start_step"],
+                "close_end_step": retime["close_end_step"],
+                "grasp_end_step": retime["grasp_end_step"],
+            }
+    return failed_stage, observed
+
+
 def diagnostic_classification(
     result: dict[str, Any] | None, error: str | None = None
 ) -> str:

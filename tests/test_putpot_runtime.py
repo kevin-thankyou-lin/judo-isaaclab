@@ -14,6 +14,8 @@ from judo_isaaclab.putpot_runtime import (
     render_recommendation,
     read_jsonl,
     timing_accounting,
+    failed_stage_program_parameter_observations,
+    validate_material_spec_revision,
     validate_same_spec_retry,
     without_scene_camera_sensors,
 )
@@ -44,6 +46,79 @@ def test_same_spec_retry_requires_ambiguous_receipt_and_explicit_reason():
         validate_same_spec_retry(ambiguous, "same", None)
     validate_same_spec_retry(ambiguous, "same", "trace ended before first contact")
     validate_same_spec_retry(diagnosed, "different", None)
+
+
+def test_changed_hash_requires_every_changed_parameter_at_failed_stage():
+    previous = {
+        "program_spec": {
+            "sha256": "old",
+            "parameters": {
+                "receiving_jaw_close_horizon_steps": 0,
+                "settle_steps": 35,
+            },
+        },
+        "failed_stage": "bimanual_handle_grasp",
+        "failed_stage_program_parameter_observations": {
+            "receiving_jaw_close_horizon_steps": {
+                "requested": 0,
+                "applied_close_steps": 269,
+            }
+        },
+    }
+    validate_material_spec_revision(
+        previous,
+        "new",
+        {"receiving_jaw_close_horizon_steps": 1, "settle_steps": 35},
+    )
+    with pytest.raises(ValueError, match="not observed at the failed stage"):
+        validate_material_spec_revision(
+            previous,
+            "newer",
+            {"receiving_jaw_close_horizon_steps": 1, "settle_steps": 40},
+        )
+    with pytest.raises(ValueError, match="no effective parameter change"):
+        validate_material_spec_revision(
+            previous,
+            "format-only",
+            {"receiving_jaw_close_horizon_steps": 0, "settle_steps": 35},
+        )
+
+
+def test_failed_grasp_receipt_observes_executed_close_horizon():
+    parameters = {
+        "damping": 0.045,
+        "max_joint_delta": 0.16,
+        "max_position_step": 0.025,
+        "max_rotation_step": 0.16,
+        "missing_finger_contact_limit_m": 0.012,
+        "receiving_jaw_center_translation_fraction": 0.0,
+        "receiving_jaw_reorientation_fraction": 0.45,
+        "receiving_jaw_close_horizon_steps": 1,
+    }
+    result = {
+        "checks": {"bimanual_pick_observed": False},
+        "protocol": {
+            "parameters": dict(parameters),
+            "peer_contact_gripper_retime": {
+                "requested_close_horizon_steps": 1,
+                "applied_close_steps": 1,
+                "close_start_step": 198,
+                "close_end_step": 199,
+                "grasp_end_step": 467,
+            },
+        },
+    }
+    stage, observed = failed_stage_program_parameter_observations(
+        result, parameters
+    )
+    assert stage == "bimanual_handle_grasp"
+    assert observed["receiving_jaw_close_horizon_steps"] == {
+        "requested": 1,
+        "applied_close_steps": 1,
+        "close_start_step": 198,
+        "close_end_step": 199,
+        "grasp_end_step": 467,
+    }
 
 
 def test_attempt_identity_separates_lifetime_and_four_attempt_epoch():

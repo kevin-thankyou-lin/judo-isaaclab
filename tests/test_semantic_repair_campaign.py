@@ -83,7 +83,7 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
     monkeypatch.setattr(module, "_git_head", lambda: "candidate-head")
     revised_spec = tmp_path / "revised_spec.json"
     revised = json.loads(
-        (module.REPO_ROOT / "configs/putpot_semantic_program_v3.json").read_text()
+        (module.REPO_ROOT / "configs/putpot_semantic_program_v4.json").read_text()
     )
     revised["parameters"]["receiving_jaw_reorientation_fraction"] = 0.9
     revised_spec.write_text(json.dumps(revised))

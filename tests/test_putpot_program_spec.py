@@ -13,7 +13,7 @@ from judo_isaaclab.putpot_program_spec import (
 
 
 REPO_ROOT = Path(__file__).parents[1]
-DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v4.json"
 
 
 def _write_spec(tmp_path, mutate=None):
@@ -40,12 +40,13 @@ def test_program_spec_validates_and_hashes_exact_file_bytes():
     assert namespace.missing_finger_contact_limit_m == pytest.approx(0.045)
     assert namespace.receiving_jaw_center_translation_fraction == pytest.approx(0.0)
     assert namespace.receiving_jaw_reorientation_fraction == pytest.approx(0.45)
+    assert namespace.receiving_jaw_close_horizon_steps == 0
 
 
 @pytest.mark.parametrize(
     "mutate, message",
     [
-        (lambda value: value.update(schema_version=4), "schema_version"),
+        (lambda value: value.update(schema_version=3), "schema_version"),
         (lambda value: value.update(program="unknown"), "unsupported PutPot program"),
         (lambda value: value.update(extra=True), "keys must be exactly"),
         (
@@ -75,6 +76,12 @@ def test_program_spec_validates_and_hashes_exact_file_bytes():
                 missing_finger_contact_limit_m=0.151
             ),
             "missing_finger_contact_limit_m must be in",
+        ),
+        (
+            lambda value: value["parameters"].update(
+                receiving_jaw_close_horizon_steps=1.5
+            ),
+            "receiving_jaw_close_horizon_steps must be an integer",
         ),
     ],
 )

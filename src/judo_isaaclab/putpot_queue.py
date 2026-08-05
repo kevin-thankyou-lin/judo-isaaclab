@@ -9,7 +9,12 @@ import shutil
 from typing import Any
 
 from .putpot_program_spec import load_program_spec
-from .putpot_runtime import append_jsonl, read_jsonl, validate_same_spec_retry
+from .putpot_runtime import (
+    append_jsonl,
+    read_jsonl,
+    validate_material_spec_revision,
+    validate_same_spec_retry,
+)
 
 
 _DYNAMIC_VALUE_FLAGS = {
@@ -69,6 +74,11 @@ def submit_program_request(
     source_spec = load_program_spec(program_spec_json)
     previous = receipts[-1] if receipts else None
     validate_same_spec_retry(previous, source_spec.sha256, ambiguity_reason)
+    validate_material_spec_revision(
+        previous,
+        source_spec.sha256,
+        source_spec.parameters,
+    )
 
     lifetime = int(session["first_lifetime_attempt"]) + cycle - 1
     attempt_root = Path(session["repair_root"]) / f"attempt_{lifetime:03d}"

@@ -28,6 +28,8 @@ from judo_isaaclab.putpot_runtime import (
     read_jsonl,
     render_recommendation,
     timing_accounting,
+    failed_stage_program_parameter_observations,
+    validate_material_spec_revision,
     validate_same_spec_retry,
 )
 from judo_isaaclab.putpot_program_spec import load_program_spec
@@ -202,6 +204,11 @@ def main() -> None:
                     program_spec.sha256,
                     request.get("ambiguity_reason"),
                 )
+                validate_material_spec_revision(
+                    previous_attempt_receipt,
+                    program_spec.sha256,
+                    program_spec.parameters,
+                )
             except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
                 _append_receipt(
                     receipt_path,
@@ -261,6 +268,35 @@ def main() -> None:
                 )
                 classification = diagnostic_classification(result, error)
                 recommendation = render_recommendation(result, error)
+            failed_stage = None
+            failed_stage_observations: dict[str, dict[str, object]] = {}
+            try:
+                failed_stage, failed_stage_observations = (
+                    failed_stage_program_parameter_observations(
+                        result,
+                        program_spec.parameters,
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                error = f"ValueError: invalid failed-stage parameter receipt: {exc}"
+                classification = diagnostic_classification(result, error)
+                recommendation = render_recommendation(result, error)
+            if (
+                isinstance(result, dict)
+                and failed_stage == "bimanual_handle_grasp"
+                and program_spec.parameters[
+                    "receiving_jaw_close_horizon_steps"
+                ]
+                > 0
+                and "receiving_jaw_close_horizon_steps"
+                not in failed_stage_observations
+            ):
+                error = (
+                    "ValueError: receiving-jaw close horizon was not observed "
+                    "at the failed bimanual acquisition stage"
+                )
+                classification = diagnostic_classification(result, error)
+                recommendation = render_recommendation(result, error)
             phase_timings = (
                 runtime_receipt.get("phase_timings_s", {})
                 if isinstance(runtime_receipt, dict)
@@ -290,6 +326,10 @@ def main() -> None:
                 "runtime": runtime_receipt,
                 "program_spec": program_spec.receipt(),
                 "observed_program_spec_hashes": sorted(observed_hashes),
+                "failed_stage": failed_stage,
+                "failed_stage_program_parameter_observations": (
+                    failed_stage_observations
+                ),
                 "ambiguity_reason": request.get("ambiguity_reason"),
                 "acknowledged": True,
             }

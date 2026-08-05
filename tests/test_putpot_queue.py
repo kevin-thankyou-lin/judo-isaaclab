@@ -7,11 +7,12 @@ from judo_isaaclab.putpot_queue import (
     static_worker_argv,
     submit_program_request,
 )
+from judo_isaaclab.putpot_program_spec import load_program_spec
 from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 
 
 REPO_ROOT = Path(__file__).parents[1]
-DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v4.json"
 
 
 def _spec(tmp_path, index):
@@ -75,11 +76,57 @@ def test_interactive_queue_enforces_ack_and_four_cycle_limit(tmp_path):
             {
                 "type": "attempt",
                 "request_id": request["request_id"],
-                "program_spec": {"sha256": request["program_spec_sha256"]},
+                "program_spec": load_program_spec(
+                    request["program_spec_json"]
+                ).receipt(),
                 "diagnostic_classification": "diagnosed_physics_failure",
+                "failed_stage": "bimanual_handle_grasp",
+                "failed_stage_program_parameter_observations": {
+                    "receiving_jaw_reorientation_fraction": {
+                        "requested": load_program_spec(
+                            request["program_spec_json"]
+                        ).parameters["receiving_jaw_reorientation_fraction"],
+                        "observed": load_program_spec(
+                            request["program_spec_json"]
+                        ).parameters["receiving_jaw_reorientation_fraction"],
+                    }
+                },
             },
         )
 
     with pytest.raises(ValueError, match="cycle limit exceeded"):
         submit_program_request(session_path, _spec(tmp_path, 5))
     assert len([row for row in read_jsonl(request_path) if row["type"] == "attempt"]) == 4
+
+
+def test_queue_rejects_hash_change_for_unobserved_failed_stage_parameter(tmp_path):
+    session_path, request_path, receipt_path = _session(tmp_path)
+    first = submit_program_request(session_path, _spec(tmp_path, 1))
+    first_spec = load_program_spec(first["program_spec_json"])
+    append_jsonl(
+        receipt_path,
+        {
+            "type": "attempt",
+            "request_id": first["request_id"],
+            "program_spec": first_spec.receipt(),
+            "diagnostic_classification": "diagnosed_physics_failure",
+            "failed_stage": "bimanual_handle_grasp",
+            "failed_stage_program_parameter_observations": {
+                "receiving_jaw_reorientation_fraction": {
+                    "requested": first_spec.parameters[
+                        "receiving_jaw_reorientation_fraction"
+                    ],
+                    "observed": first_spec.parameters[
+                        "receiving_jaw_reorientation_fraction"
+                    ],
+                }
+            },
+        },
+    )
+    revised_path = _spec(tmp_path, 2)
+    revised = json.loads(revised_path.read_text(encoding="utf-8"))
+    revised["parameters"]["settle_steps"] = 40
+    revised_path.write_text(json.dumps(revised), encoding="utf-8")
+    with pytest.raises(ValueError, match="not observed at the failed stage"):
+        submit_program_request(session_path, revised_path)
+    assert len(read_jsonl(request_path)) == 1

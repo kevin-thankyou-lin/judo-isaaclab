@@ -1217,8 +1217,14 @@ def retime_loaded_gripper_close_for_pad_reseat(
     reseat_distance_m: float,
     *,
     reseat_step_m: float = MISSING_FINGER_PAD_DEPTH_STEP_M,
+    close_steps: int | None = None,
 ) -> tuple[SkillTrajectory, int]:
-    """Hold a loaded jaw open for reseating, then close it monotonically."""
+    """Hold a loaded jaw open, then close over a bounded optional horizon.
+
+    ``close_steps=None`` preserves the slow historical default across the full
+    remaining contact hold.  A positive value is a reloadable, deterministic
+    contact-triggered horizon; after that bounded ramp the jaw stays closed.
+    """
 
     step = int(current_step)
     grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
@@ -1228,6 +1234,8 @@ def retime_loaded_gripper_close_for_pad_reseat(
         raise ValueError("reseat_distance_m must be finite and nonnegative")
     if not np.isfinite(reseat_step_m) or reseat_step_m <= 0.0:
         raise ValueError("reseat_step_m must be finite and positive")
+    if close_steps is not None and int(close_steps) < 1:
+        raise ValueError("close_steps must be positive when provided")
     remaining = grasp_end - step
     hold_steps = min(int(np.ceil(reseat_distance_m / reseat_step_m)), remaining - 1)
     grippers = trajectory.grippers.copy()
@@ -1235,12 +1243,18 @@ def retime_loaded_gripper_close_for_pad_reseat(
     hold_end = step + hold_steps
     if hold_steps:
         grippers[step + 1 : hold_end + 1, 0] = retained_command
-    close_steps = grasp_end - hold_end
-    grippers[hold_end + 1 : grasp_end + 1, 0] = np.linspace(
+    available_close_steps = grasp_end - hold_end
+    requested_close_steps = (
+        available_close_steps if close_steps is None else int(close_steps)
+    )
+    applied_close_steps = min(requested_close_steps, available_close_steps)
+    close_end = hold_end + applied_close_steps
+    grippers[hold_end + 1 : close_end + 1, 0] = np.linspace(
         retained_command,
         0.0,
-        close_steps + 1,
+        applied_close_steps + 1,
     )[1:]
+    grippers[close_end + 1 : grasp_end + 1, 0] = 0.0
     return (
         SkillTrajectory(
             left_poses=trajectory.left_poses.copy(),

@@ -521,7 +521,7 @@ def _run_pair(
         selected_spec = (
             Path(program_spec_json)
             if program_spec_json is not None
-            else REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+            else REPO_ROOT / "configs/putpot_semantic_program_v4.json"
         )
         command.extend(["--program-spec-json", str(selected_spec.resolve())])
     if repair_epoch is not None:
@@ -675,7 +675,7 @@ def _putpot_worker_visit(
     default_spec = (
         Path(initial_program_spec_json)
         if initial_program_spec_json is not None
-        else REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+        else REPO_ROOT / "configs/putpot_semantic_program_v4.json"
     )
     attempts: list[dict[str, Any]] = []
     consumed_receipts = 0

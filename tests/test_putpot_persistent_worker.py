@@ -9,7 +9,7 @@ from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 
 
 REPO_ROOT = Path(__file__).parents[1]
-DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v4.json"
 
 
 def _module():
@@ -81,12 +81,25 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
                 {
                     "status": "failed",
                     "checks": {
+                        "bimanual_pick_observed": False,
                         "coded_task_success": False,
                         "bimanual_transport_completed": False,
                         "h264_nonempty": False,
                         "fully_decodable": False,
                     },
                     "stage_success_trace": [{"step": -1}],
+                    "protocol": {
+                        "parameters": dict(program_spec.parameters),
+                        "peer_contact_gripper_retime": {
+                            "requested_close_horizon_steps": program_spec.parameters[
+                                "receiving_jaw_close_horizon_steps"
+                            ],
+                            "applied_close_steps": 10,
+                            "close_start_step": 100,
+                            "close_end_step": 110,
+                            "grasp_end_step": 200,
+                        },
+                    },
                     "provenance": {
                         "trace": {"path": str(result_path.with_name("trace.npz"))},
                         "program_spec": program_spec.receipt(),
@@ -127,4 +140,10 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
     assert [row["runtime"]["reset_index"] for row in receipts] == [1, 2]
     assert [row["runtime"]["runtime_reused"] for row in receipts] == [False, True]
     assert all(row["acknowledged"] for row in receipts)
+    assert all(row["failed_stage"] == "bimanual_handle_grasp" for row in receipts)
+    assert all(
+        "receiving_jaw_reorientation_fraction"
+        in row["failed_stage_program_parameter_observations"]
+        for row in receipts
+    )
     assert all("--persistent-session" in argv for argv in calls)

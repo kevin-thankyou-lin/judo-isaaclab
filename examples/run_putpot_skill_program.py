@@ -1025,7 +1025,7 @@ def main(argv: list[str] | None = None) -> None:
     selected_program_spec = (
         Path(args.program_spec_json)
         if args.program_spec_json
-        else REPO_ROOT / "configs/putpot_semantic_program_v3.json"
+        else REPO_ROOT / "configs/putpot_semantic_program_v4.json"
     )
     # Deliberately reload on every main() call.  Persistent Isaac state is
     # reusable; semantic trajectory/controller parameters are not cached.
@@ -1838,7 +1838,23 @@ def main(argv: list[str] | None = None) -> None:
                             step,
                             effective_pad_reseat_residual_m,
                             reseat_step_m=gripper_retime_step_m,
+                            close_steps=(
+                                None
+                                if args.receiving_jaw_close_horizon_steps == 0
+                                else args.receiving_jaw_close_horizon_steps
+                            ),
                         )
+                    )
+                    available_close_steps = (
+                        grasp_complete_step - step - gripper_hold_steps
+                    )
+                    applied_close_steps = min(
+                        available_close_steps,
+                        (
+                            available_close_steps
+                            if args.receiving_jaw_close_horizon_steps == 0
+                            else args.receiving_jaw_close_horizon_steps
+                        ),
                     )
                     peer_contact_gripper_retime = {
                         "step": step,
@@ -1856,7 +1872,15 @@ def main(argv: list[str] | None = None) -> None:
                         ),
                         "hold_steps": gripper_hold_steps,
                         "hold_step_m": gripper_retime_step_m,
-                        "close_end_step": grasp_complete_step,
+                        "requested_close_horizon_steps": (
+                            args.receiving_jaw_close_horizon_steps
+                        ),
+                        "applied_close_steps": applied_close_steps,
+                        "close_start_step": step + gripper_hold_steps,
+                        "close_end_step": (
+                            step + gripper_hold_steps + applied_close_steps
+                        ),
+                        "grasp_end_step": grasp_complete_step,
                     }
                     left_handle_contact = compose_pose(
                         inverse_pose(sample["pot_pose"]),
@@ -3284,7 +3308,7 @@ def main(argv: list[str] | None = None) -> None:
                 "center_slide_reanchor_signed_residuals_local_m": center_slide_reanchor_signed_residuals_local_m,
                 "center_lowering_signed_residual_world_m": center_lowering_signed_residual_world_m,
                 "release_signed_residual_world_m": release_signed_residual_world_m,
-                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "loaded_jaw_reach_avoidance_fraction": LOADED_JAW_REACH_AVOIDANCE_FRACTION, "missing_finger_contact_limit_m": args.missing_finger_contact_limit_m, "receiving_jaw_center_translation_fraction": args.receiving_jaw_center_translation_fraction, "receiving_jaw_reorientation_fraction": args.receiving_jaw_reorientation_fraction, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": args.missing_finger_contact_limit_m, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None), "supported_center_slide": bool(trajectory is not None and "center_slide" in trajectory.waypoint_steps) or repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
+                "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "support_clearance_m": args.support_clearance_m, "transport_clearance_m": args.transport_clearance_m, "collision_clearance_m": args.collision_clearance_m, "executed_collision_minimum_m": 0.0, "handle_pad_depth_margin_m": HANDLE_PAD_DEPTH_MARGIN_M, "loaded_jaw_reach_avoidance_fraction": LOADED_JAW_REACH_AVOIDANCE_FRACTION, "missing_finger_contact_limit_m": args.missing_finger_contact_limit_m, "receiving_jaw_center_translation_fraction": args.receiving_jaw_center_translation_fraction, "receiving_jaw_reorientation_fraction": args.receiving_jaw_reorientation_fraction, "receiving_jaw_close_horizon_steps": args.receiving_jaw_close_horizon_steps, "geometry_conditioned_handle_grasp": handle_grasp_geometry, "missing_finger_contact_feedback": {"step_m": MISSING_FINGER_CONTACT_STEP_M, "limit_m": args.missing_finger_contact_limit_m, "minimum_observed_jaw_axis_m": MISSING_FINGER_JAW_AXIS_MIN_M, "milestone_jaw_center_residual_m": milestone_jaw_center_residual_m, "delay_steps": MISSING_FINGER_CONTACT_DELAY_STEPS, "final_signed_corrections_m": missing_finger_corrections, "pad_depth_step_m": MISSING_FINGER_PAD_DEPTH_STEP_M, "pad_depth_limit_m": MISSING_FINGER_PAD_DEPTH_LIMIT_M, "pad_target_fraction": MISSING_FINGER_PAD_TARGET_FRACTION, "final_pad_depth_corrections_m": missing_finger_depth_corrections}, "target_direct_generation": trajectory is not None, "source_semantic_success_required": False, "object_to_gripper_contact_frame_transfer": trajectory is not None, "requested_transport_steps": args.transport_steps, "transport_steps": (int(transport_plan["end_step"] - transport_plan["start_step"] + 1) if transport_plan is not None else args.transport_steps), "lower_steps": args.lower_steps, "release_steps": args.release_steps, "withdraw_steps": args.withdraw_steps, "settle_steps": args.settle_steps, "center_repair_steps": args.center_repair_steps, "integrated_target_ik": integrate_target_ik or repair_trajectory is not None, "smooth_collision_aware_transport": trajectory is not None, "bimanual_target_transport_required": bool(trajectory is not None), "supported_center_slide": bool(trajectory is not None and "center_slide" in trajectory.waypoint_steps) or repair_trajectory is not None, "source_action_prefix_steps": repair_prefix_steps, "center_feedback_reanchor": trajectory is not None, "center_feedback_release_correction": trajectory is not None, "center_tolerance_m": CENTERED_ON_COOKTOP_TOLERANCE_M},
             },
             "provenance": {
                 "program_spec": (
