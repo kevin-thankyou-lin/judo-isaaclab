@@ -55,6 +55,13 @@ def test_waits_through_diagnosis_grace_period():
     )
 
 
+def test_diagnosis_prompt_requires_trace_and_synchronized_video():
+    prompt = _module()._prompt(_boundary())
+
+    assert "its trace, and the synchronized skill.mp4" in prompt
+    assert "exactly one materially revised Python controller plugin" in prompt
+
+
 def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
     module = _module()
     state = {

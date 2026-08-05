@@ -2,8 +2,9 @@
 
 The supervisor appends one request to ``request_jsonl`` and waits for its
 durable receipt/ack before diagnosing and appending a revised program spec.
-The worker never executes prebuilt identical requests.  Python/code boundaries
-still require restart; validated program-spec changes are reloaded per request.
+The worker never executes prebuilt identical requests.  Versioned semantic
+specs and Python controller plugins are reloaded in subprocesses per request,
+while the Isaac scene and its optional camera sensors stay alive across resets.
 """
 
 from __future__ import annotations

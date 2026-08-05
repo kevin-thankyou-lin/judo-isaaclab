@@ -19,6 +19,7 @@ from .putpot_runtime import (
 
 
 _DYNAMIC_VALUE_FLAGS = {
+    "--video",
     "--trace-npz",
     "--result-json",
     "--demo-hdf5",
@@ -131,6 +132,10 @@ def submit_program_request(
         raise RuntimeError("immutable PutPot controller-plugin hash changed")
 
     argv = list(session["static_argv"])
+    video_path = None
+    if "--render" in argv:
+        video_path = str(attempt_root / "skill.mp4")
+        argv.extend(["--video", video_path])
     argv.extend(
         [
             "--trace-npz",
@@ -167,6 +172,7 @@ def submit_program_request(
         "argv": argv,
         "log": str(attempt_root / "skill.log"),
         "result_json": str(attempt_root / "skill_result.json"),
+        "video": video_path,
         "lifetime_attempt": lifetime,
         "repair_epoch": session["repair_epoch"],
         "repair_epoch_attempt": cycle,

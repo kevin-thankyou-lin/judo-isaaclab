@@ -76,7 +76,7 @@ def test_putpot_diagnostic_command_disables_render_and_video():
     ]
 
 
-def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
+def test_putpot_rendered_worker_accepts_without_second_isaac_launch(
     tmp_path, monkeypatch
 ):
     module = _module()
@@ -122,8 +122,9 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
             if attempts and not self.wrote_attempt:
                 assert len(attempts) == 1
                 request = attempts[0]
-                assert "--render" not in request["argv"]
-                assert "--video" not in request["argv"]
+                assert "--render" in request["argv"]
+                assert "--video" in request["argv"]
+                assert request["video"].endswith("attempt_001/skill.mp4")
                 submitted_spec = json.loads(
                     Path(request["program_spec_json"]).read_text()
                 )
@@ -132,6 +133,19 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
                         "receiving_jaw_reorientation_fraction"
                     ]
                     == 0.9
+                )
+                Path(request["result_json"]).parent.mkdir(
+                    parents=True, exist_ok=True
+                )
+                Path(request["result_json"]).write_text(
+                    json.dumps(
+                        {
+                            "provenance": {
+                                "demonstration": {"path": "/tmp/demo.hdf5"}
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
                 )
                 with open(self.receipt_path, "a", encoding="utf-8") as stream:
                     stream.write(
@@ -147,7 +161,7 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
                                 "code_head": "candidate-head",
                                 "result_json": request["result_json"],
                                 "result_present": True,
-                                "error": "RuntimeError: acceptance checks failed",
+                                "error": None,
                                 "diagnostic_classification": "final_acceptance_candidate",
                                 "render_recommendation": "final_acceptance_candidate",
                                 "runtime": {"reset_index": 1},
@@ -177,20 +191,19 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
             return self.returncode
 
     monkeypatch.setattr(module.subprocess, "Popen", FakeWorker)
-    rendered_calls = []
-
-    def fake_run_pair(*args, **kwargs):
-        rendered_calls.append(kwargs)
-        return {
-            "attempt": "attempt_002",
-            "status": "accepted",
-            "repair_epoch_attempt": kwargs["repair_epoch_attempt"],
-        }
-
-    monkeypatch.setattr(module, "_run_pair", fake_run_pair)
+    monkeypatch.setattr(module, "_strict_semantic_success", lambda *_args: True)
+    monkeypatch.setattr(
+        module,
+        "validate_demo",
+        lambda path, assets: {"path": path, "assets": assets},
+    )
     attempts = module._putpot_worker_visit(
         {"name": "putpot"},
-        {"pair_id": "cooktop_999__pot_999", "dataset": "/target.hdf5"},
+        {
+            "pair_id": "cooktop_999__pot_999",
+            "dataset": "/target.hdf5",
+            "assets": {"pot": "pot.usd", "cooktop": "cooktop.usd"},
+        },
         output_root=tmp_path,
         python="python",
         gear_repo="/gear",
@@ -199,13 +212,9 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
         initial_program_spec_json=revised_spec,
     )
 
-    assert [attempt["status"] for attempt in attempts] == [
-        "render_candidate",
-        "accepted",
-    ]
-    assert rendered_calls[0]["repair_epoch"] == "epoch-a-render"
-    assert rendered_calls[0]["repair_epoch_attempt"] == 1
-    assert attempts[1]["render_reason"] == "final_acceptance_candidate"
+    assert [attempt["status"] for attempt in attempts] == ["accepted"]
+    assert attempts[0]["video"].endswith("attempt_001/skill.mp4")
+    assert attempts[0]["demonstration"]["path"] == "/tmp/demo.hdf5"
 
 
 def test_completed_visit_receipts_survive_early_acceptance_discovery(

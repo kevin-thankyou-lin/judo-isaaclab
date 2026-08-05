@@ -633,7 +633,12 @@ def _putpot_worker_visit(
     initial_program_spec_json: str | Path | None = None,
     initial_controller_plugin_py: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Run an interactive spec-revision queue in one no-camera Isaac worker."""
+    """Run rendered diagnose-to-repair cycles in one persistent Isaac worker.
+
+    Every physics failure keeps synchronized MP4 evidence next to its trace.
+    Revised JSON or Python-controller programs still reload between resets, so
+    visual diagnosis does not reintroduce per-attempt Isaac cold starts.
+    """
 
     from judo_isaaclab.putpot_queue import (
         static_worker_argv,
@@ -666,7 +671,7 @@ def _putpot_worker_visit(
     )
     session_path = epoch_root / "interactive_session.json"
     session = {
-        "schema_version": 2,
+        "schema_version": 3,
         "pair": record["pair_id"],
         "code_head": code_head,
         "repair_root": str(repair_root.resolve()),
@@ -683,9 +688,7 @@ def _putpot_worker_visit(
         ),
         "request_jsonl": str(request_path.resolve()),
         "receipt_jsonl": str(receipt_path.resolve()),
-        "static_argv": static_worker_argv(
-            _without_render(prototype_command)[2:]
-        ),
+        "static_argv": static_worker_argv(prototype_command[2:]),
     }
     _atomic_json(session_path, session)
     worker_command = [
@@ -730,36 +733,64 @@ def _putpot_worker_visit(
                     }
                     request = requests[receipt["request_id"]]
                     result_path = Path(request["result_json"])
-                    attempts.append(
-                        {
-                            "attempt": result_path.parent.name,
-                            "code_head": receipt["code_head"],
-                            "started_at": receipt["started_at"],
-                            "finished_at": receipt["finished_at"],
-                            "returncode": 0 if receipt["error"] is None else 1,
-                            "command": worker_command,
-                            "worker_request": request,
-                            "worker_receipt": receipt,
-                            "result": str(result_path.resolve()),
-                            "video": None,
-                            "runtime_receipt": str(
-                                (result_path.parent / "skill_runtime.json").resolve()
-                            ),
-                            "status": (
-                                "render_candidate"
-                                if receipt["render_recommendation"]
-                                else "diagnostic_failed"
-                            ),
-                            "lifetime_attempt": request["lifetime_attempt"],
-                            "repair_epoch": repair_epoch,
-                            "repair_epoch_attempt": request[
-                                "repair_epoch_attempt"
-                            ],
-                            "repair_epoch_attempt_limit": attempt_limit,
-                            "program_spec": receipt["program_spec"],
-                            "controller_plugin": receipt["controller_plugin"],
-                        }
+                    result = _load(result_path) if result_path.is_file() else {}
+                    rendered = "--render" in request["argv"]
+                    accepted = bool(
+                        receipt["error"] is None
+                        and _strict_semantic_success(
+                            {
+                                "source": "semantic_repair",
+                                "result_path": str(result_path),
+                                "result": result,
+                                "trace_path": str(
+                                    result_path.parent / "skill_trace.npz"
+                                ),
+                            },
+                            task["name"],
+                        )
                     )
+                    attempt = {
+                        "attempt": result_path.parent.name,
+                        "code_head": receipt["code_head"],
+                        "started_at": receipt["started_at"],
+                        "finished_at": receipt["finished_at"],
+                        "returncode": 0 if receipt["error"] is None else 1,
+                        "command": worker_command,
+                        "worker_request": request,
+                        "worker_receipt": receipt,
+                        "result": str(result_path.resolve()),
+                        "video": request.get("video"),
+                        "runtime_receipt": str(
+                            (result_path.parent / "skill_runtime.json").resolve()
+                        ),
+                        "status": (
+                            "accepted"
+                            if accepted
+                            else (
+                                "rendered_failed"
+                                if rendered
+                                else (
+                                    "render_candidate"
+                                    if receipt["render_recommendation"]
+                                    else "diagnostic_failed"
+                                )
+                            )
+                        ),
+                        "lifetime_attempt": request["lifetime_attempt"],
+                        "repair_epoch": repair_epoch,
+                        "repair_epoch_attempt": request[
+                            "repair_epoch_attempt"
+                        ],
+                        "repair_epoch_attempt_limit": attempt_limit,
+                        "program_spec": receipt["program_spec"],
+                        "controller_plugin": receipt["controller_plugin"],
+                    }
+                    if accepted:
+                        demonstration = result["provenance"]["demonstration"]
+                        attempt["demonstration"] = validate_demo(
+                            demonstration["path"], record["assets"]
+                        )
+                    attempts.append(attempt)
                     print(
                         "PUTPOT_INTERACTIVE_ACK="
                         + json.dumps(
@@ -784,7 +815,14 @@ def _putpot_worker_visit(
                         ),
                         flush=True,
                     )
-                    if receipt["render_recommendation"] is not None:
+                    if accepted:
+                        submit_shutdown(
+                            session_path, reason="rendered_attempt_accepted"
+                        )
+                    elif (
+                        not rendered
+                        and receipt["render_recommendation"] is not None
+                    ):
                         render_receipt = receipt
                         submit_shutdown(
                             session_path, reason="separate_render_handoff"

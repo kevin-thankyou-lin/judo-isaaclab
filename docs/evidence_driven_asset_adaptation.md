@@ -152,11 +152,13 @@ full-contact-hold default used by pot 023, while a positive value closes over a
 bounded number of control steps after the measured single-pad latch. Older
 schemas remain preserved for provenance but are no longer accepted for new requests. The worker
 reloads that JSON file on every request after a full environment reset and fresh task
-predicates, controller state, recorder, trace, and encoder state. The SHA-256 of
-the exact immutable spec copy is recorded in the result, runtime receipt, and
-worker ack. Parameter-only revisions therefore reuse the loaded Isaac process;
-arbitrary Python changes, a changed asset pair, device, camera capability, or
-code commit are worker boundaries and require a new process.
+predicates, controller state, recorder, trace, and encoder state. A versioned
+Python controller runs behind a subprocess protocol boundary and is likewise
+reloaded for every request without reloading Isaac. The SHA-256 of the exact
+immutable spec and controller copies is recorded in the result, runtime receipt,
+and worker ack. Parameter and Python-controller revisions therefore reuse the
+loaded Isaac process. A changed asset pair, device, camera capability, or
+Isaac-host code commit remains a worker boundary and requires a new process.
 
 A measured receiving-jaw translation also retimes the close command by its
 object-local distance at the conservative 1 mm/control-step loaded-contact
@@ -189,21 +191,19 @@ Use `--shutdown-reason '...'` at an artifact-safe worker boundary. The append
 CLI refuses a new cycle until the previous request has an ack, refuses a fifth
 cycle, and copies each submitted spec into the repair epoch before enqueueing.
 
-Diagnostics are true no-render runs: cameras are disabled in `AppLauncher`, RGB
-is absent from environment observations, and no encoder is created. Receipts
-also inventory the actual instantiated scene sensors by runtime type and require
-the diagnostic camera-sensor names/count to be `[]`/`0`; configuration warnings
-are not used as camera-absence proof. A fresh
-fully rendered process is allowed only for an ambiguous failure or a final
-acceptance candidate. A diagnostic result can never merge into the ledger;
-merging still requires a continuous, fully decoded H.264 video plus every
-existing task, bimanual transport, stability, provenance, trace, and HDF5 gate.
+PutPot repair cycles are rendered inside one persistent Isaac process. Every
+diagnose-to-repair cycle writes a synchronized H.264 MP4 beside its trace, and
+the coding agent inspects both before submitting one revised semantic spec or
+Python controller plugin. Cameras remain instantiated for the asset visit, but
+the scene is reset between revisions, so visual evidence does not require a new
+Isaac startup. A rendered strict success merges directly; merging still
+requires a continuous, fully decoded H.264 video plus every existing task,
+bimanual transport, stability, provenance, trace, and HDF5 gate.
 Typed deterministic controller or configuration exceptions are neither physics
 failures nor visual ambiguities: the worker records their exception provenance,
 stays at the acknowledged boundary for supervisor action, and never spends a
-rendered attempt on them. A Python fix is deployed by shutting down and
-restarting that worker; a parameter-only fix is submitted through the live
-queue.
+rendered retry on them. Python controller plugins and parameter specs are both
+copied immutably and reloaded between resets without restarting the Isaac host.
 
 The tmux-hosted coding agent is guarded by
 `examples/watch_putpot_repair_handoffs.py`. The watchdog polls durable remote
@@ -212,7 +212,8 @@ agent once if an acknowledged repair boundary has not produced a new request.
 It uses a separate short grace after a completed visit so round-robin rotation
 cannot silently stop or incur diagnosis-scale idle time. The watchdog never
 writes the worker queue: the coding
-agent must still inspect the trace and use the guarded submission CLI, which
+agent must still inspect the synchronized MP4 and trace and use the guarded
+submission CLI, which
 continues to reject unacknowledged, unchanged, duplicate, and fifth-cycle
 requests. Wake attempts are recorded in an atomic state file and are bounded
 per receipt. Remote snapshot calls have a finite timeout and transient SSH,

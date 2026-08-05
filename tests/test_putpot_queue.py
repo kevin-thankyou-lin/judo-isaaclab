@@ -54,6 +54,8 @@ def test_static_worker_argv_removes_every_request_scoped_value():
             "skill",
             "--result-json",
             "old.json",
+            "--video",
+            "old.mp4",
             "--program-spec-json",
             "old-spec.json",
             "--repair-epoch-attempt",
@@ -66,6 +68,20 @@ def test_static_worker_argv_removes_every_request_scoped_value():
             "controller.log",
         ]
     ) == ["--mode", "skill"]
+
+
+def test_rendered_session_assigns_fresh_video_to_every_request(tmp_path):
+    session_path, _, _ = _session(tmp_path)
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    session["static_argv"].append("--render")
+    session_path.write_text(json.dumps(session), encoding="utf-8")
+
+    request = submit_program_request(session_path, _spec(tmp_path, 1))
+
+    assert "--render" in request["argv"]
+    video_argument = request["argv"][request["argv"].index("--video") + 1]
+    assert video_argument == request["video"]
+    assert request["video"].endswith("attempt_010/skill.mp4")
 
 
 def test_interactive_queue_enforces_ack_and_four_cycle_limit(tmp_path):
