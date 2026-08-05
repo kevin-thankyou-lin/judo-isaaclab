@@ -220,6 +220,22 @@ per receipt. Remote snapshot calls have a finite timeout and transient SSH,
 timeout, or malformed-response failures are logged and retried; a connection
 blip cannot terminate the daemon.
 
+Each watchdog diagnosis wake carries a task-general progress contract. Before
+submitting a revision, the repair agent must record the first failed stage, the
+primary metric before and after the preceding revision, one falsifiable causal
+hypothesis, an expected metric delta, the repair family, and whether the change
+is local or structural. A new controller or spec hash establishes distinct
+provenance, not physical progress. Local parameter or feedback changes are
+appropriate only when synchronized video and trace evidence show that the
+upstream semantic approach and contact frame are already correct and the
+measured tracking residual is within the correction's authority. If two
+attempts from the same repair family fail at the same stage without materially
+improving the primary metric, that family is exhausted for the visit. The next
+cycle must change the upstream Python approach, contact-frame construction, or
+trajectory primitive, or the asset must rotate when no evidence-backed
+structural change fits the remaining cycle budget. Strict acceptance predicates
+are never adjusted by this escalation rule.
+
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,
 validation/decode/hash, and shutdown. They additionally report the full

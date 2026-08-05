@@ -59,7 +59,30 @@ def test_diagnosis_prompt_requires_trace_and_synchronized_video():
     prompt = _module()._prompt(_boundary())
 
     assert "its trace, and the synchronized skill.mp4" in prompt
-    assert "exactly one materially revised Python controller plugin" in prompt
+    assert "exactly one evidence-linked revised Python controller plugin" in prompt
+
+
+def test_diagnosis_prompt_enforces_falsifiable_progress_contract():
+    prompt = _module()._prompt(_boundary())
+
+    assert "FIRST_FAILED_STAGE" in prompt
+    assert "PRIMARY_METRIC_BEFORE_AND_AFTER" in prompt
+    assert "one falsifiable HYPOTHESIS" in prompt
+    assert "EXPECTED_DELTA" in prompt
+    assert "REPAIR_FAMILY" in prompt
+    assert "SCOPE=local_or_structural" in prompt
+    assert "does not prove physical progress" in prompt
+
+
+def test_diagnosis_prompt_escalates_repeated_nonprogress_structurally():
+    prompt = _module()._prompt(_boundary())
+
+    assert "two attempts in one repair family" in prompt
+    assert "without material improvement in the primary metric" in prompt
+    assert "abandon that family" in prompt
+    assert "structural Python change" in prompt
+    assert "approach, contact frame, or trajectory primitive" in prompt
+    assert "spend another cycle on an exhausted repair family" in prompt
 
 
 def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
@@ -131,7 +154,7 @@ def test_prompt_requires_diagnosis_and_duplicate_preflight():
     prompt = module._prompt(_boundary())
 
     assert "inspect /results/attempt_002/skill_result.json" in prompt
-    assert "exactly one materially revised Python controller plugin" in prompt
+    assert "exactly one evidence-linked revised Python controller plugin" in prompt
     assert "requires new control flow or geometry logic" in prompt
     assert "Do not blind-repeat" in prompt
     assert "do nothing duplicate" in prompt
