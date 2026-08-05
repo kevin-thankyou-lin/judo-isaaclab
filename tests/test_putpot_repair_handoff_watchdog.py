@@ -74,6 +74,22 @@ def test_diagnosis_prompt_enforces_falsifiable_progress_contract():
     assert "does not prove physical progress" in prompt
 
 
+def test_diagnosis_prompt_requires_causal_acquisition_audit():
+    prompt = _module()._prompt(_boundary())
+
+    assert "FIRST_CONTACT_ARM" in prompt
+    assert "FIRST_CONTACT_STEP" in prompt
+    assert "CONTACT_ORDER" in prompt
+    assert "PREGRASP_OBJECT_MOTION" in prompt
+    assert "OBJECT_MOTION_BEFORE_PEER_CONTACT" in prompt
+    assert "per-pad force/contact windows" in prompt
+    assert "earliest contacting arm" in prompt
+    assert "do not tune the downstream wrist" in prompt
+    assert "object-motion abort threshold" in prompt
+    assert "contact-gated stop/backoff" in prompt
+    assert "sustained dual-pad contact" in prompt
+
+
 def test_diagnosis_prompt_escalates_repeated_nonprogress_structurally():
     prompt = _module()._prompt(_boundary())
 

@@ -236,6 +236,18 @@ trajectory primitive, or the asset must rotate when no evidence-backed
 structural change fits the remaining cycle budget. Strict acceptance predicates
 are never adjusted by this escalation rule.
 
+Every PutPot grasp diagnosis also starts with a causal acquisition audit across
+both arms, rather than inspecting only the arm that ultimately misses. The agent
+records first-contact arm and step, contact order, per-pad force/contact windows,
+pregrasp object motion, and object motion before the peer arm arrives. Material
+object displacement before peer contact makes the earliest contacting arm's
+approach or sequencing the upstream failure; downstream wrist tuning is not an
+admissible repair while that displacement remains. The next revision must state
+an evidence-derived object-motion abort threshold and use an appropriate safer
+standoff, contact-gated stop/backoff, acquisition ordering, synchronized
+acquisition, or observed-pose reanchoring. Transport remains gated until both
+hands sustain dual-pad contact for an explicitly stated validation window.
+
 Runtime receipts report wall-clock seconds for app startup, asset/environment
 load, reset, trajectory build, rollout, render/encode, trace/demo,
 validation/decode/hash, and shutdown. They additionally report the full
