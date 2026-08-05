@@ -124,7 +124,8 @@ def test_prompt_requires_diagnosis_and_duplicate_preflight():
     prompt = module._prompt(_boundary())
 
     assert "inspect /results/attempt_002/skill_result.json" in prompt
-    assert "exactly one materially revised program spec" in prompt
+    assert "exactly one materially revised Python controller plugin" in prompt
+    assert "requires new control flow or geometry logic" in prompt
     assert "Do not blind-repeat" in prompt
     assert "do nothing duplicate" in prompt
 

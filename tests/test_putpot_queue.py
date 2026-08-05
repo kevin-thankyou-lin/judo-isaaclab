@@ -13,6 +13,7 @@ from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 
 REPO_ROOT = Path(__file__).parents[1]
 DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v4.json"
+DEFAULT_CONTROLLER = REPO_ROOT / "controllers/putpot_passthrough.py"
 
 
 def _spec(tmp_path, index):
@@ -28,7 +29,7 @@ def _session(tmp_path):
     receipt_path = tmp_path / "receipts.jsonl"
     request_path.touch()
     session = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pair": "cooktop_001__pot_001",
         "code_head": "head",
         "repair_root": str(tmp_path / "semantic_repair"),
@@ -36,6 +37,7 @@ def _session(tmp_path):
         "repair_epoch": "epoch-a",
         "first_lifetime_attempt": 10,
         "attempt_limit": 4,
+        "initial_controller_plugin_py": str(DEFAULT_CONTROLLER),
         "request_jsonl": str(request_path),
         "receipt_jsonl": str(receipt_path),
         "static_argv": ["--mode", "skill", "--device", "cpu"],
@@ -56,6 +58,12 @@ def test_static_worker_argv_removes_every_request_scoped_value():
             "old-spec.json",
             "--repair-epoch-attempt",
             "3",
+            "--controller-plugin-py",
+            "controller.py",
+            "--controller-plugin-sha256",
+            "hash",
+            "--controller-plugin-log",
+            "controller.log",
         ]
     ) == ["--mode", "skill"]
 
@@ -79,6 +87,10 @@ def test_interactive_queue_enforces_ack_and_four_cycle_limit(tmp_path):
                 "program_spec": load_program_spec(
                     request["program_spec_json"]
                 ).receipt(),
+                "controller_plugin": {
+                    "path": request["controller_plugin_py"],
+                    "sha256": request["controller_plugin_sha256"],
+                },
                 "diagnostic_classification": "diagnosed_physics_failure",
                 "failed_stage": "bimanual_handle_grasp",
                 "failed_stage_program_parameter_observations": {
@@ -109,6 +121,10 @@ def test_queue_rejects_hash_change_for_unobserved_failed_stage_parameter(tmp_pat
             "type": "attempt",
             "request_id": first["request_id"],
             "program_spec": first_spec.receipt(),
+            "controller_plugin": {
+                "path": first["controller_plugin_py"],
+                "sha256": first["controller_plugin_sha256"],
+            },
             "diagnostic_classification": "diagnosed_physics_failure",
             "failed_stage": "bimanual_handle_grasp",
             "failed_stage_program_parameter_observations": {
@@ -130,3 +146,37 @@ def test_queue_rejects_hash_change_for_unobserved_failed_stage_parameter(tmp_pat
     with pytest.raises(ValueError, match="not observed at the failed stage"):
         submit_program_request(session_path, revised_path)
     assert len(read_jsonl(request_path)) == 1
+
+
+def test_queue_accepts_new_python_controller_with_unchanged_spec(tmp_path):
+    session_path, _, receipt_path = _session(tmp_path)
+    spec = _spec(tmp_path, 1)
+    first = submit_program_request(session_path, spec)
+    first_spec = load_program_spec(first["program_spec_json"])
+    append_jsonl(
+        receipt_path,
+        {
+            "type": "attempt",
+            "request_id": first["request_id"],
+            "program_spec": first_spec.receipt(),
+            "controller_plugin": {
+                "path": first["controller_plugin_py"],
+                "sha256": first["controller_plugin_sha256"],
+            },
+            "diagnostic_classification": "diagnosed_physics_failure",
+            "failed_stage": "bimanual_handle_grasp",
+            "failed_stage_program_parameter_observations": {},
+        },
+    )
+    revised_controller = tmp_path / "revised_controller.py"
+    revised_controller.write_text(
+        DEFAULT_CONTROLLER.read_text(encoding="utf-8") + "\nREVISION = 2\n",
+        encoding="utf-8",
+    )
+    second = submit_program_request(
+        session_path,
+        first["program_spec_json"],
+        controller_plugin_py=revised_controller,
+    )
+    assert second["program_spec_sha256"] == first["program_spec_sha256"]
+    assert second["controller_plugin_sha256"] != first["controller_plugin_sha256"]

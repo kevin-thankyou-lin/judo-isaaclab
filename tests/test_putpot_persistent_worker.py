@@ -5,10 +5,12 @@ from pathlib import Path
 import sys
 
 from judo_isaaclab.putpot_program_spec import load_program_spec
+from judo_isaaclab.putpot_controller_protocol import sha256_file
 from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 
 
 REPO_ROOT = Path(__file__).parents[1]
+DEFAULT_CONTROLLER = REPO_ROOT / "controllers/putpot_passthrough.py"
 DEFAULT_SPEC = REPO_ROOT / "configs/putpot_semantic_program_v4.json"
 
 
@@ -56,6 +58,8 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
                 "result_json": str(attempt / "skill_result.json"),
                 "program_spec_json": str(spec_path),
                 "program_spec_sha256": spec.sha256,
+                "controller_plugin_py": str(DEFAULT_CONTROLLER),
+                "controller_plugin_sha256": sha256_file(DEFAULT_CONTROLLER),
             },
         )
     append_jsonl(
@@ -75,6 +79,13 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
         spec_path = Path(argv[argv.index("--program-spec-json") + 1])
         program_spec = load_program_spec(spec_path)
         reset_index = len(calls)
+        controller_receipt = {
+            "path": str(DEFAULT_CONTROLLER.resolve()),
+            "sha256": sha256_file(DEFAULT_CONTROLLER),
+            "pid": 777 + reset_index,
+            "protocol_version": 1,
+            "program": {"program_name": f"revision-{reset_index}"},
+        }
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
@@ -103,6 +114,7 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
                     "provenance": {
                         "trace": {"path": str(result_path.with_name("trace.npz"))},
                         "program_spec": program_spec.receipt(),
+                        "controller_plugin": controller_receipt,
                     },
                 }
             ),
@@ -115,6 +127,7 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
             "reset_index": reset_index,
             "phase_timings_s": {},
             "program_spec": program_spec.receipt(),
+            "controller_plugin": controller_receipt,
         }
 
     monkeypatch.setattr(module.putpot, "main", fake_main)

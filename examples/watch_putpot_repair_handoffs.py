@@ -187,8 +187,10 @@ def _prompt(boundary: dict[str, Any]) -> str:
             f"Pair {boundary['pair']} has acknowledged "
             f"{boundary['attempts_completed']}/{boundary['attempt_limit']} cycles; "
             f"inspect {boundary['latest_result_json']} and its trace, diagnose the "
-            "physics failure, then submit exactly one materially revised program "
-            f"spec through {boundary['session_json']}. Do not blind-repeat or "
+            "physics failure, then submit exactly one materially revised Python "
+            "controller plugin and/or observed program spec through "
+            f"{boundary['session_json']}. Prefer controller code when the failure "
+            "requires new control flow or geometry logic. Do not blind-repeat or "
             "restart Isaac. Recheck the queue first and do nothing duplicate if "
             "another turn already handled this receipt."
         )

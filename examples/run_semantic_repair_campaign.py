@@ -496,6 +496,7 @@ def _run_pair(
     repair_epoch: str | None = None,
     repair_epoch_attempt: int | None = None,
     program_spec_json: str | Path | None = None,
+    controller_plugin_py: str | Path | None = None,
 ) -> dict[str, Any]:
     pair_root = output_root / task["name"] / record["pair_id"]
     attempt_root = _next_attempt(pair_root)
@@ -524,6 +525,21 @@ def _run_pair(
             else REPO_ROOT / "configs/putpot_semantic_program_v4.json"
         )
         command.extend(["--program-spec-json", str(selected_spec.resolve())])
+        selected_controller = (
+            Path(controller_plugin_py)
+            if controller_plugin_py is not None
+            else REPO_ROOT / "controllers/putpot_passthrough.py"
+        )
+        command.extend(
+            [
+                "--controller-plugin-py",
+                str(selected_controller.resolve()),
+                "--controller-plugin-sha256",
+                _sha256(selected_controller),
+                "--controller-plugin-log",
+                str(attempt_root / "controller_plugin.log"),
+            ]
+        )
     if repair_epoch is not None:
         command.extend(
             [
@@ -615,6 +631,7 @@ def _putpot_worker_visit(
     attempt_limit: int,
     repair_epoch: str,
     initial_program_spec_json: str | Path | None = None,
+    initial_controller_plugin_py: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Run an interactive spec-revision queue in one no-camera Isaac worker."""
 
@@ -649,7 +666,7 @@ def _putpot_worker_visit(
     )
     session_path = epoch_root / "interactive_session.json"
     session = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pair": record["pair_id"],
         "code_head": code_head,
         "repair_root": str(repair_root.resolve()),
@@ -657,6 +674,13 @@ def _putpot_worker_visit(
         "repair_epoch": repair_epoch,
         "first_lifetime_attempt": first_number,
         "attempt_limit": attempt_limit,
+        "initial_controller_plugin_py": str(
+            (
+                Path(initial_controller_plugin_py)
+                if initial_controller_plugin_py is not None
+                else REPO_ROOT / "controllers/putpot_passthrough.py"
+            ).resolve()
+        ),
         "request_jsonl": str(request_path.resolve()),
         "receipt_jsonl": str(receipt_path.resolve()),
         "static_argv": static_worker_argv(
@@ -686,7 +710,11 @@ def _putpot_worker_visit(
             stdout=stream,
             stderr=subprocess.STDOUT,
         )
-        submit_program_request(session_path, default_spec)
+        submit_program_request(
+            session_path,
+            default_spec,
+            controller_plugin_py=session["initial_controller_plugin_py"],
+        )
         render_receipt = None
         while True:
             receipts = read_jsonl(receipt_path)
@@ -729,6 +757,7 @@ def _putpot_worker_visit(
                             ],
                             "repair_epoch_attempt_limit": attempt_limit,
                             "program_spec": receipt["program_spec"],
+                            "controller_plugin": receipt["controller_plugin"],
                         }
                     )
                     print(
@@ -744,6 +773,9 @@ def _putpot_worker_visit(
                                 "diagnostic_classification": receipt[
                                     "diagnostic_classification"
                                 ],
+                                "controller_plugin_sha256": receipt[
+                                    "controller_plugin"
+                                ]["sha256"],
                                 "render_recommendation": receipt[
                                     "render_recommendation"
                                 ],
@@ -799,10 +831,12 @@ def _putpot_worker_visit(
             repair_epoch=render_epoch,
             repair_epoch_attempt=1,
             program_spec_json=render_receipt["program_spec"]["path"],
+            controller_plugin_py=render_receipt["controller_plugin"]["path"],
         )
         rendered["render_reason"] = render_receipt["render_recommendation"]
         rendered["diagnostic_repair_epoch"] = repair_epoch
         rendered["program_spec"] = render_receipt["program_spec"]
+        rendered["controller_plugin"] = render_receipt["controller_plugin"]
         attempts.append(rendered)
     if worker_returncode != 0 and not attempts:
         raise RuntimeError(
@@ -854,6 +888,7 @@ def main() -> None:
     parser.add_argument("--max-pairs", type=int)
     parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=4)
     parser.add_argument("--putpot-initial-program-spec-json")
+    parser.add_argument("--putpot-initial-controller-plugin-py")
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
@@ -900,6 +935,9 @@ def main() -> None:
                 attempt_limit=visit_attempt_limit,
                 repair_epoch=repair_epoch,
                 initial_program_spec_json=args.putpot_initial_program_spec_json,
+                initial_controller_plugin_py=(
+                    args.putpot_initial_controller_plugin_py
+                ),
             )
         else:
             visit_attempts = []

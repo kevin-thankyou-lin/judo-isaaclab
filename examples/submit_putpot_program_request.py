@@ -12,6 +12,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session-json", required=True)
     parser.add_argument("--program-spec-json")
+    parser.add_argument("--controller-plugin-py")
     parser.add_argument("--ambiguity-reason")
     parser.add_argument("--shutdown-reason")
     args = parser.parse_args(argv)
@@ -23,6 +24,7 @@ def main(argv: list[str] | None = None) -> None:
         value = submit_program_request(
             args.session_json,
             args.program_spec_json,
+            controller_plugin_py=args.controller_plugin_py,
             ambiguity_reason=args.ambiguity_reason,
         )
     else:

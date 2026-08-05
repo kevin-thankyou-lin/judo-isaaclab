@@ -9,6 +9,7 @@ import shutil
 from typing import Any
 
 from .putpot_program_spec import load_program_spec
+from .putpot_controller_protocol import sha256_file
 from .putpot_runtime import (
     append_jsonl,
     read_jsonl,
@@ -27,6 +28,9 @@ _DYNAMIC_VALUE_FLAGS = {
     "--repair-epoch-attempt",
     "--repair-epoch-attempt-limit",
     "--program-spec-json",
+    "--controller-plugin-py",
+    "--controller-plugin-sha256",
+    "--controller-plugin-log",
 }
 
 
@@ -56,9 +60,10 @@ def submit_program_request(
     session_json: str | os.PathLike[str],
     program_spec_json: str | os.PathLike[str],
     *,
+    controller_plugin_py: str | os.PathLike[str] | None = None,
     ambiguity_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Append exactly one revised, immutable program request after its ack."""
+    """Append one immutable spec and reloadable Python controller revision."""
 
     session_path = Path(session_json)
     session = json.loads(session_path.read_text(encoding="utf-8"))
@@ -73,12 +78,33 @@ def submit_program_request(
 
     source_spec = load_program_spec(program_spec_json)
     previous = receipts[-1] if receipts else None
-    validate_same_spec_retry(previous, source_spec.sha256, ambiguity_reason)
-    validate_material_spec_revision(
-        previous,
-        source_spec.sha256,
-        source_spec.parameters,
+    selected_plugin = Path(
+        controller_plugin_py
+        if controller_plugin_py is not None
+        else (
+            previous["controller_plugin"]["path"]
+            if previous is not None and previous.get("controller_plugin")
+            else session["initial_controller_plugin_py"]
+        )
     )
+    source_plugin_sha256 = sha256_file(selected_plugin)
+    previous_plugin_sha256 = (
+        None
+        if previous is None
+        else previous.get("controller_plugin", {}).get("sha256")
+    )
+    plugin_changed = (
+        previous_plugin_sha256 is not None
+        and previous_plugin_sha256 != source_plugin_sha256
+    )
+    if not plugin_changed:
+        validate_same_spec_retry(previous, source_spec.sha256, ambiguity_reason)
+    if previous is None or previous["program_spec"]["sha256"] != source_spec.sha256:
+        validate_material_spec_revision(
+            previous,
+            source_spec.sha256,
+            source_spec.parameters,
+        )
 
     lifetime = int(session["first_lifetime_attempt"]) + cycle - 1
     attempt_root = Path(session["repair_root"]) / f"attempt_{lifetime:03d}"
@@ -93,6 +119,16 @@ def submit_program_request(
     spec = load_program_spec(immutable_spec)
     if spec.sha256 != source_spec.sha256:
         raise RuntimeError("immutable PutPot program-spec copy hash changed")
+    plugin_root = Path(session["epoch_root"]) / "controller_plugins"
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    immutable_plugin = plugin_root / f"controller_{cycle:03d}.py"
+    with open(selected_plugin, "rb") as source, open(immutable_plugin, "xb") as target:
+        shutil.copyfileobj(source, target)
+        target.flush()
+        os.fsync(target.fileno())
+    plugin_sha256 = sha256_file(immutable_plugin)
+    if plugin_sha256 != source_plugin_sha256:
+        raise RuntimeError("immutable PutPot controller-plugin hash changed")
 
     argv = list(session["static_argv"])
     argv.extend(
@@ -115,6 +151,12 @@ def submit_program_request(
             str(session["attempt_limit"]),
             "--program-spec-json",
             str(immutable_spec.resolve()),
+            "--controller-plugin-py",
+            str(immutable_plugin.resolve()),
+            "--controller-plugin-sha256",
+            plugin_sha256,
+            "--controller-plugin-log",
+            str(attempt_root / "controller_plugin.log"),
         ]
     )
     request = {
@@ -130,6 +172,8 @@ def submit_program_request(
         "repair_epoch_attempt": cycle,
         "program_spec_json": str(immutable_spec.resolve()),
         "program_spec_sha256": spec.sha256,
+        "controller_plugin_py": str(immutable_plugin.resolve()),
+        "controller_plugin_sha256": plugin_sha256,
         "ambiguity_reason": ambiguity_reason,
     }
     append_jsonl(session["request_jsonl"], request)

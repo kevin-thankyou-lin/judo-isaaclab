@@ -155,6 +155,12 @@ def test_putpot_candidate_handoff_uses_fresh_separate_render_attempt(
                                     "path": request["program_spec_json"],
                                     "sha256": request["program_spec_sha256"],
                                 },
+                                "controller_plugin": {
+                                    "path": request["controller_plugin_py"],
+                                    "sha256": request[
+                                        "controller_plugin_sha256"
+                                    ],
+                                },
                             }
                         )
                         + "\n"

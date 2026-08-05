@@ -46,6 +46,10 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
     parser.add_argument("--program-spec-json")
+    parser.add_argument("--controller-plugin-py")
+    parser.add_argument("--controller-plugin-sha256")
+    parser.add_argument("--controller-plugin-log")
+    parser.add_argument("--controller-timeout-s", type=float, default=5.0)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -1002,6 +1006,38 @@ def _transition_trace(samples):
     return result
 
 
+def _controller_observation(sample):
+    """Bounded simulator observation exposed to reloadable controller code."""
+
+    keys = (
+        "step",
+        "program_stage",
+        "stage1",
+        "stage2",
+        "task_success",
+        "left_grasp",
+        "right_grasp",
+        "pot_pose",
+        "pot_velocity",
+        "left_eef_pose",
+        "right_eef_pose",
+        "left_finger_forces_n",
+        "right_finger_forces_n",
+        "left_pad_fractions",
+        "right_pad_fractions",
+        "left_pad_axes_world",
+        "right_pad_axes_world",
+        "left_pad_centers_world",
+        "right_pad_centers_world",
+        "support_error_m",
+        "center_error_m",
+        "xy_error_m",
+    )
+    from judo_isaaclab.putpot_controller_protocol import jsonable
+
+    return jsonable({key: sample[key] for key in keys if key in sample})
+
+
 def main(argv: list[str] | None = None) -> None:
     global _LAST_ATTEMPT_RUNTIME_RECEIPT, _PERSISTENT_RUNTIME
     attempt_wall_started_monotonic = time.monotonic()
@@ -1022,6 +1058,19 @@ def main(argv: list[str] | None = None) -> None:
     args = _parser(argv)
     if args.mode in {"skill", "replay_center"} and not args.program_spec_json:
         raise ValueError(f"{args.mode} mode requires --program-spec-json")
+    controller_flags = (
+        args.controller_plugin_py,
+        args.controller_plugin_sha256,
+        args.controller_plugin_log,
+    )
+    if any(value is not None for value in controller_flags) and not all(
+        value is not None for value in controller_flags
+    ):
+        raise ValueError(
+            "controller plugin path, sha256, and log must be supplied together"
+        )
+    if args.controller_plugin_py and args.mode != "skill":
+        raise ValueError("controller plugins are only valid in skill mode")
     selected_program_spec = (
         Path(args.program_spec_json)
         if args.program_spec_json
@@ -1074,6 +1123,7 @@ def main(argv: list[str] | None = None) -> None:
         args.video,
         args.write_keyframes,
         args.runtime_receipt_json,
+        args.controller_plugin_log,
     )
     if args.persistent_session:
         ensure_fresh_output_paths(list(output_paths))
@@ -1123,6 +1173,9 @@ def main(argv: list[str] | None = None) -> None:
         timers.add("app_startup", time.monotonic() - app_started)
         env = None
     encoder = None
+    controller_client = None
+    controller_receipt = None
+    controller_command_count = 0
     try:
         import torch
         from dc_study.utils.task_creation import create_task_environment
@@ -1457,6 +1510,49 @@ def main(argv: list[str] | None = None) -> None:
         demo_recorder.start(env.scene.get_state(is_relative=False))
         samples = [_sample(env, -1, "reset")]
         actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
+        if args.controller_plugin_py:
+            from judo_isaaclab.putpot_controller_protocol import (
+                ControllerPluginClient,
+            )
+
+            controller_client = ControllerPluginClient(
+                args.controller_plugin_py,
+                args.controller_plugin_sha256,
+                runner_path=REPO_ROOT / "examples/run_putpot_controller_plugin.py",
+                log_path=args.controller_plugin_log,
+                timeout_s=args.controller_timeout_s,
+            )
+            initialized = controller_client.initialize(
+                {
+                    "attempt_identity": (
+                        None
+                        if attempt_identity is None
+                        else attempt_identity.receipt()
+                    ),
+                    "program_parameters": dict(program_spec.parameters),
+                    "initial_observation": _controller_observation(samples[-1]),
+                    "base_trajectory": {
+                        "steps": int(trajectory.steps),
+                        "left_poses": trajectory.left_poses,
+                        "right_poses": trajectory.right_poses,
+                        "grippers": trajectory.grippers,
+                        "stage_names": trajectory.stage_names,
+                        "waypoint_steps": trajectory.waypoint_steps,
+                    },
+                    "geometry": {
+                        "target_pot_root_pose": target_geometry.root_pose,
+                        "target_pot_size": target_geometry.size,
+                        "target_cooktop_root_pose": target_cooktop_geometry.root_pose,
+                        "target_cooktop_size": target_cooktop_geometry.size,
+                        "target_handle_axis": int(target_parts.handle_axis),
+                        "target_negative_handle_size": target_parts.negative_handle_size,
+                        "target_positive_handle_size": target_parts.positive_handle_size,
+                    },
+                },
+                int(total_steps),
+            )
+            total_steps = initialized["total_steps"]
+            controller_receipt = controller_client.receipt()
         frame_stats = []
         if args.render:
             render_started = time.monotonic()
@@ -1493,19 +1589,68 @@ def main(argv: list[str] | None = None) -> None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
             else:
-                stage = trajectory.stage_names[step]
-                integrate_ik = bool(integrate_target_ik)
-                action = _ik_action(
-                    env,
-                    trajectory.left_poses[step],
-                    trajectory.right_poses[step],
-                    trajectory.grippers[step],
-                    joint_nominal[step],
-                    args,
-                    integrate_left_ik=integrate_ik,
-                    integrate_right_ik=integrate_ik,
+                base_command = {
+                    "stage": trajectory.stage_names[step],
+                    "left_pose": trajectory.left_poses[step],
+                    "right_pose": trajectory.right_poses[step],
+                    "grippers": trajectory.grippers[step],
+                    "joint_nominal": joint_nominal[step],
+                }
+                command = (
+                    None
+                    if controller_client is None
+                    else controller_client.command(
+                        step=step,
+                        base_command=base_command,
+                        observation=_controller_observation(samples[-1]),
+                    )
                 )
-                desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
+                if command is not None and command["terminate"]:
+                    break
+                stage = (
+                    trajectory.stage_names[step]
+                    if command is None
+                    else command["stage"]
+                )
+                integrate_ik = bool(integrate_target_ik)
+                if command is not None and command["kind"] == "joint_action":
+                    action = torch.as_tensor(
+                        [command["action"]],
+                        device=env.device,
+                        dtype=source["actions"].dtype,
+                    )
+                    desired_left.append(np.asarray(samples[-1]["left_eef_pose"]))
+                    desired_right.append(np.asarray(samples[-1]["right_eef_pose"]))
+                else:
+                    left_target = (
+                        trajectory.left_poses[step]
+                        if command is None
+                        else np.asarray(command["left_pose"], dtype=np.float64)
+                    )
+                    right_target = (
+                        trajectory.right_poses[step]
+                        if command is None
+                        else np.asarray(command["right_pose"], dtype=np.float64)
+                    )
+                    grippers = (
+                        trajectory.grippers[step]
+                        if command is None
+                        else np.asarray(command["grippers"], dtype=np.float64)
+                    )
+                    action = _ik_action(
+                        env,
+                        left_target,
+                        right_target,
+                        grippers,
+                        joint_nominal[step],
+                        args,
+                        integrate_left_ik=integrate_ik,
+                        integrate_right_ik=integrate_ik,
+                    )
+                    desired_left.append(left_target)
+                    desired_right.append(right_target)
+                if command is not None:
+                    controller_command_count += 1
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
             demo_recorder.append(
@@ -2963,11 +3108,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
             program_stages=np.asarray(
-                trajectory.stage_names
-                if trajectory is not None
-                else (["source_action_prefix"] * repair_prefix_steps + repair_trajectory.stage_names)
-                if repair_trajectory is not None
-                else ["direct_source_action_replay"] * len(actions)
+                [sample["program_stage"] for sample in samples[1:]]
             ),
         )
         timers.add("trace_demo", time.monotonic() - trace_started)
@@ -2984,8 +3125,8 @@ def main(argv: list[str] | None = None) -> None:
         video = _probe(args.video) if args.render else None
         desired_error = []
         if trajectory is not None:
-            desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - trajectory.left_poses[i, :3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - trajectory.right_poses[i, :3])) for i in range(len(left_eef))]
-        waypoint_errors = [desired_error[index] for index in trajectory.waypoint_steps.values() if trajectory is not None and index < len(desired_error)] if trajectory is not None else []
+            desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - np.asarray(desired_left[i])[:3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - np.asarray(desired_right[i])[:3])) for i in range(len(left_eef))]
+        waypoint_errors = [] if controller_client is not None else [desired_error[index] for index in trajectory.waypoint_steps.values() if trajectory is not None and index < len(desired_error)] if trajectory is not None else []
         executed_transport_metrics = None
         if trajectory is not None and transport_plan is not None:
             from judo_isaaclab.put_pot import (
@@ -3117,6 +3258,11 @@ def main(argv: list[str] | None = None) -> None:
                         else "deterministic_semantic_skill"
                     ),
                     "candidate_sampling": False,
+                    "controller_plugin_sha256": (
+                        None
+                        if controller_receipt is None
+                        else controller_receipt["sha256"]
+                    ),
                     "source_dataset_sha256": _sha256(args.source_dataset),
                     "target_dataset_sha256": _sha256(args.target_dataset),
                 },
@@ -3132,7 +3278,11 @@ def main(argv: list[str] | None = None) -> None:
                     "source_action_prefix_with_supported_center_repair"
                     if repair_trajectory is not None
                     else "direct_source_action_replay" if trajectory is None
-                    else "semantic_support_frames_with_cartesian_dls"
+                    else (
+                        "reloadable_python_controller_subprocess"
+                        if controller_receipt is not None
+                        else "semantic_support_frames_with_cartesian_dls"
+                    )
                 ),
                 "candidate_sampling": False,
                 "scene_resets": 1,
@@ -3147,6 +3297,8 @@ def main(argv: list[str] | None = None) -> None:
                 "program_spec": (
                     None if program_spec is None else program_spec.receipt()
                 ),
+                "controller_plugin": controller_receipt,
+                "controller_plugin_command_count": controller_command_count,
                 "persistent_runtime": {
                     "pid": os.getpid(),
                     "reused": runtime_reused,
@@ -3314,6 +3466,7 @@ def main(argv: list[str] | None = None) -> None:
                 "program_spec": (
                     None if program_spec is None else program_spec.receipt()
                 ),
+                "controller_plugin": controller_receipt,
                 "source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)},
                 "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)},
                 "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()},
@@ -3379,6 +3532,10 @@ def main(argv: list[str] | None = None) -> None:
         raise
     finally:
         runtime_receipt_via_monitor = False
+        if controller_client is not None:
+            if controller_receipt is None:
+                controller_receipt = controller_client.receipt()
+            controller_client.close(force=sys.exc_info()[0] is not None)
         if encoder is not None:
             render_started = time.monotonic()
             encoder.close()
@@ -3408,6 +3565,7 @@ def main(argv: list[str] | None = None) -> None:
                     "program_spec": (
                         None if program_spec is None else program_spec.receipt()
                     ),
+                    "controller_plugin": controller_receipt,
                 }
                 subprocess.Popen(
                     [
@@ -3448,6 +3606,8 @@ def main(argv: list[str] | None = None) -> None:
             "program_spec": (
                 None if program_spec is None else program_spec.receipt()
             ),
+            "controller_plugin": controller_receipt,
+            "controller_plugin_command_count": controller_command_count,
         }
         if args.runtime_receipt_json and not runtime_receipt_via_monitor:
             receipt_path = Path(args.runtime_receipt_json)

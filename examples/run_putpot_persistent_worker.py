@@ -33,6 +33,7 @@ from judo_isaaclab.putpot_runtime import (
     validate_same_spec_retry,
 )
 from judo_isaaclab.putpot_program_spec import load_program_spec
+from judo_isaaclab.putpot_controller_protocol import sha256_file
 import run_putpot_skill_program as putpot
 
 
@@ -199,16 +200,43 @@ def main() -> None:
                     raise ValueError(
                         "request program-spec hash does not match file bytes"
                     )
-                validate_same_spec_retry(
-                    previous_attempt_receipt,
-                    program_spec.sha256,
-                    request.get("ambiguity_reason"),
+                controller_plugin_sha256 = sha256_file(
+                    request["controller_plugin_py"]
                 )
-                validate_material_spec_revision(
-                    previous_attempt_receipt,
-                    program_spec.sha256,
-                    program_spec.parameters,
+                if (
+                    controller_plugin_sha256
+                    != request["controller_plugin_sha256"]
+                ):
+                    raise ValueError(
+                        "request controller-plugin hash does not match file bytes"
+                    )
+                previous_plugin_sha256 = (
+                    None
+                    if previous_attempt_receipt is None
+                    else previous_attempt_receipt.get(
+                        "controller_plugin", {}
+                    ).get("sha256")
                 )
+                plugin_changed = (
+                    previous_plugin_sha256 is not None
+                    and previous_plugin_sha256 != controller_plugin_sha256
+                )
+                if not plugin_changed:
+                    validate_same_spec_retry(
+                        previous_attempt_receipt,
+                        program_spec.sha256,
+                        request.get("ambiguity_reason"),
+                    )
+                if (
+                    previous_attempt_receipt is None
+                    or previous_attempt_receipt["program_spec"]["sha256"]
+                    != program_spec.sha256
+                ):
+                    validate_material_spec_revision(
+                        previous_attempt_receipt,
+                        program_spec.sha256,
+                        program_spec.parameters,
+                    )
             except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
                 _append_receipt(
                     receipt_path,
@@ -253,6 +281,16 @@ def main() -> None:
                 if isinstance(result, dict)
                 else None
             )
+            runtime_controller = (
+                runtime_receipt.get("controller_plugin")
+                if isinstance(runtime_receipt, dict)
+                else None
+            )
+            result_controller = (
+                result.get("provenance", {}).get("controller_plugin")
+                if isinstance(result, dict)
+                else None
+            )
             observed_hashes = {
                 value.get("sha256")
                 for value in (runtime_spec, result_spec)
@@ -265,6 +303,27 @@ def main() -> None:
                 error = (
                     "ValueError: missing or mismatched program-spec hash across "
                     "request, runtime, and result receipts"
+                )
+                classification = diagnostic_classification(result, error)
+                recommendation = render_recommendation(result, error)
+            observed_controller_hashes = {
+                value.get("sha256")
+                for value in (runtime_controller, result_controller)
+                if isinstance(value, dict)
+            }
+            missing_controller_receipt = not isinstance(
+                runtime_controller, dict
+            ) or (
+                isinstance(result, dict)
+                and not isinstance(result_controller, dict)
+            )
+            if (
+                missing_controller_receipt
+                or observed_controller_hashes != {controller_plugin_sha256}
+            ):
+                error = (
+                    "ValueError: missing or mismatched controller-plugin hash "
+                    "across request, runtime, and result receipts"
                 )
                 classification = diagnostic_classification(result, error)
                 recommendation = render_recommendation(result, error)
@@ -325,6 +384,10 @@ def main() -> None:
                 ),
                 "runtime": runtime_receipt,
                 "program_spec": program_spec.receipt(),
+                "controller_plugin": runtime_controller,
+                "observed_controller_plugin_hashes": sorted(
+                    observed_controller_hashes
+                ),
                 "observed_program_spec_hashes": sorted(observed_hashes),
                 "failed_stage": failed_stage,
                 "failed_stage_program_parameter_observations": (
