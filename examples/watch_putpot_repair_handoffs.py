@@ -267,7 +267,7 @@ def _wake_tmux(target: str, prompt: str) -> None:
     # Codex renders pasted input asynchronously. Submitting in the immediately
     # following process can race that paste and leave a complete prompt sitting
     # unsent at the input boundary.
-    time.sleep(0.25)
+    time.sleep(1.0)
     subprocess.run(["tmux", "send-keys", "-t", target, "C-m"], check=True)
 
 

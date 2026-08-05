@@ -200,7 +200,7 @@ def test_tmux_wake_waits_for_paste_before_carriage_return(monkeypatch):
 
     assert events[-3:] == [
         ("tmux", "send-keys", "-t", "agent", "-l", "--", "continue"),
-        ("sleep", 0.25),
+        ("sleep", 1.0),
         ("tmux", "send-keys", "-t", "agent", "C-m"),
     ]
 
