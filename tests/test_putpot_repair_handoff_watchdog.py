@@ -60,6 +60,7 @@ def test_diagnosis_prompt_requires_trace_and_synchronized_video():
 
     assert "its trace, and the synchronized skill.mp4" in prompt
     assert "exactly one evidence-linked revised Python controller plugin" in prompt
+    assert len(prompt) < 2048
 
 
 def test_diagnosis_prompt_enforces_falsifiable_progress_contract():
