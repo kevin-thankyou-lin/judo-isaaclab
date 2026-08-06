@@ -38,6 +38,9 @@ from judo_isaaclab.putpot_controller_protocol import sha256_file
 import run_putpot_skill_program as putpot
 
 
+_MAX_DIAGNOSE_REPAIR_CYCLES = 8
+
+
 def _git_head() -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True
@@ -127,7 +130,7 @@ def main() -> None:
             "pid": worker_pid,
             "code_head": startup_head,
             "request_jsonl": str(request_path.resolve()),
-            "max_diagnose_repair_cycles": 8,
+            "max_diagnose_repair_cycles": _MAX_DIAGNOSE_REPAIR_CYCLES,
         },
     )
     try:
@@ -162,14 +165,14 @@ def main() -> None:
                     },
                 )
                 continue
-            if completed >= 4:
+            if completed >= _MAX_DIAGNOSE_REPAIR_CYCLES:
                 _append_receipt(
                     receipt_path,
                     {
                         "type": "request_rejected",
                         "pid": worker_pid,
                         "request_id": request.get("request_id"),
-                        "reason": "four_diagnose_repair_cycle_limit",
+                        "reason": "adaptive_diagnose_repair_cycle_limit",
                     },
                 )
                 continue

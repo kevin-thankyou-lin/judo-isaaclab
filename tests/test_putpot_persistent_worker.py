@@ -31,12 +31,14 @@ def _write_spec(tmp_path, index):
     return path
 
 
-def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, tmp_path):
+def test_eight_different_specs_share_one_mocked_isaac_pid_and_ninth_is_rejected(
+    monkeypatch, tmp_path
+):
     module = _module()
     request_path = tmp_path / "requests.jsonl"
     receipt_path = tmp_path / "receipts.jsonl"
     request_path.touch()
-    specs = [_write_spec(tmp_path, index) for index in (1, 2)]
+    specs = [_write_spec(tmp_path, index) for index in range(1, 10)]
 
     for index, spec_path in enumerate(specs, 1):
         attempt = tmp_path / f"attempt_{index:03d}"
@@ -147,11 +149,20 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
     module.main()
 
     receipts = [row for row in read_jsonl(receipt_path) if row["type"] == "attempt"]
-    assert len(receipts) == 2
+    assert len(receipts) == 8
     assert {row["pid"] for row in receipts} == {os.getpid()}
-    assert len({row["program_spec"]["sha256"] for row in receipts}) == 2
-    assert [row["runtime"]["reset_index"] for row in receipts] == [1, 2]
-    assert [row["runtime"]["runtime_reused"] for row in receipts] == [False, True]
+    assert len({row["program_spec"]["sha256"] for row in receipts}) == 8
+    assert [row["runtime"]["reset_index"] for row in receipts] == list(range(1, 9))
+    assert [row["runtime"]["runtime_reused"] for row in receipts] == [
+        False,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+    ]
     assert all(row["acknowledged"] for row in receipts)
     assert all(row["failed_stage"] == "bimanual_handle_grasp" for row in receipts)
     assert all(
@@ -160,3 +171,8 @@ def test_two_different_specs_share_one_mocked_isaac_pid_and_reset(monkeypatch, t
         for row in receipts
     )
     assert all("--persistent-session" in argv for argv in calls)
+    assert len(calls) == 8
+    rejected = [row for row in read_jsonl(receipt_path) if row["type"] == "request_rejected"]
+    assert len(rejected) == 1
+    assert rejected[0]["request_id"] == "epoch:9"
+    assert rejected[0]["reason"] == "adaptive_diagnose_repair_cycle_limit"
