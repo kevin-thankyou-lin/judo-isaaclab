@@ -121,21 +121,21 @@ def test_failed_grasp_receipt_observes_executed_close_horizon():
     }
 
 
-def test_attempt_identity_separates_lifetime_and_four_attempt_epoch():
-    identity = AttemptIdentity(37, "epoch-20260804-a", 4)
+def test_attempt_identity_separates_lifetime_and_eight_attempt_epoch():
+    identity = AttemptIdentity(37, "epoch-20260804-a", 8)
     assert identity.receipt() == {
         "lifetime_attempt": 37,
         "repair_epoch": "epoch-20260804-a",
-        "repair_epoch_attempt": 4,
-        "repair_epoch_attempt_limit": 4,
+        "repair_epoch_attempt": 8,
+        "repair_epoch_attempt_limit": 8,
     }
     with pytest.raises(ValueError, match="exceeds"):
-        AttemptIdentity(38, "epoch-20260804-a", 5)
+        AttemptIdentity(38, "epoch-20260804-a", 9, 8)
     assert AttemptIdentity(38, "epoch-20260804-a", 1, 3).receipt()[
         "repair_epoch_attempt_limit"
     ] == 3
-    with pytest.raises(ValueError, match="capped at four"):
-        AttemptIdentity(38, "epoch-20260804-a", 1, 5)
+    with pytest.raises(ValueError, match="capped at eight"):
+        AttemptIdentity(38, "epoch-20260804-a", 1, 9)
 
 
 def test_phase_timers_expose_every_required_phase():

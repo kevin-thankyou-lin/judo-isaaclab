@@ -3,8 +3,9 @@
 This runner never overwrites the primary campaign or comparison-audit artifacts.
 Each new execution is written to a numbered ``semantic_repair/attempt_*``
 directory and recorded atomically before the next pair is started.
-PutPot round-robin visits are fail-closed and capped at four interactive
-diagnose-to-repair cycles before the asset must rotate to hard-case review.
+PutPot round-robin visits are fail-closed and capped at eight interactive
+diagnose-to-repair cycles. Attempts five through eight are an adaptive hard-case
+quota, not permission to repeat a non-improving repair family.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from run_three_task_asset_campaign import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT = 4
+PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT = 8
 
 
 def _validate_fresh_attempts_per_asset_visit(
@@ -45,7 +46,7 @@ def _validate_fresh_attempts_per_asset_visit(
         not selected_tasks or "putpot" in selected_tasks
     ) and value > PUTPOT_MAX_FRESH_ATTEMPTS_PER_ASSET_VISIT:
         raise ValueError(
-            "PutPot asset visits are capped at four diagnose-to-repair cycles"
+            "PutPot asset visits are capped at eight diagnose-to-repair cycles"
         )
     return value
 
@@ -450,7 +451,7 @@ def refresh_ledger(
             "source demonstration supplies phase/contact intent but source semantic success "
             "is not required; reanchor contact milestones; separate task and motion gates; "
             "numbered immutable attempts; preserve hash-verified successes; stop on first "
-            "failed pair; PutPot round-robin visits capped at four diagnose-to-repair cycles; "
+            "failed pair; PutPot round-robin visits use an adaptive eight-cycle cap; "
             "one heavy Isaac process"
         ),
         "code_head": _git_head(),
@@ -924,7 +925,7 @@ def main() -> None:
     parser.add_argument("--task", action="append")
     parser.add_argument("--pair", action="append")
     parser.add_argument("--max-pairs", type=int)
-    parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=4)
+    parser.add_argument("--fresh-attempts-per-asset-visit", type=int, default=8)
     parser.add_argument("--putpot-initial-program-spec-json")
     parser.add_argument("--putpot-initial-controller-plugin-py")
     parser.add_argument("--stop-on-failure", action="store_true")

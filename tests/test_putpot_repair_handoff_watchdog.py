@@ -102,6 +102,19 @@ def test_diagnosis_prompt_escalates_repeated_nonprogress_structurally():
     assert "spend another cycle on an exhausted repair family" in prompt
 
 
+def test_extended_quota_requires_material_progress_or_rotation():
+    prompt = _module()._prompt(
+        _boundary(attempts_completed=4, attempt_limit=8)
+    )
+
+    assert "adaptive hard-case quota" in prompt
+    assert "attempts 5-8" in prompt
+    assert "failed-stage advance or material primary-metric improvement" in prompt
+    assert "Otherwise shut down and rotate" in prompt
+    assert "do not consume quota merely because it remains" in prompt
+    assert len(prompt) < 2048
+
+
 def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
     module = _module()
     state = {

@@ -460,12 +460,12 @@ def test_hard_case_pending_survives_nonaccepting_refresh_classification():
     assert module._pending_status({"status": "pending"}) == "pending"
 
 
-def test_putpot_round_robin_visit_is_capped_at_four_repair_cycles():
+def test_putpot_round_robin_visit_is_capped_at_eight_repair_cycles():
     module = _module()
 
-    assert module._validate_fresh_attempts_per_asset_visit(4, {"putpot"}) == 4
-    with pytest.raises(ValueError, match="capped at four"):
-        module._validate_fresh_attempts_per_asset_visit(5, {"putpot"})
+    assert module._validate_fresh_attempts_per_asset_visit(8, {"putpot"}) == 8
+    with pytest.raises(ValueError, match="capped at eight"):
+        module._validate_fresh_attempts_per_asset_visit(9, {"putpot"})
     with pytest.raises(ValueError, match="must be positive"):
         module._validate_fresh_attempts_per_asset_visit(0, {"putpot"})
 

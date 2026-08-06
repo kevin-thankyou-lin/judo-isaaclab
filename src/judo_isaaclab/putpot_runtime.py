@@ -111,7 +111,7 @@ class AttemptIdentity:
     lifetime_attempt: int
     repair_epoch: str
     repair_epoch_attempt: int
-    repair_epoch_attempt_limit: int = 4
+    repair_epoch_attempt_limit: int = 8
 
     def __post_init__(self) -> None:
         if self.lifetime_attempt < 1:
@@ -120,10 +120,10 @@ class AttemptIdentity:
             raise ValueError("repair epoch must be nonempty")
         if self.repair_epoch_attempt < 1:
             raise ValueError("repair epoch attempt must be positive")
-        if not 1 <= self.repair_epoch_attempt_limit <= 4:
-            raise ValueError("PutPot repair epochs are capped at four cycles")
+        if not 1 <= self.repair_epoch_attempt_limit <= 8:
+            raise ValueError("PutPot repair epochs are capped at eight cycles")
         if self.repair_epoch_attempt > self.repair_epoch_attempt_limit:
-            raise ValueError("repair epoch attempt exceeds the four-attempt limit")
+            raise ValueError("repair epoch attempt exceeds the configured limit")
 
     def receipt(self) -> dict[str, Any]:
         return {

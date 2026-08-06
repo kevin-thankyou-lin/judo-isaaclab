@@ -127,7 +127,7 @@ def main() -> None:
             "pid": worker_pid,
             "code_head": startup_head,
             "request_jsonl": str(request_path.resolve()),
-            "max_diagnose_repair_cycles": 4,
+            "max_diagnose_repair_cycles": 8,
         },
     )
     try:

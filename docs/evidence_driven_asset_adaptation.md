@@ -165,12 +165,15 @@ object-local distance at the conservative 1 mm/control-step loaded-contact
 horizon, keeping the jaw open while the wrist tracks the correction.
 
 Every attempt records both its immutable lifetime attempt number and its
-one-based repair-epoch cycle number. The epoch limit is four diagnose-to-repair
-cycles, not four identical-code retries. A same-spec repeat is rejected unless
+one-based repair-epoch cycle number. The epoch limit is eight diagnose-to-repair
+cycles, not eight identical-code retries. Attempts five through eight are an
+adaptive hard-case quota: continue only after the failure stage advances or a
+primary metric materially improves, and never spend more than two attempts on
+one non-improving repair family. A same-spec repeat is rejected unless
 the preceding receipt is classified `ambiguous_failure` and the submitted
-request includes an explicit ambiguity reason. After four nonaccepting cycles
-the scheduler rotates the asset into hard-case review; it never reuses or
-overwrites an attempt directory.
+request includes an explicit ambiguity reason. The scheduler may rotate before
+eight cycles when the progress contract is not met; it never reuses or overwrites
+an attempt directory.
 
 A different spec hash is not sufficient evidence of a material repair. For a
 changed-parameter request, every changed parameter must appear in the previous

@@ -63,7 +63,7 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lifetime-attempt-number", type=int)
     parser.add_argument("--repair-epoch")
     parser.add_argument("--repair-epoch-attempt", type=int)
-    parser.add_argument("--repair-epoch-attempt-limit", type=int, default=4)
+    parser.add_argument("--repair-epoch-attempt-limit", type=int, default=8)
     parser.add_argument("--runtime-receipt-json")
     return parser.parse_args(argv)
 

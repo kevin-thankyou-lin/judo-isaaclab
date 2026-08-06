@@ -182,6 +182,14 @@ def _snapshot(
 
 def _prompt(boundary: dict[str, Any]) -> str:
     if boundary["action"] == "diagnose_and_repair":
+        extended_quota = ""
+        if boundary["attempts_completed"] >= 4:
+            extended_quota = (
+                " This is adaptive hard-case quota: attempts 5-8 are allowed only "
+                "after a failed-stage advance or material primary-metric improvement. "
+                "Otherwise shut down and rotate; do not consume quota merely because "
+                "it remains."
+            )
         return (
             "Continue the durable PutPot boundary. Recheck the queue first; do "
             "nothing duplicate if this receipt was handled. "
@@ -204,20 +212,20 @@ def _prompt(boundary: dict[str, Any]) -> str:
             "repair only when the upstream approach/contact frame is correct and "
             "the residual is within its authority. If two attempts in one repair "
             "family fail at the same stage without material improvement in the "
-            "primary metric, abandon "
-            "that family: make a structural Python change to the upstream "
-            "approach, contact frame, or trajectory primitive, or rotate. Submit "
-            "exactly one evidence-linked revised Python controller plugin and/or "
-            f"spec through {boundary['session_json']}. Prefer controller code when "
-            "the failure requires new control flow or geometry logic. Do not "
-            "blind-repeat, spend "
-            "another cycle on an exhausted repair family, weaken gates, or restart "
-            "Isaac."
+            "primary metric, abandon that family: make a structural Python change "
+            "to the upstream approach, contact frame, or trajectory primitive, or "
+            "rotate. Submit exactly one evidence-linked revised Python controller "
+            "plugin and/or spec through "
+            f"{boundary['session_json']}. Prefer controller code when the failure "
+            "requires new control flow or geometry logic. Do not blind-repeat, "
+            "spend another cycle on an exhausted repair family, weaken gates, or "
+            "restart Isaac."
+            + extended_quota
         )
     return (
         "Continue the terminal PutPot campaign. The previous asset visit has "
         f"closed at {boundary['session_json']}; reconcile its receipts and ledger, "
-        "then rotate to the next pending asset under the four-cycle policy. Recheck "
+        "then rotate to the next pending asset under the adaptive eight-cycle policy. Recheck "
         "live processes first and do not launch a duplicate simulator."
     )
 
