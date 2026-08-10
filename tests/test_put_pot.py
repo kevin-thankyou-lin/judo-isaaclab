@@ -202,7 +202,7 @@ def test_render_debug_axes_measure_contact_and_wrist_frames_without_commands():
         env_origin_world=[1.0, 2.0, 3.0],
     )
 
-    assert len(result["starts"]) == len(result["ends"]) == 18
+    assert len(result["starts"]) == len(result["ends"]) == 21
     assert result["labels"].count("pad_0_center") == 3
     assert result["labels"].count("pad_1_center") == 3
     tangent = result["labels"].index("target_tangent")
@@ -211,9 +211,16 @@ def test_render_debug_axes_measure_contact_and_wrist_frames_without_commands():
     depth = result["labels"].index("mean_pad_depth_axis")
     np.testing.assert_allclose(result["starts"][depth], [1.0, 2.05, 3.0])
     np.testing.assert_allclose(result["ends"][depth], [1.0, 2.05, 3.075])
+    assert result["labels"].count("pad_0_depth_axis") == 1
+    assert result["labels"].count("pad_1_depth_axis") == 1
     correction = result["labels"].index("actual_to_desired_correction")
     np.testing.assert_allclose(result["starts"][correction], [1.10, 2.20, 3.30])
     np.testing.assert_allclose(result["ends"][correction], [1.11, 2.18, 3.33])
+    handle_correction = result["labels"].index(
+        "jaw_midpoint_to_target_contact_correction"
+    )
+    np.testing.assert_allclose(result["starts"][handle_correction], [1.0, 2.05, 3.0])
+    np.testing.assert_allclose(result["ends"][handle_correction], [1.20, 2.30, 3.40])
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():

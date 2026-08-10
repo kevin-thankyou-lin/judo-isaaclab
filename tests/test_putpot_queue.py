@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from judo_isaaclab.putpot_queue import (
@@ -11,6 +12,7 @@ from judo_isaaclab.putpot_program_spec import load_program_spec
 from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 from judo_isaaclab.putpot_repair_policy import (
     DEFAULT_POLICY,
+    sha256_file,
     source_demo_card_receipt,
 )
 
@@ -75,12 +77,30 @@ def _enable_source_first_policy(session_path, tmp_path):
     session["schema_version"] = 4
     session["source_demo_card"] = source_demo_card_receipt(card_path)
     session["repair_policy"] = dict(DEFAULT_POLICY)
+    session["static_argv"].append("--render")
     session_path.write_text(json.dumps(session), encoding="utf-8")
     return session
 
 
-def _failed_grasp_result(path):
+def _failed_grasp_result(path, video_path=None):
     path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path = path.with_name("skill_trace.npz")
+    actions = np.zeros((4, 14), dtype=np.float32)
+    pot = np.zeros((4, 7), dtype=np.float32)
+    pot[:, 3] = 1.0
+    forces = np.zeros((4, 2), dtype=np.float32)
+    fractions = np.full((4, 2), np.nan, dtype=np.float32)
+    np.savez(
+        trace_path,
+        actions=actions,
+        pot_poses=pot,
+        left_finger_forces_n=forces,
+        right_finger_forces_n=forces,
+        left_pad_fractions=fractions,
+        right_pad_fractions=fractions,
+    )
+    video_path = Path(video_path or path.with_name("skill.mp4"))
+    video_path.write_bytes(b"physical-h264")
     path.write_text(
         json.dumps(
             {
@@ -92,7 +112,16 @@ def _failed_grasp_result(path):
                     "fully_decodable": True,
                 },
                 "metrics": {},
-                "provenance": {},
+                "provenance": {
+                    "trace": {"path": str(trace_path), "sha256": sha256_file(trace_path)}
+                },
+                "video": {
+                    "path": str(video_path),
+                    "sha256": sha256_file(video_path),
+                    "codec": "h264",
+                    "frame_count": 4,
+                    "full_decode_returncode": 0,
+                },
             }
         ),
         encoding="utf-8",
@@ -121,7 +150,7 @@ def _proposal(path, session, baseline, mechanism, family="staged_bilateral_acqui
 
 def _ack_failed_grasp(receipt_path, request):
     result_path = Path(request["result_json"])
-    _failed_grasp_result(result_path)
+    _failed_grasp_result(result_path, request.get("video"))
     append_jsonl(
         receipt_path,
         {
@@ -138,6 +167,127 @@ def _ack_failed_grasp(receipt_path, request):
             "failed_stage_program_parameter_observations": {},
         },
     )
+
+
+def _diagnostic_receipt(
+    tmp_path,
+    request,
+    *,
+    action_delta=0.0,
+    codec="h264",
+    fully_decoded=True,
+    consuming=False,
+):
+    physical_result_path = Path(request["result_json"])
+    physical_result = json.loads(physical_result_path.read_text())
+    physical_trace = Path(physical_result["provenance"]["trace"]["path"])
+    physical_video = Path(physical_result["video"]["path"])
+    diagnostic_root = tmp_path / f"diagnostic_{request['repair_epoch_attempt']}"
+    diagnostic_root.mkdir(exist_ok=True)
+    diagnostic_trace = diagnostic_root / "trace.npz"
+    with np.load(physical_trace, allow_pickle=False) as trace:
+        actions = np.asarray(trace["actions"]).copy()
+    actions[0, 0] += action_delta
+    np.savez(diagnostic_trace, actions=actions)
+    diagnostic_video = diagnostic_root / "axes.mp4"
+    diagnostic_video.write_bytes(b"diagnostic-h264")
+    diagnostic_result_path = diagnostic_root / "result.json"
+    action_bytes = __import__("hashlib").sha256(actions.tobytes()).hexdigest()
+    with np.load(physical_trace, allow_pickle=False) as trace:
+        reference = np.asarray(trace["actions"])
+    reference_bytes = __import__("hashlib").sha256(reference.tobytes()).hexdigest()
+    exact = bool(np.array_equal(reference, actions))
+    diagnostic_result = {
+        "status": "passed",
+        "checks": {"diagnostic_actions_identical": exact},
+        "provenance": {"trace": {"path": str(diagnostic_trace)}},
+        "protocol": {
+            "attempt_identity": None,
+            "render_diagnostic": {
+                "physics_or_controller_changes": False,
+                "causal_mechanism_attempt_consumed": consuming,
+                "training_eligible": False,
+                "replay_actions": {"exactly_equal": exact},
+                "overlay": {
+                    "target_left_contact_frame": True,
+                    "target_tangent_axis": "local_x",
+                    "actual_left_pad_centers": 2,
+                    "actual_left_pad_axes": 2,
+                    "jaw_closing_line": True,
+                    "target_left_wrist_frame": True,
+                    "actual_left_wrist_frame": True,
+                    "actual_to_desired_correction_vector": True,
+                    "jaw_midpoint_to_target_contact_correction_vector": True,
+                    "screen_space_color_legend": True,
+                },
+            },
+        },
+        "video": {
+            "path": str(diagnostic_video),
+            "codec": codec,
+            "frame_count": 4,
+            "full_decode_returncode": 0 if fully_decoded else 1,
+        },
+    }
+    diagnostic_result_path.write_text(json.dumps(diagnostic_result))
+
+    def artifact(path):
+        return {"path": str(path), "sha256": sha256_file(path)}
+
+    receipt = {
+        "schema_version": 1,
+        "classification": "action_identical_render_diagnostic",
+        "physical_attempt": {
+            "request_id": request["request_id"],
+            "trace": artifact(physical_trace),
+            "video": artifact(physical_video),
+        },
+        "diagnostic": {
+            "result": artifact(diagnostic_result_path),
+            "trace": artifact(diagnostic_trace),
+            "video": artifact(diagnostic_video),
+        },
+        "action_parity": {
+            "reference_shape": list(reference.shape),
+            "replay_shape": list(actions.shape),
+            "reference_actions_bytes_sha256": reference_bytes,
+            "replay_actions_bytes_sha256": action_bytes,
+            "exactly_equal": exact,
+            "maximum_absolute_difference": float(np.max(np.abs(reference - actions))),
+        },
+        "protocol": {
+            "physics_or_controller_changes": False,
+            "causal_mechanism_attempt_consumed": consuming,
+            "training_eligible": False,
+            "attempt_identity": None,
+        },
+        "overlay": {
+            "target_handle_contact_frame": True,
+            "target_handle_tangent_axis": True,
+            "actual_pad_centers": True,
+            "actual_pad_axes": True,
+            "jaw_closing_line": True,
+            "target_wrist_frame": True,
+            "actual_wrist_frame": True,
+            "signed_correction_vectors": True,
+            "screen_space_color_legend": True,
+        },
+        "measured_residuals": {
+            "signed_translation_residual_world_m": [0.001, -0.002, 0.003],
+            "translation_norm_m": 0.0037,
+            "signed_rotation_residual_axis_angle_deg": [1.0, -2.0, 3.0],
+            "rotation_norm_deg": 3.74,
+        },
+        "next_mechanism_prediction": {
+            "mechanism_id": "structural-contact-frame-v2",
+            "signed_translation_mm": [1.0, -2.0, 3.0],
+            "signed_rotation_axis_angle_deg": [1.0, -2.0, 3.0],
+            "sign_basis": "measured actual-to-target wrist frame",
+        },
+    }
+    receipt_path = diagnostic_root / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+    return receipt_path
 
 
 def test_static_worker_argv_removes_every_request_scoped_value():
@@ -297,12 +447,20 @@ def test_source_first_queue_requires_latest_earliest_stage_proposal(tmp_path):
     spec = _spec(tmp_path, 1)
     first = submit_program_request(session_path, spec)
     _ack_failed_grasp(receipt_path, first)
+    diagnostic = _diagnostic_receipt(tmp_path, first)
     controller = tmp_path / "controller.py"
     controller.write_text(DEFAULT_CONTROLLER.read_text() + "\nREVISION=1\n")
 
-    with pytest.raises(ValueError, match="requires a repair proposal"):
+    with pytest.raises(ValueError, match="requires an action-identical diagnostic"):
         submit_program_request(
             session_path, first["program_spec_json"], controller_plugin_py=controller
+        )
+    with pytest.raises(ValueError, match="requires a repair proposal"):
+        submit_program_request(
+            session_path,
+            first["program_spec_json"],
+            controller_plugin_py=controller,
+            diagnostic_receipt_json=diagnostic,
         )
     wrong = _proposal(
         tmp_path / "wrong.json",
@@ -318,6 +476,7 @@ def test_source_first_queue_requires_latest_earliest_stage_proposal(tmp_path):
             first["program_spec_json"],
             controller_plugin_py=controller,
             repair_proposal_json=wrong,
+            diagnostic_receipt_json=diagnostic,
         )
 
 
@@ -327,6 +486,7 @@ def test_source_first_queue_allows_one_rollout_per_mechanism_and_exhausts_family
     spec = _spec(tmp_path, 1)
     first = submit_program_request(session_path, spec)
     _ack_failed_grasp(receipt_path, first)
+    diagnostic_one = _diagnostic_receipt(tmp_path, first)
 
     controllers = []
     for index in (1, 2):
@@ -346,8 +506,10 @@ def test_source_first_queue_allows_one_rollout_per_mechanism_and_exhausts_family
         first["program_spec_json"],
         controller_plugin_py=controllers[0],
         repair_proposal_json=proposal_one,
+        diagnostic_receipt_json=diagnostic_one,
     )
     _ack_failed_grasp(receipt_path, second)
+    diagnostic_two = _diagnostic_receipt(tmp_path, second)
 
     reused = _proposal(
         tmp_path / "reused.json",
@@ -361,6 +523,7 @@ def test_source_first_queue_allows_one_rollout_per_mechanism_and_exhausts_family
             second["program_spec_json"],
             controller_plugin_py=controllers[1],
             repair_proposal_json=reused,
+            diagnostic_receipt_json=diagnostic_two,
         )
 
     proposal_two = _proposal(
@@ -374,8 +537,10 @@ def test_source_first_queue_allows_one_rollout_per_mechanism_and_exhausts_family
         second["program_spec_json"],
         controller_plugin_py=controllers[1],
         repair_proposal_json=proposal_two,
+        diagnostic_receipt_json=diagnostic_two,
     )
     _ack_failed_grasp(receipt_path, third)
+    diagnostic_three = _diagnostic_receipt(tmp_path, third)
     proposal_three = _proposal(
         tmp_path / "proposal_three.json",
         session,
@@ -390,4 +555,61 @@ def test_source_first_queue_allows_one_rollout_per_mechanism_and_exhausts_family
             third["program_spec_json"],
             controller_plugin_py=controller_three,
             repair_proposal_json=proposal_three,
+            diagnostic_receipt_json=diagnostic_three,
         )
+
+
+@pytest.mark.parametrize(
+    ("action_delta", "codec", "fully_decoded", "consuming", "error"),
+    [
+        (0.0, "h264", True, False, None),
+        (0.01, "h264", True, False, "action parity gate failed"),
+        (0.0, "vp9", True, False, "H.264 full-decode gate failed"),
+        (0.0, "h264", False, False, "H.264 full-decode gate failed"),
+        (0.0, "h264", True, True, "consuming/non-training protocol gate failed"),
+    ],
+)
+def test_next_attempt_accepts_only_exact_decoded_nonconsuming_diagnostic(
+    tmp_path, action_delta, codec, fully_decoded, consuming, error
+):
+    session_path, _, receipt_path = _session(tmp_path)
+    session = _enable_source_first_policy(session_path, tmp_path)
+    first = submit_program_request(session_path, _spec(tmp_path, 1))
+    _ack_failed_grasp(receipt_path, first)
+    diagnostic = _diagnostic_receipt(
+        tmp_path,
+        first,
+        action_delta=action_delta,
+        codec=codec,
+        fully_decoded=fully_decoded,
+        consuming=consuming,
+    )
+    proposal = _proposal(
+        tmp_path / "proposal.json",
+        session,
+        first["request_id"],
+        "structural-contact-frame-v2",
+    )
+    controller = tmp_path / "controller.py"
+    controller.write_text(DEFAULT_CONTROLLER.read_text() + "\nREVISION=9\n")
+    if error is not None:
+        with pytest.raises(ValueError, match=error):
+            submit_program_request(
+                session_path,
+                first["program_spec_json"],
+                controller_plugin_py=controller,
+                repair_proposal_json=proposal,
+                diagnostic_receipt_json=diagnostic,
+            )
+        return
+    second = submit_program_request(
+        session_path,
+        first["program_spec_json"],
+        controller_plugin_py=controller,
+        repair_proposal_json=proposal,
+        diagnostic_receipt_json=diagnostic,
+    )
+    assert second["repair_epoch_attempt"] == 2
+    assert second["prior_diagnostic_receipt_sha256"] == sha256_file(
+        second["prior_diagnostic_receipt_json"]
+    )

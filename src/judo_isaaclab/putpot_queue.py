@@ -11,8 +11,10 @@ from typing import Any
 from .putpot_program_spec import load_program_spec
 from .putpot_controller_protocol import sha256_file
 from .putpot_repair_policy import (
+    load_failed_attempt_diagnostic,
     load_repair_proposal,
     load_source_demo_card,
+    validate_failed_attempt_diagnostic,
     validate_repair_admission,
 )
 from .putpot_runtime import (
@@ -68,6 +70,7 @@ def submit_program_request(
     *,
     controller_plugin_py: str | os.PathLike[str] | None = None,
     repair_proposal_json: str | os.PathLike[str] | None = None,
+    diagnostic_receipt_json: str | os.PathLike[str] | None = None,
     ambiguity_reason: str | None = None,
 ) -> dict[str, Any]:
     """Append one immutable spec and reloadable Python controller revision."""
@@ -86,6 +89,7 @@ def submit_program_request(
     source_demo_card = session.get("source_demo_card")
     repair_policy = session.get("repair_policy")
     proposal = None
+    diagnostic_gate = None
     if repair_policy is not None:
         if int(session["attempt_limit"]) > int(
             repair_policy["maximum_attempts_per_visit"]
@@ -98,9 +102,24 @@ def submit_program_request(
             raise ValueError("source-demo card hash changed")
         if card["schema_version"] != source_demo_card.get("schema_version"):
             raise ValueError("source-demo card receipt schema mismatch")
+        if repair_policy.get(
+            "require_action_identical_diagnostic_before_next_attempt", True
+        ) and "--render" not in session["static_argv"]:
+            raise ValueError("source-first physical attempts require immutable MP4s")
         if cycle == 1 and repair_proposal_json is not None:
             raise ValueError("baseline request cannot carry a repair proposal")
         if cycle > 1:
+            if repair_policy.get(
+                "require_action_identical_diagnostic_before_next_attempt", True
+            ):
+                if diagnostic_receipt_json is None:
+                    raise ValueError(
+                        "next physical attempt requires an action-identical diagnostic"
+                    )
+                diagnostic_gate = validate_failed_attempt_diagnostic(
+                    diagnostic_receipt_json,
+                    previous_receipt=receipts[-1],
+                )
             if repair_proposal_json is None:
                 raise ValueError("post-baseline request requires a repair proposal")
             proposal = load_repair_proposal(repair_proposal_json)
@@ -182,6 +201,22 @@ def submit_program_request(
             raise RuntimeError("immutable PutPot repair-proposal copy changed")
         proposal_sha256 = sha256_file(immutable_proposal)
 
+    immutable_diagnostic = None
+    diagnostic_sha256 = None
+    if diagnostic_gate is not None:
+        diagnostic_root = Path(session["epoch_root"]) / "diagnostic_receipts"
+        diagnostic_root.mkdir(parents=True, exist_ok=True)
+        immutable_diagnostic = diagnostic_root / f"diagnostic_{cycle - 1:03d}.json"
+        with open(diagnostic_receipt_json, "rb") as source, open(
+            immutable_diagnostic, "xb"
+        ) as target:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        if load_failed_attempt_diagnostic(immutable_diagnostic) != diagnostic_gate:
+            raise RuntimeError("immutable PutPot diagnostic receipt copy changed")
+        diagnostic_sha256 = sha256_file(immutable_diagnostic)
+
     argv = list(session["static_argv"])
     video_path = None
     if "--render" in argv:
@@ -237,6 +272,12 @@ def submit_program_request(
             None if immutable_proposal is None else str(immutable_proposal.resolve())
         ),
         "repair_proposal_sha256": proposal_sha256,
+        "prior_diagnostic_receipt_json": (
+            None
+            if immutable_diagnostic is None
+            else str(immutable_diagnostic.resolve())
+        ),
+        "prior_diagnostic_receipt_sha256": diagnostic_sha256,
         "ambiguity_reason": ambiguity_reason,
     }
     append_jsonl(session["request_jsonl"], request)

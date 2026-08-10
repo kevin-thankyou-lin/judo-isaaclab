@@ -77,6 +77,10 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--diagnostic-reference-trace",
         help="Immutable trace whose actions must exactly match this diagnostic replay.",
     )
+    parser.add_argument(
+        "--diagnostic-physical-request-id",
+        help="Physical-attempt request identity owned by this non-consuming replay.",
+    )
     parser.add_argument("--trace-npz", required=True)
     parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
@@ -1165,6 +1169,15 @@ def _debug_axis_primitives(
             )
     line(pads[0], pads[1], pad_color, 5.0, "jaw_closing_line")
 
+    depth_color = (0.55, 1.0, 0.05, 1.0)
+    for pad_index, (center, axis) in enumerate(zip(pads, pad_axes, strict=True)):
+        line(
+            center,
+            center + 0.055 * axis / np.linalg.norm(axis),
+            depth_color,
+            4.0,
+            f"pad_{pad_index}_depth_axis",
+        )
     mean_depth_axis = np.mean(pad_axes, axis=0)
     mean_depth_norm = float(np.linalg.norm(mean_depth_axis))
     if mean_depth_norm <= 1.0e-9:
@@ -1174,14 +1187,14 @@ def _debug_axis_primitives(
     line(
         pad_mean,
         pad_mean + 0.075 * mean_depth_axis,
-        (0.55, 1.0, 0.05, 1.0),
+        depth_color,
         6.0,
         "mean_pad_depth_axis",
     )
 
     for pose, color, size, label in (
         (actual, (0.05, 0.95, 1.0, 1.0), 4.0, "actual_wrist"),
-        (desired, (1.0, 1.0, 1.0, 1.0), 5.0, "desired_wrist"),
+        (desired, (1.0, 1.0, 1.0, 1.0), 5.0, "target_wrist"),
     ):
         rotation = _quat_to_matrix(pose[3:])
         for axis in range(3):
@@ -1198,6 +1211,13 @@ def _debug_axis_primitives(
         (1.0, 0.55, 0.02, 1.0),
         7.0,
         "actual_to_desired_correction",
+    )
+    line(
+        pad_mean,
+        target_contact[:3],
+        (1.0, 0.55, 0.02, 1.0),
+        5.0,
+        "jaw_midpoint_to_target_contact_correction",
     )
     return {
         "starts": starts,
@@ -1245,8 +1265,8 @@ def _debug_axis_legend(frame: np.ndarray) -> np.ndarray:
         ("PADS/JAW", (255, 20, 220)),
         ("DEPTH", (145, 255, 20)),
         ("WRIST ACT", (20, 240, 255)),
-        ("WRIST DES", (255, 255, 255)),
-        ("ACT->DES", (255, 140, 5)),
+        ("WRIST TGT", (255, 255, 255)),
+        ("SIGNED CORR", (255, 140, 5)),
     )
     x = 8
     for label, rgb in items:
@@ -1436,13 +1456,6 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError("render diagnostic consumes no repair-attempt identity")
         if args.controller_plugin_py:
             raise ValueError("render diagnostic forbids controller plugins")
-        if (
-            not args.target_left_source_approach_corridor
-            or args.target_source_left_first_acquisition
-        ):
-            raise ValueError(
-                "this diagnostic must replay the sealed cycle-3 source corridor"
-            )
         reference_trace = Path(args.diagnostic_reference_trace).resolve()
         if not reference_trace.is_file():
             raise FileNotFoundError(
@@ -1994,6 +2007,11 @@ def main(argv: list[str] | None = None) -> None:
                 np.linalg.norm(target_handle_size) + args.collision_clearance_m
             )
             source_left_pregrasp = keyframes["frames"]["left_pregrasp"]
+            target_contact_world = compose_marker_pose(
+                calibration_pot_pose,
+                handle_grasp_geometry["left"]["target_contact_frame_local"],
+            )
+            diagnostic_target_left_contact_frame = target_contact_world.copy()
             if args.target_left_source_approach_corridor:
                 source_pregrasp_contact_world = compose_marker_pose(
                     source_left_pregrasp["pot_pose"],
@@ -2001,13 +2019,6 @@ def main(argv: list[str] | None = None) -> None:
                         "source_contact_frame_local"
                     ],
                 )
-                target_contact_world = compose_marker_pose(
-                    calibration_pot_pose,
-                    handle_grasp_geometry["left"][
-                        "target_contact_frame_local"
-                    ],
-                )
-                diagnostic_target_left_contact_frame = target_contact_world.copy()
                 desired_pregrasp = transfer_marker_pose(
                     source_left_pregrasp["left_eef_pose"],
                     source_pregrasp_contact_world,
@@ -3963,6 +3974,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             diagnostic_replay = {
                 "classification": "deterministic_render_diagnostic_only",
+                "physical_request_id": args.diagnostic_physical_request_id,
                 "training_eligible": False,
                 "causal_mechanism_attempt_consumed": False,
                 "physics_or_controller_changes": False,
@@ -3986,11 +3998,13 @@ def main(argv: list[str] | None = None) -> None:
                     "target_left_contact_frame": True,
                     "target_tangent_axis": "local_x",
                     "actual_left_pad_centers": 2,
+                    "actual_left_pad_axes": 2,
                     "jaw_closing_line": True,
                     "mean_pad_depth_axis": True,
                     "actual_left_wrist_frame": True,
-                    "desired_left_wrist_frame": True,
+                    "target_left_wrist_frame": True,
                     "actual_to_desired_correction_vector": True,
+                    "jaw_midpoint_to_target_contact_correction_vector": True,
                     "screen_space_color_legend": True,
                 },
             }

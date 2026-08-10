@@ -14,6 +14,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--program-spec-json")
     parser.add_argument("--controller-plugin-py")
     parser.add_argument("--repair-proposal-json")
+    parser.add_argument("--diagnostic-receipt-json")
     parser.add_argument("--ambiguity-reason")
     parser.add_argument("--shutdown-reason")
     args = parser.parse_args(argv)
@@ -27,6 +28,7 @@ def main(argv: list[str] | None = None) -> None:
             args.program_spec_json,
             controller_plugin_py=args.controller_plugin_py,
             repair_proposal_json=args.repair_proposal_json,
+            diagnostic_receipt_json=args.diagnostic_receipt_json,
             ambiguity_reason=args.ambiguity_reason,
         )
     else:

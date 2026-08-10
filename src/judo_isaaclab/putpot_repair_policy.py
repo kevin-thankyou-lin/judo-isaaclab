@@ -46,7 +46,20 @@ DEFAULT_POLICY = {
     "minimum_material_latch_frame_delta": 15,
     "minimum_material_transport_path_delta_m": 0.05,
     "minimum_material_center_error_delta_m": 0.01,
+    "require_action_identical_diagnostic_before_next_attempt": True,
 }
+
+DIAGNOSTIC_OVERLAY_REQUIREMENTS = (
+    "target_handle_contact_frame",
+    "target_handle_tangent_axis",
+    "actual_pad_centers",
+    "actual_pad_axes",
+    "jaw_closing_line",
+    "target_wrist_frame",
+    "actual_wrist_frame",
+    "signed_correction_vectors",
+    "screen_space_color_legend",
+)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -252,6 +265,246 @@ def source_demo_card_receipt(path: str | Path) -> dict[str, Any]:
         "schema_version": value["schema_version"],
         "contact_order": value["contact_order"],
     }
+
+
+def action_tensor_receipt(trace_npz: str | Path) -> dict[str, Any]:
+    """Hash the exact executable action tensor carried by one immutable trace."""
+
+    target = Path(trace_npz).resolve()
+    if not target.is_file():
+        raise FileNotFoundError(f"PutPot action trace is missing: {target}")
+    with np.load(target, allow_pickle=False) as trace:
+        if "actions" not in trace.files:
+            raise ValueError("PutPot trace has no actions tensor")
+        actions = np.ascontiguousarray(trace["actions"])
+    if actions.ndim != 2 or actions.shape[1] != 14:
+        raise ValueError(f"PutPot actions must have shape (steps, 14), got {actions.shape}")
+    return {
+        "path": str(target),
+        "sha256": sha256_file(target),
+        "shape": list(actions.shape),
+        "dtype": actions.dtype.str,
+        "bytes_sha256": hashlib.sha256(actions.tobytes()).hexdigest(),
+    }
+
+
+def _require_vector(value: Any, name: str) -> list[float]:
+    vector = np.asarray(value, dtype=np.float64)
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+        raise ValueError(f"diagnostic {name} must be a finite length-3 vector")
+    return vector.tolist()
+
+
+def load_failed_attempt_diagnostic(path: str | Path) -> dict[str, Any]:
+    """Load the machine-checkable receipt that unlocks the next physical attempt."""
+
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {
+        "schema_version",
+        "classification",
+        "physical_attempt",
+        "diagnostic",
+        "action_parity",
+        "protocol",
+        "overlay",
+        "measured_residuals",
+        "next_mechanism_prediction",
+    }
+    if not required.issubset(value) or value.get("schema_version") != 1:
+        raise ValueError("invalid failed-attempt diagnostic receipt schema")
+    if value.get("classification") != "action_identical_render_diagnostic":
+        raise ValueError("diagnostic receipt classification is not action-identical")
+    parity = value.get("action_parity")
+    if not isinstance(parity, Mapping) or not (
+        parity.get("exactly_equal") is True
+        and parity.get("reference_shape") == parity.get("replay_shape")
+        and parity.get("reference_actions_bytes_sha256")
+        == parity.get("replay_actions_bytes_sha256")
+        and float(parity.get("maximum_absolute_difference", float("inf"))) == 0.0
+    ):
+        raise ValueError("diagnostic action parity gate failed")
+    protocol = value.get("protocol")
+    if not isinstance(protocol, Mapping) or not (
+        protocol.get("physics_or_controller_changes") is False
+        and protocol.get("causal_mechanism_attempt_consumed") is False
+        and protocol.get("training_eligible") is False
+        and protocol.get("attempt_identity") is None
+    ):
+        raise ValueError("diagnostic consuming/non-training protocol gate failed")
+    overlay = value.get("overlay")
+    if not isinstance(overlay, Mapping) or any(
+        overlay.get(name) is not True for name in DIAGNOSTIC_OVERLAY_REQUIREMENTS
+    ):
+        raise ValueError("diagnostic coordinate-axis overlay gate failed")
+    residuals = value.get("measured_residuals")
+    if not isinstance(residuals, Mapping):
+        raise ValueError("diagnostic receipt has no measured residuals")
+    _require_vector(
+        residuals.get("signed_translation_residual_world_m"),
+        "signed translation residual",
+    )
+    _require_vector(
+        residuals.get("signed_rotation_residual_axis_angle_deg"),
+        "signed rotation residual",
+    )
+    for name in ("translation_norm_m", "rotation_norm_deg"):
+        number = residuals.get(name)
+        if not isinstance(number, (int, float)) or not np.isfinite(number):
+            raise ValueError(f"diagnostic {name} must be finite")
+    prediction = value.get("next_mechanism_prediction")
+    if not isinstance(prediction, Mapping) or not isinstance(
+        prediction.get("mechanism_id"), str
+    ) or not prediction["mechanism_id"].strip():
+        raise ValueError("diagnostic receipt has no next-mechanism prediction")
+    _require_vector(
+        prediction.get("signed_translation_mm"),
+        "predicted signed translation",
+    )
+    _require_vector(
+        prediction.get("signed_rotation_axis_angle_deg"),
+        "predicted signed rotation",
+    )
+    if not isinstance(prediction.get("sign_basis"), str) or not prediction[
+        "sign_basis"
+    ].strip():
+        raise ValueError("diagnostic next-mechanism sign basis is missing")
+    return value
+
+
+def validate_failed_attempt_diagnostic(
+    path: str | Path,
+    *,
+    previous_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prove a failed physical attempt has an exact, decoded, non-consuming replay."""
+
+    value = load_failed_attempt_diagnostic(path)
+    physical = value.get("physical_attempt")
+    diagnostic = value.get("diagnostic")
+    if not isinstance(physical, Mapping) or not isinstance(diagnostic, Mapping):
+        raise ValueError("diagnostic receipt artifact mappings are missing")
+    if physical.get("request_id") != previous_receipt.get("request_id"):
+        raise ValueError("diagnostic does not belong to the latest physical attempt")
+    result_path = previous_receipt.get("result_json")
+    if not isinstance(result_path, str) or not Path(result_path).is_file():
+        raise ValueError("latest physical attempt has no immutable result")
+    result = json.loads(Path(result_path).read_text(encoding="utf-8"))
+    if result.get("checks", {}).get("accepted_task_success") is True:
+        raise ValueError("successful physical attempts must stop instead of being repaired")
+    physical_trace = result_trace_path(result)
+    physical_video_value = result.get("video")
+    physical_video = (
+        Path(physical_video_value["path"])
+        if isinstance(physical_video_value, Mapping)
+        and isinstance(physical_video_value.get("path"), str)
+        else None
+    )
+    if physical_trace is None or not physical_trace.is_file():
+        raise ValueError("failed physical attempt has no immutable trace")
+    if physical_video is None or not physical_video.is_file():
+        raise ValueError("failed physical attempt has no immutable MP4")
+    if not (
+        physical_video_value.get("codec") == "h264"
+        and int(physical_video_value.get("full_decode_returncode", -1)) == 0
+        and int(physical_video_value.get("frame_count", 0)) > 0
+        and result.get("checks", {}).get("h264_nonempty") is True
+        and result.get("checks", {}).get("fully_decodable") is True
+    ):
+        raise ValueError("failed physical attempt MP4 gate failed")
+
+    def verify_file(receipt: Any, actual: Path, name: str) -> None:
+        if not isinstance(receipt, Mapping):
+            raise ValueError(f"diagnostic {name} receipt is missing")
+        if Path(str(receipt.get("path", ""))).resolve() != actual.resolve():
+            raise ValueError(f"diagnostic {name} path mismatch")
+        if receipt.get("sha256") != sha256_file(actual):
+            raise ValueError(f"diagnostic {name} hash mismatch")
+
+    verify_file(physical.get("trace"), physical_trace, "physical trace")
+    verify_file(physical.get("video"), physical_video, "physical video")
+    diagnostic_result = Path(str(diagnostic.get("result", {}).get("path", "")))
+    diagnostic_trace = Path(str(diagnostic.get("trace", {}).get("path", "")))
+    diagnostic_video = Path(str(diagnostic.get("video", {}).get("path", "")))
+    for artifact, actual, name in (
+        (diagnostic.get("result"), diagnostic_result, "result"),
+        (diagnostic.get("trace"), diagnostic_trace, "trace"),
+        (diagnostic.get("video"), diagnostic_video, "video"),
+    ):
+        if not actual.is_file():
+            raise ValueError(f"diagnostic {name} artifact is missing")
+        verify_file(artifact, actual, name)
+
+    reference = action_tensor_receipt(physical_trace)
+    replay = action_tensor_receipt(diagnostic_trace)
+    parity = value["action_parity"]
+    if not (
+        reference["shape"] == replay["shape"] == parity["reference_shape"]
+        and replay["shape"] == parity["replay_shape"]
+        and reference["bytes_sha256"]
+        == parity["reference_actions_bytes_sha256"]
+        and replay["bytes_sha256"] == parity["replay_actions_bytes_sha256"]
+    ):
+        raise ValueError("diagnostic live action tensor hash gate failed")
+    with np.load(physical_trace, allow_pickle=False) as left, np.load(
+        diagnostic_trace, allow_pickle=False
+    ) as right:
+        if not np.array_equal(left["actions"], right["actions"]):
+            raise ValueError("diagnostic live action tensor equality gate failed")
+
+    diagnostic_result_value = json.loads(
+        diagnostic_result.read_text(encoding="utf-8")
+    )
+    render_receipt = diagnostic_result_value.get("protocol", {}).get(
+        "render_diagnostic"
+    )
+    video_receipt = diagnostic_result_value.get("video")
+    if not isinstance(render_receipt, Mapping) or not (
+        render_receipt.get("physics_or_controller_changes") is False
+        and render_receipt.get("causal_mechanism_attempt_consumed") is False
+        and render_receipt.get("training_eligible") is False
+        and render_receipt.get("replay_actions", {}).get("exactly_equal") is True
+    ):
+        raise ValueError("diagnostic result protocol gate failed")
+    result_overlay = render_receipt.get("overlay", {})
+    result_overlay_passes = {
+        "target_handle_contact_frame": result_overlay.get(
+            "target_left_contact_frame"
+        )
+        is True,
+        "target_handle_tangent_axis": result_overlay.get("target_tangent_axis")
+        == "local_x",
+        "actual_pad_centers": result_overlay.get("actual_left_pad_centers") == 2,
+        "actual_pad_axes": result_overlay.get("actual_left_pad_axes") == 2,
+        "jaw_closing_line": result_overlay.get("jaw_closing_line") is True,
+        "target_wrist_frame": result_overlay.get("target_left_wrist_frame") is True,
+        "actual_wrist_frame": result_overlay.get("actual_left_wrist_frame") is True,
+        "signed_correction_vectors": (
+            result_overlay.get("actual_to_desired_correction_vector") is True
+            and result_overlay.get(
+                "jaw_midpoint_to_target_contact_correction_vector"
+            )
+            is True
+        ),
+        "screen_space_color_legend": result_overlay.get(
+            "screen_space_color_legend"
+        )
+        is True,
+    }
+    if result_overlay_passes != {
+        name: True for name in DIAGNOSTIC_OVERLAY_REQUIREMENTS
+    }:
+        raise ValueError("diagnostic result coordinate-axis overlay gate failed")
+    if not isinstance(video_receipt, Mapping) or not (
+        video_receipt.get("codec") == "h264"
+        and int(video_receipt.get("full_decode_returncode", -1)) == 0
+        and int(video_receipt.get("frame_count", 0)) > 0
+    ):
+        raise ValueError("diagnostic H.264 full-decode gate failed")
+    if diagnostic_result_value.get("checks", {}).get(
+        "diagnostic_actions_identical"
+    ) is not True:
+        raise ValueError("diagnostic result rejected action identity")
+    return value
 
 
 @dataclass(frozen=True)
