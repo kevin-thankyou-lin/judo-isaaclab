@@ -148,10 +148,11 @@ def _load_dataset(path: str, episode: str, device) -> dict[str, object]:
 def _reset_scene_to_state(scene, state, env_ids) -> None:
     """Restore the one initial state only, with zero velocities."""
     import torch
+    from judo_isaaclab.task_space import pose_wxyz_to_runtime
 
     for name, asset_state in state.get("articulation", {}).items():
         asset = scene[name]
-        pose = asset_state["root_pose"].clone()
+        pose = pose_wxyz_to_runtime(asset_state["root_pose"])
         joints = asset_state["joint_position"].clone()
         asset.write_root_pose_to_sim(pose, env_ids=env_ids)
         asset.write_joint_state_to_sim(joints, torch.zeros_like(joints), env_ids=env_ids)
@@ -159,7 +160,7 @@ def _reset_scene_to_state(scene, state, env_ids) -> None:
         asset.set_joint_velocity_target(torch.zeros_like(joints), env_ids=env_ids)
     for name, asset_state in state.get("rigid_object", {}).items():
         asset = scene[name]
-        pose = asset_state["root_pose"].clone()
+        pose = pose_wxyz_to_runtime(asset_state["root_pose"])
         asset.write_root_pose_to_sim(pose, env_ids=env_ids)
         asset.write_root_velocity_to_sim(torch.zeros((1, 6), device=pose.device), env_ids=env_ids)
     scene.write_data_to_sim()
@@ -444,6 +445,7 @@ def _ik_action(
         damped_least_squares,
         resolve_end_effector_body_index,
         resolve_link_jacobian,
+        pose_wxyz_to_runtime,
     )
 
     action = torch.as_tensor(
@@ -459,6 +461,7 @@ def _ik_action(
         current = arm.data.body_pose_w[:, body_index]
         base = arm.data.root_pose_w
         desired = torch.as_tensor(desired, dtype=torch.float32, device=env.device).reshape(1, 7)
+        desired = pose_wxyz_to_runtime(desired)
         desired = desired.clone()
         desired[:, :3] += env.scene.env_origins
         current_pos_b, current_quat_b = subtract_frame_transforms(
@@ -504,17 +507,22 @@ def _ik_action(
 
 
 def _eef_pose(env, arm_name: str) -> np.ndarray:
-    from judo_isaaclab.task_space import resolve_end_effector_body_index
+    from judo_isaaclab.task_space import (
+        pose_runtime_to_wxyz,
+        resolve_end_effector_body_index,
+    )
 
     arm = env.scene[arm_name]
     index = resolve_end_effector_body_index(env, arm_name)
     pose = arm.data.body_pose_w[0, index].detach().cpu().numpy().copy()
+    pose = pose_runtime_to_wxyz(pose)
     pose[:3] -= env.scene.env_origins[0].detach().cpu().numpy()
     return pose
 
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
+    from judo_isaaclab.task_space import pose_runtime_to_wxyz
 
     left_grasp, _ = env.robot.is_grasping()
     _, right_grasp = env.robot.is_grasping(target_object="obj_1")
@@ -522,6 +530,8 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     cabinet = env.scene["obj_1"]
     marker_pose = marker.data.root_pose_w[0].detach().cpu().numpy().copy()
     cabinet_pose = cabinet.data.root_pose_w[0].detach().cpu().numpy().copy()
+    marker_pose = pose_runtime_to_wxyz(marker_pose)
+    cabinet_pose = pose_runtime_to_wxyz(cabinet_pose)
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     marker_pose[:3] -= origin
     cabinet_pose[:3] -= origin

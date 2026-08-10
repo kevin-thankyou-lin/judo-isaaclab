@@ -4,6 +4,38 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def runtime_uses_xyzw_quaternions() -> bool:
+    """Detect the active Isaac Lab public pose convention."""
+    from isaaclab.assets import AssetBaseCfg
+
+    identity = tuple(AssetBaseCfg.InitialStateCfg().rot)
+    if identity == (0.0, 0.0, 0.0, 1.0):
+        return True
+    if identity == (1.0, 0.0, 0.0, 0.0):
+        return False
+    raise RuntimeError(f"unrecognized Isaac Lab quaternion identity: {identity}")
+
+
+def pose_wxyz_to_runtime(value: Any, *, runtime_xyzw: bool | None = None) -> Any:
+    """Convert a legacy ``[position, wxyz]`` pose to the active API order."""
+    if runtime_xyzw is None:
+        runtime_xyzw = runtime_uses_xyzw_quaternions()
+    result = value.clone() if hasattr(value, "clone") else value.copy()
+    if runtime_xyzw:
+        result[..., 3:7] = value[..., [4, 5, 6, 3]]
+    return result
+
+
+def pose_runtime_to_wxyz(value: Any, *, runtime_xyzw: bool | None = None) -> Any:
+    """Convert an active-runtime pose to legacy ``[position, wxyz]``."""
+    if runtime_xyzw is None:
+        runtime_xyzw = runtime_uses_xyzw_quaternions()
+    result = value.clone() if hasattr(value, "clone") else value.copy()
+    if runtime_xyzw:
+        result[..., 3:7] = value[..., [6, 3, 4, 5]]
+    return result
+
+
 def resolve_end_effector_body_index(
     env: Any,
     arm_name: str,
@@ -152,6 +184,7 @@ class DampedLeastSquaresPoseTrackingAdapter:
             dtype=torch.float32,
             device=env.device,
         )
+        self._reference = pose_wxyz_to_runtime(self._reference)
         self._step = 0
 
     @staticmethod

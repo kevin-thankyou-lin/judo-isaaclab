@@ -5,6 +5,8 @@ torch = pytest.importorskip("torch")
 from judo_isaaclab.task_space import (
     DampedLeastSquaresPoseTrackingAdapter,
     damped_least_squares,
+    pose_runtime_to_wxyz,
+    pose_wxyz_to_runtime,
     resolve_end_effector_body_index,
     resolve_link_jacobian,
 )
@@ -26,6 +28,28 @@ def test_damped_least_squares_is_batched_and_finite():
     assert result.shape == (2, 6)
     torch.testing.assert_close(result, twist / 1.01)
     assert torch.isfinite(result).all()
+
+
+def test_pose_order_conversion_round_trips_xyzw_runtime():
+    legacy = torch.tensor([[1.0, 2.0, 3.0, 0.7, 0.1, 0.2, 0.3]])
+
+    runtime = pose_wxyz_to_runtime(legacy, runtime_xyzw=True)
+
+    torch.testing.assert_close(
+        runtime, torch.tensor([[1.0, 2.0, 3.0, 0.1, 0.2, 0.3, 0.7]])
+    )
+    torch.testing.assert_close(
+        pose_runtime_to_wxyz(runtime, runtime_xyzw=True), legacy
+    )
+
+
+def test_pose_order_conversion_is_identity_for_legacy_runtime():
+    legacy = torch.tensor([1.0, 2.0, 3.0, 0.7, 0.1, 0.2, 0.3])
+
+    runtime = pose_wxyz_to_runtime(legacy, runtime_xyzw=False)
+
+    torch.testing.assert_close(runtime, legacy)
+    assert runtime.data_ptr() != legacy.data_ptr()
 
 
 def test_resolve_link_jacobian_uses_new_proxy_torch_view():

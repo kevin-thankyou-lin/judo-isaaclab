@@ -177,6 +177,7 @@ def _configure_offline_ground() -> dict[str, object]:
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
+    from judo_isaaclab.task_space import pose_runtime_to_wxyz
     from isaaclab.utils.math import quat_apply
     from judo_isaaclab.put_pot import cooktop_center_error_m
     from run_putmarker_skill_program import _eef_pose
@@ -235,6 +236,8 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     cooktop = env.scene["cooktop"]
     pot_pose = pot.data.root_pose_w[0].detach().cpu().numpy().copy()
     cooktop_pose = cooktop.data.root_pose_w[0].detach().cpu().numpy().copy()
+    pot_pose = pose_runtime_to_wxyz(pot_pose)
+    cooktop_pose = pose_runtime_to_wxyz(cooktop_pose)
     pot_pose[:3] -= origin
     cooktop_pose[:3] -= origin
     task_success = bool(env.get_task_success()[0].item())
