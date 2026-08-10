@@ -1618,6 +1618,10 @@ def main(argv: list[str] | None = None) -> None:
                 "static_precontact_jaw_translation"
             ] = static_precontact_jaw_translation
         if source_contact_requested:
+            from judo_isaaclab.put_marker import (
+                compose_pose as compose_marker_pose,
+                transfer_pose as transfer_marker_pose,
+            )
             from judo_isaaclab.put_pot import (
                 apply_precontact_source_frame_correction,
                 apply_source_demo_approach_corridor,
@@ -1729,19 +1733,19 @@ def main(argv: list[str] | None = None) -> None:
             )
             source_left_pregrasp = keyframes["frames"]["left_pregrasp"]
             if args.target_left_source_approach_corridor:
-                source_pregrasp_contact_world = compose_pose(
+                source_pregrasp_contact_world = compose_marker_pose(
                     source_left_pregrasp["pot_pose"],
                     handle_grasp_geometry["left"][
                         "source_contact_frame_local"
                     ],
                 )
-                target_contact_world = compose_pose(
+                target_contact_world = compose_marker_pose(
                     calibration_pot_pose,
                     handle_grasp_geometry["left"][
                         "target_contact_frame_local"
                     ],
                 )
-                desired_pregrasp = transfer_pose(
+                desired_pregrasp = transfer_marker_pose(
                     source_left_pregrasp["left_eef_pose"],
                     source_pregrasp_contact_world,
                     target_contact_world,
