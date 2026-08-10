@@ -135,14 +135,31 @@ MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ = {
 }
 
 ROBUST_BIMANUAL_LATCH_STEPS = 15
+ROBUST_BIMANUAL_LATCH_MIN_FORCE_N = 1.0
+ROBUST_BIMANUAL_LATCH_MIN_PAD_FRACTION_MARGIN = 0.10
 
 
 def robust_bimanual_latch_ready(
     left_grasps: Any,
     right_grasps: Any,
     required_steps: int = ROBUST_BIMANUAL_LATCH_STEPS,
+    *,
+    left_finger_forces_n: Any | None = None,
+    right_finger_forces_n: Any | None = None,
+    left_pad_fractions: Any | None = None,
+    right_pad_fractions: Any | None = None,
+    minimum_force_n: float = ROBUST_BIMANUAL_LATCH_MIN_FORCE_N,
+    minimum_pad_fraction_margin: float = (
+        ROBUST_BIMANUAL_LATCH_MIN_PAD_FRACTION_MARGIN
+    ),
 ) -> bool:
-    """Require a sustained bilateral latch before any transport command."""
+    """Require a sustained bilateral latch before any transport command.
+
+    Legacy callers may provide only the coded grasp histories.  Runtime
+    transport admission additionally supplies all four finger-force and pad-
+    fraction histories, so a nominal grasp bit cannot bypass the physical
+    source-demo margin contract.
+    """
 
     left = np.asarray(left_grasps, dtype=bool)
     right = np.asarray(right_grasps, dtype=bool)
@@ -150,9 +167,167 @@ def robust_bimanual_latch_ready(
         raise ValueError("grasp histories must be matching one-dimensional arrays")
     if required_steps < 1:
         raise ValueError("required_steps must be positive")
-    return bool(
-        left.size >= required_steps
-        and np.all(left[-required_steps:] & right[-required_steps:])
+    robust = left & right
+    physical_histories = (
+        left_finger_forces_n,
+        right_finger_forces_n,
+        left_pad_fractions,
+        right_pad_fractions,
+    )
+    if any(value is not None for value in physical_histories):
+        if not all(value is not None for value in physical_histories):
+            raise ValueError(
+                "force-backed latch admission requires all force and pad histories"
+            )
+        left_forces = np.asarray(left_finger_forces_n, dtype=np.float64)
+        right_forces = np.asarray(right_finger_forces_n, dtype=np.float64)
+        left_fractions = np.asarray(left_pad_fractions, dtype=np.float64)
+        right_fractions = np.asarray(right_pad_fractions, dtype=np.float64)
+        expected_shape = (left.size, 2)
+        if not all(
+            value.shape == expected_shape
+            for value in (
+                left_forces,
+                right_forces,
+                left_fractions,
+                right_fractions,
+            )
+        ):
+            raise ValueError("force and pad histories must have shape (steps, 2)")
+        if not np.isfinite(minimum_force_n) or minimum_force_n < 0.0:
+            raise ValueError("minimum_force_n must be finite and nonnegative")
+        if not np.isfinite(minimum_pad_fraction_margin) or not (
+            0.0 <= minimum_pad_fraction_margin <= 0.5
+        ):
+            raise ValueError(
+                "minimum_pad_fraction_margin must be finite and in [0, 0.5]"
+            )
+        fractions = np.concatenate((left_fractions, right_fractions), axis=1)
+        fraction_margin = np.minimum(fractions, 1.0 - fractions)
+        forces = np.concatenate((left_forces, right_forces), axis=1)
+        robust &= np.all(forces >= minimum_force_n, axis=1)
+        robust &= np.all(
+            np.isfinite(fraction_margin)
+            & (fraction_margin >= minimum_pad_fraction_margin),
+            axis=1,
+        )
+    return bool(left.size >= required_steps and np.all(robust[-required_steps:]))
+
+
+def measure_handle_center_in_open_jaw(
+    observed_root_pose: Any,
+    finger_pad_centers_world: Any,
+    handle_points_local: Any,
+) -> tuple[np.ndarray, float]:
+    """Measure the signed handle-center residual along an observed open jaw."""
+
+    root = _pose(observed_root_pose, "observed_root_pose")
+    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
+    points = np.asarray(handle_points_local, dtype=np.float64)
+    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
+        raise ValueError("finger_pad_centers_world must contain two finite points")
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
+        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("handle_points_local must be finite")
+    jaw_axis = centers[1] - centers[0]
+    jaw_norm = float(np.linalg.norm(jaw_axis))
+    if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
+        raise ValueError("observed jaw must be open for authored centering")
+    jaw_axis /= jaw_norm
+    jaw_midpoint = np.mean(centers, axis=0)
+    points_world = np.stack(
+        [root[:3] + quaternion_rotate(root[3:], point) for point in points]
+    )
+    projection = (points_world - jaw_midpoint) @ jaw_axis
+    signed_residual = 0.5 * (
+        float(np.min(projection)) + float(np.max(projection))
+    )
+    return jaw_axis, signed_residual
+
+
+def apply_static_precontact_jaw_axis_translation(
+    trajectory: SkillTrajectory,
+    jaw_axis_world: Any,
+    signed_translation_m: float,
+    maximum_translation_m: float,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Shift only the acquisition path along one measured open-jaw axis.
+
+    The offset ramps smoothly into the left pregrasp, remains static through
+    the complete grasp/hold window, and leaves the right arm and downstream
+    transport plan untouched.  Callers must therefore use this primitive in
+    an acquisition-only rollout; a later end-to-end attempt must rebase the
+    transport handoff on the measured loaded object-local contact.
+    """
+
+    axis = np.asarray(jaw_axis_world, dtype=np.float64)
+    values = np.asarray(
+        [signed_translation_m, maximum_translation_m], dtype=np.float64
+    )
+    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+        raise ValueError("jaw_axis_world must contain three finite values")
+    axis_norm = float(np.linalg.norm(axis))
+    if axis_norm <= 1.0e-9:
+        raise ValueError("jaw_axis_world must be nonzero")
+    if not np.all(np.isfinite(values)) or maximum_translation_m < 0.0:
+        raise ValueError("translation and bound must be finite and nonnegative")
+    if abs(signed_translation_m) > maximum_translation_m + 1.0e-12:
+        raise ValueError("static precontact jaw translation exceeds geometry bound")
+    axis /= axis_norm
+    translation = float(signed_translation_m) * axis
+
+    left = trajectory.left_poses.copy()
+    right = trajectory.right_poses.copy()
+    steps = trajectory.waypoint_steps
+    if "left_pregrasp" in steps:
+        ramp_start = steps.get("right_handle_grasp", -1) + 1
+        pregrasp_end = steps["left_pregrasp"]
+    else:
+        ramp_start = 0
+        pregrasp_end = steps.get("bimanual_pregrasp")
+    grasp_candidates = [
+        steps.get(name)
+        for name in (
+            "left_handle_grasp",
+            "right_handle_grasp",
+            "bimanual_contact_hold",
+        )
+        if steps.get(name) is not None
+    ]
+    if (
+        pregrasp_end is None
+        or not grasp_candidates
+        or not 0 <= ramp_start <= pregrasp_end < max(grasp_candidates)
+    ):
+        raise ValueError("trajectory has no ordered acquisition window")
+    ramp_steps = pregrasp_end - ramp_start + 1
+    left[ramp_start : pregrasp_end + 1, :3] += (
+        _minimum_jerk_fraction(ramp_steps)[:, None] * translation
+    )
+    grasp_end = max(grasp_candidates)
+    left[pregrasp_end + 1 : grasp_end + 1, :3] += translation
+    receipt = {
+        "jaw_axis_world": axis.tolist(),
+        "signed_translation_m": float(signed_translation_m),
+        "translation_world_m": translation.tolist(),
+        "maximum_translation_m": float(maximum_translation_m),
+        "bound_margin_m": float(
+            maximum_translation_m - abs(signed_translation_m)
+        ),
+        "ramp_start_step": int(ramp_start),
+        "pregrasp_end_step": int(pregrasp_end),
+        "grasp_end_step": int(grasp_end),
+    }
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        receipt,
     )
 
 
@@ -1600,28 +1775,15 @@ def reanchor_authored_handle_in_observed_jaw(
 
     root = _pose(observed_root_pose, "observed_root_pose")
     eef = _pose(observed_eef_pose, "observed_eef_pose")
-    centers = np.asarray(finger_pad_centers_world, dtype=np.float64)
     points = np.asarray(handle_points_local, dtype=np.float64)
     approach = np.asarray(approach_delta_local, dtype=np.float64)
-    if centers.shape != (2, 3) or not np.all(np.isfinite(centers)):
-        raise ValueError("finger_pad_centers_world must contain two finite points")
-    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 4:
-        raise ValueError("handle_points_local must have shape (N, 3), N >= 4")
-    if not np.all(np.isfinite(points)):
-        raise ValueError("handle_points_local must be finite")
     if approach.shape != (3,) or not np.all(np.isfinite(approach)):
         raise ValueError("approach_delta_local must contain three finite values")
-    jaw_axis = centers[1] - centers[0]
-    jaw_norm = float(np.linalg.norm(jaw_axis))
-    if jaw_norm < MISSING_FINGER_JAW_AXIS_MIN_M:
-        raise ValueError("observed jaw must be open for authored centering")
-    jaw_axis /= jaw_norm
-    jaw_midpoint = np.mean(centers, axis=0)
-    points_world = np.stack(
-        [root[:3] + quaternion_rotate(root[3:], point) for point in points]
+    jaw_axis, signed_residual = measure_handle_center_in_open_jaw(
+        root,
+        finger_pad_centers_world,
+        points,
     )
-    projection = (points_world - jaw_midpoint) @ jaw_axis
-    signed_residual = 0.5 * (float(np.min(projection)) + float(np.max(projection)))
     target = eef.copy()
     translation = signed_residual * jaw_axis + quaternion_rotate(
         root[3:], approach

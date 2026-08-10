@@ -35,8 +35,17 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--objects-root", required=True)
     parser.add_argument("--mode", choices=("replay", "replay_center", "skill"), required=True)
     parser.add_argument("--source-keyframes")
+    parser.add_argument("--source-demo-card")
     parser.add_argument("--write-keyframes")
     parser.add_argument("--expect-failure", action="store_true")
+    parser.add_argument(
+        "--acquisition-only",
+        action="store_true",
+        help=(
+            "Stop after the complete grasp/hold window. This mode never emits "
+            "a transport command and must be paired with --expect-failure."
+        ),
+    )
     parser.add_argument(
         "--classification-run",
         action="store_true",
@@ -74,6 +83,18 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "Calibration-only left grasp orientation in the target pot frame. "
             "Transport still requires the measured bilateral latch gate."
         ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-calibration-trace",
+        help=(
+            "Immutable prior trace whose open-jaw sample measures the static "
+            "left precontact jaw-axis translation. Acquisition-only mode only."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-calibration-step",
+        type=int,
+        help="Zero-based open-jaw sample in the immutable calibration trace.",
     )
     return parser.parse_args(argv)
 
@@ -1123,6 +1144,27 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--render requires --video")
     if args.mode in {"skill", "replay_center"} and not args.source_keyframes:
         raise ValueError(f"{args.mode} mode requires --source-keyframes")
+    calibration_requested = bool(
+        args.target_left_precontact_calibration_trace is not None
+        or args.target_left_precontact_calibration_step is not None
+    )
+    if calibration_requested and not (
+        args.target_left_precontact_calibration_trace is not None
+        and args.target_left_precontact_calibration_step is not None
+    ):
+        raise ValueError(
+            "precontact calibration requires both a trace and sample step"
+        )
+    if args.acquisition_only and (
+        args.mode != "skill" or not args.expect_failure
+    ):
+        raise ValueError(
+            "--acquisition-only requires skill mode and --expect-failure"
+        )
+    if args.acquisition_only and not args.source_demo_card:
+        raise ValueError("--acquisition-only requires an immutable source-demo card")
+    if calibration_requested and not args.acquisition_only:
+        raise ValueError("static precontact calibration is acquisition-only")
     if (
         args.support_clearance_m < 0.0
         or args.transport_clearance_m <= 0.0
@@ -1155,6 +1197,22 @@ def main(argv: list[str] | None = None) -> None:
     asset_load_started = time.monotonic()
     source_assets = _dataset_assets(args.source_dataset, args.objects_root)
     target_assets = _dataset_assets(args.target_dataset, args.objects_root)
+    source_demo_card_receipt = None
+    if args.source_demo_card:
+        from judo_isaaclab.putpot_repair_policy import load_source_demo_card
+
+        source_demo_card = load_source_demo_card(args.source_demo_card)
+        if source_demo_card["source_dataset_sha256"] != _sha256(
+            args.source_dataset
+        ):
+            raise ValueError("source-demo card does not match the source dataset")
+        source_demo_card_receipt = {
+            "path": os.path.abspath(args.source_demo_card),
+            "sha256": _sha256(args.source_demo_card),
+            "schema_version": source_demo_card["schema_version"],
+            "contact_order": source_demo_card["contact_order"],
+            "latch_contract": source_demo_card["latch_contract"],
+        }
     timers.add("asset_env_load", time.monotonic() - asset_load_started)
     sys.path.insert(0, os.path.abspath(args.gear_repo))
     from isaaclab.app import AppLauncher
@@ -1318,7 +1376,34 @@ def main(argv: list[str] | None = None) -> None:
             )
             if args.mode == "skill" else (None, None, None, None, None)
         )
+        target_left_handle_points = None
+        if trajectory is not None and (
+            calibration_requested
+            or bool(
+                handle_grasp_geometry["left"].get("right_first_close", False)
+            )
+        ):
+            side = int(handle_grasp_geometry["left"]["handle_side"])
+            boundary = (
+                target_parts.body_xy_min[target_parts.handle_axis]
+                if side < 0
+                else target_parts.body_xy_max[target_parts.handle_axis]
+            )
+            target_left_handle_points = np.concatenate(
+                [
+                    points
+                    for points in target_components
+                    if (
+                        np.min(points[:, target_parts.handle_axis])
+                        < boundary - 1.0e-4
+                        if side < 0
+                        else np.max(points[:, target_parts.handle_axis])
+                        > boundary + 1.0e-4
+                    )
+                ]
+            )
         target_left_grasp_orientation_override_local_wxyz = None
+        static_precontact_jaw_translation = None
         if trajectory is not None:
             from judo_isaaclab.put_pot import (
                 MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
@@ -1345,6 +1430,107 @@ def main(argv: list[str] | None = None) -> None:
                 target_left_grasp_orientation_override_local_wxyz = (
                     measured_orientation.tolist()
                 )
+        if calibration_requested:
+            from judo_isaaclab.put_pot import (
+                HANDLE_PAD_DEPTH_MARGIN_M,
+                apply_static_precontact_jaw_axis_translation,
+                measure_handle_center_in_open_jaw,
+            )
+
+            calibration_path = Path(
+                args.target_left_precontact_calibration_trace
+            ).resolve()
+            if not calibration_path.is_file():
+                raise FileNotFoundError(
+                    f"precontact calibration trace is missing: {calibration_path}"
+                )
+            with np.load(calibration_path, allow_pickle=False) as calibration:
+                required_arrays = {"pot_poses", "left_pad_centers_world"}
+                if not required_arrays.issubset(calibration.files):
+                    raise ValueError(
+                        "precontact calibration trace lacks pot/jaw geometry"
+                    )
+                calibration_step = int(
+                    args.target_left_precontact_calibration_step
+                )
+                if not 0 <= calibration_step < len(calibration["pot_poses"]):
+                    raise ValueError("precontact calibration step is out of range")
+                calibration_pot_pose = np.asarray(
+                    calibration["pot_poses"][calibration_step],
+                    dtype=np.float64,
+                )
+                calibration_pad_centers = np.asarray(
+                    calibration["left_pad_centers_world"][calibration_step],
+                    dtype=np.float64,
+                )
+            jaw_axis_world, signed_translation_m = (
+                measure_handle_center_in_open_jaw(
+                    calibration_pot_pose,
+                    calibration_pad_centers,
+                    target_left_handle_points,
+                )
+            )
+            transverse_axes = [
+                axis for axis in range(3) if axis != target_parts.handle_axis
+            ]
+            handle_size = (
+                target_parts.negative_handle_size
+                if side < 0
+                else target_parts.positive_handle_size
+            )
+            collision_free_pregrasp_m = (
+                0.5
+                * max(float(handle_size[axis]) for axis in transverse_axes)
+                + args.collision_clearance_m
+            )
+            maximum_translation_m = (
+                collision_free_pregrasp_m + HANDLE_PAD_DEPTH_MARGIN_M
+            )
+            trajectory, static_precontact_jaw_translation = (
+                apply_static_precontact_jaw_axis_translation(
+                    trajectory,
+                    jaw_axis_world,
+                    signed_translation_m,
+                    maximum_translation_m,
+                )
+            )
+            calibration_root = calibration_path.parent
+            calibration_result = calibration_root / "skill_result.json"
+            calibration_video = calibration_root / "skill.mp4"
+            static_precontact_jaw_translation.update(
+                {
+                    "mechanism": "static_precontact_grasp_center_translation",
+                    "calibration_trace": {
+                        "path": str(calibration_path),
+                        "sha256": _sha256(calibration_path),
+                        "sample_step": calibration_step,
+                    },
+                    "calibration_result": (
+                        {
+                            "path": str(calibration_result.resolve()),
+                            "sha256": _sha256(calibration_result),
+                        }
+                        if calibration_result.is_file()
+                        else None
+                    ),
+                    "calibration_video": (
+                        {
+                            "path": str(calibration_video.resolve()),
+                            "sha256": _sha256(calibration_video),
+                        }
+                        if calibration_video.is_file()
+                        else None
+                    ),
+                    "measured_pot_pose": calibration_pot_pose.tolist(),
+                    "measured_pad_centers_world": (
+                        calibration_pad_centers.tolist()
+                    ),
+                    "collision_free_pregrasp_m": collision_free_pregrasp_m,
+                }
+            )
+            handle_grasp_geometry["left"][
+                "static_precontact_jaw_translation"
+            ] = static_precontact_jaw_translation
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
         # pose, even when source and target geometry are identical.  Track the
@@ -1496,27 +1682,6 @@ def main(argv: list[str] | None = None) -> None:
         )
         center_lowering_signed_residual_world_m = None
         release_signed_residual_world_m = None
-        target_left_handle_points = None
-        if right_first_close:
-            side = int(handle_grasp_geometry["left"]["handle_side"])
-            boundary = (
-                target_parts.body_xy_min[target_parts.handle_axis]
-                if side < 0
-                else target_parts.body_xy_max[target_parts.handle_axis]
-            )
-            target_left_handle_points = np.concatenate(
-                [
-                    points
-                    for points in target_components
-                    if (
-                        np.min(points[:, target_parts.handle_axis])
-                        < boundary - 1.0e-4
-                        if side < 0
-                        else np.max(points[:, target_parts.handle_axis])
-                        > boundary + 1.0e-4
-                    )
-                ]
-            )
         repair_prefix_steps = (
             int(keyframes["frames"]["support_align"]["action_index"]) + 1
             if args.mode == "replay_center" else None
@@ -1528,6 +1693,8 @@ def main(argv: list[str] | None = None) -> None:
             if repair_prefix_steps is not None
             else trajectory.steps if trajectory is not None else len(source["actions"])
         )
+        if args.acquisition_only:
+            total_steps = int(grasp_complete_step) + 1
         timers.add("trajectory_build", time.monotonic() - trajectory_started)
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
@@ -1625,6 +1792,18 @@ def main(argv: list[str] | None = None) -> None:
                     acquisition_fail_closed = not robust_bimanual_latch_ready(
                         [row["left_grasp"] for row in samples],
                         [row["right_grasp"] for row in samples],
+                        left_finger_forces_n=[
+                            row["left_finger_forces_n"] for row in samples
+                        ],
+                        right_finger_forces_n=[
+                            row["right_finger_forces_n"] for row in samples
+                        ],
+                        left_pad_fractions=[
+                            row["left_pad_fractions"] for row in samples
+                        ],
+                        right_pad_fractions=[
+                            row["right_pad_fractions"] for row in samples
+                        ],
                     )
                     if acquisition_fail_closed:
                         acquisition_fail_closed_step = step
@@ -3174,6 +3353,11 @@ def main(argv: list[str] | None = None) -> None:
             ),
         )
         timers.add("trace_demo", time.monotonic() - trace_started)
+        acquisition_latch = None
+        if trajectory is not None:
+            from judo_isaaclab.putpot_repair_policy import trace_latch_evidence
+
+            acquisition_latch = trace_latch_evidence(args.trace_npz).receipt()
         final = samples[-1]
         extracted = None
         if args.mode == "replay" and final["task_success"]:
@@ -3190,7 +3374,11 @@ def main(argv: list[str] | None = None) -> None:
             desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - np.asarray(desired_left[i])[:3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - np.asarray(desired_right[i])[:3])) for i in range(len(left_eef))]
         waypoint_errors = [] if controller_client is not None else [desired_error[index] for index in trajectory.waypoint_steps.values() if trajectory is not None and index < len(desired_error)] if trajectory is not None else []
         executed_transport_metrics = None
-        if trajectory is not None and transport_plan is not None:
+        if (
+            trajectory is not None
+            and transport_plan is not None
+            and not args.acquisition_only
+        ):
             from judo_isaaclab.put_pot import (
                 cartesian_smoothness_metrics,
                 minimum_cooktop_clearance_m,
@@ -3234,7 +3422,9 @@ def main(argv: list[str] | None = None) -> None:
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
             "contact_backed_grasps_only": True,
             "smooth_collision_aware_transport": bool(
-                trajectory is None
+                not args.acquisition_only
+                and (
+                    trajectory is None
                 or (
                     "smooth_transport" in trajectory.waypoint_steps
                     and "pot_lift" not in trajectory.waypoint_steps
@@ -3247,15 +3437,23 @@ def main(argv: list[str] | None = None) -> None:
                     + 1.0e-9
                     >= 0.0
                 )
+                )
             ),
             "transport_no_internal_stops": bool(
-                trajectory is None or transport_plan["internal_stop_count"] == 0
+                not args.acquisition_only
+                and (
+                    trajectory is None
+                    or transport_plan["internal_stop_count"] == 0
+                )
             ),
             "bimanual_transport_completed": bool(
-                trajectory is None
+                not args.acquisition_only
+                and (
+                    trajectory is None
                 or (
                     samples[int(transport_plan["end_step"]) + 1]["left_grasp"]
                     and samples[int(transport_plan["end_step"]) + 1]["right_grasp"]
+                )
                 )
             ),
             "coded_task_success": bool(final["task_success"]),
@@ -3263,6 +3461,10 @@ def main(argv: list[str] | None = None) -> None:
             "accepted_task_success": bool(final["task_success"] and centered_on_cooktop),
             "all_stages_latched": bool(final["stage1"] and final["stage2"]),
             "bimanual_pick_observed": any(row["left_grasp"] and row["right_grasp"] for row in samples),
+            "robust_bilateral_latch": bool(
+                acquisition_latch is not None
+                and acquisition_latch["passes_robust_latch"]
+            ),
             "pot_released": not final["left_grasp"] and not final["right_grasp"],
             "stable_support_window": bool(final["on_top_predicate_now"]),
             "terminal_pot_speed_within_threshold": bool(
@@ -3374,6 +3576,11 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                 },
                 "grasp_assistance": "none",
+                "acquisition_only": bool(args.acquisition_only),
+                "acquisition_latch": acquisition_latch,
+                "static_precontact_jaw_translation": (
+                    static_precontact_jaw_translation
+                ),
                 "milestone_feedback_horizon_steps": (
                     milestone_feedback_horizon_steps
                 ),
@@ -3539,6 +3746,7 @@ def main(argv: list[str] | None = None) -> None:
                 "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)},
                 "demonstration": demo_artifact,
                 "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None),
+                "source_demo_card": source_demo_card_receipt,
             },
             "semantic_frames": {
                 "source_pot_bottom": source_geometry.bottom_frame.tolist(),

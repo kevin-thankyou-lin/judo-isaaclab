@@ -23,6 +23,7 @@ from judo_isaaclab.put_pot import (
     YAM_FINGER_PAD_AXIS_LENGTH_M,
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
+    apply_static_precontact_jaw_axis_translation,
     apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
@@ -52,6 +53,7 @@ from judo_isaaclab.put_pot import (
     handle_jaw_center_offset_m,
     handle_axial_contact_scale,
     maximum_bimanual_position_step_m,
+    measure_handle_center_in_open_jaw,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     orient_loaded_jaw_around_authored_handle,
@@ -977,6 +979,103 @@ def test_robust_bimanual_latch_requires_consecutive_terminal_margin():
         [True] * (ROBUST_BIMANUAL_LATCH_STEPS - 1),
         [True] * (ROBUST_BIMANUAL_LATCH_STEPS - 1),
     )
+
+
+def test_robust_bimanual_latch_requires_all_four_force_backed_pad_margins():
+    steps = ROBUST_BIMANUAL_LATCH_STEPS
+    grasps = [True] * steps
+    forces = np.full((steps, 2), 2.0)
+    fractions = np.full((steps, 2), 0.5)
+    assert robust_bimanual_latch_ready(
+        grasps,
+        grasps,
+        left_finger_forces_n=forces,
+        right_finger_forces_n=forces,
+        left_pad_fractions=fractions,
+        right_pad_fractions=fractions,
+    )
+    missing_pad = forces.copy()
+    missing_pad[-1, 0] = 0.0
+    assert not robust_bimanual_latch_ready(
+        grasps,
+        grasps,
+        left_finger_forces_n=missing_pad,
+        right_finger_forces_n=forces,
+        left_pad_fractions=fractions,
+        right_pad_fractions=fractions,
+    )
+    edge_contact = fractions.copy()
+    edge_contact[-1, 1] = 0.95
+    assert not robust_bimanual_latch_ready(
+        grasps,
+        grasps,
+        left_finger_forces_n=forces,
+        right_finger_forces_n=forces,
+        left_pad_fractions=edge_contact,
+        right_pad_fractions=fractions,
+    )
+
+
+def test_static_precontact_translation_centers_only_left_acquisition_path():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(x=0.1, y=1.0),
+        _pose(x=0.2),
+        _pose(x=0.2, y=1.0),
+        approach_steps=4,
+        left_close_steps=3,
+        right_close_steps=2,
+        simultaneous=True,
+    )
+    trajectory = program.build()
+    shifted, receipt = apply_static_precontact_jaw_axis_translation(
+        trajectory,
+        [0.0, 2.0, 0.0],
+        0.030,
+        0.040,
+    )
+    pregrasp = trajectory.waypoint_steps["bimanual_pregrasp"]
+    grasp_end = max(
+        trajectory.waypoint_steps["left_handle_grasp"],
+        trajectory.waypoint_steps["right_handle_grasp"],
+    )
+    assert shifted.left_poses[0, 1] > trajectory.left_poses[0, 1]
+    assert shifted.left_poses[pregrasp, 1] == pytest.approx(
+        trajectory.left_poses[pregrasp, 1] + 0.030
+    )
+    assert shifted.left_poses[grasp_end, 1] == pytest.approx(
+        trajectory.left_poses[grasp_end, 1] + 0.030
+    )
+    assert shifted.left_poses[:, 3:] == pytest.approx(
+        trajectory.left_poses[:, 3:]
+    )
+    assert shifted.right_poses == pytest.approx(trajectory.right_poses)
+    assert shifted.grippers == pytest.approx(trajectory.grippers)
+    assert receipt["translation_world_m"] == pytest.approx([0.0, 0.030, 0.0])
+    assert receipt["bound_margin_m"] == pytest.approx(0.010)
+    with pytest.raises(ValueError, match="exceeds geometry bound"):
+        apply_static_precontact_jaw_axis_translation(
+            trajectory, [0.0, 1.0, 0.0], 0.041, 0.040
+        )
+
+
+def test_open_jaw_measurement_predicts_positive_pad0_to_pad1_translation():
+    points = np.asarray(
+        [
+            [0.020, -0.010, 0.0],
+            [0.020, 0.010, 0.0],
+            [0.040, -0.010, 0.0],
+            [0.040, 0.010, 0.0],
+        ]
+    )
+    axis, residual = measure_handle_center_in_open_jaw(
+        _pose(),
+        [[-0.050, 0.0, 0.0], [0.050, 0.0, 0.0]],
+        points,
+    )
+    assert axis == pytest.approx([1.0, 0.0, 0.0])
+    assert residual == pytest.approx(0.030)
 
 
 def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():
