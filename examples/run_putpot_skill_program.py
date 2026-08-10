@@ -64,6 +64,19 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--video")
+    parser.add_argument(
+        "--render-diagnostic-only",
+        action="store_true",
+        help=(
+            "Render left-handle contact axes without changing commands. This "
+            "mode is non-training, consumes no repair attempt, and must replay "
+            "an immutable acquisition trace exactly."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-reference-trace",
+        help="Immutable trace whose actions must exactly match this diagnostic replay.",
+    )
     parser.add_argument("--trace-npz", required=True)
     parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
@@ -1083,9 +1096,193 @@ def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
     return result
 
 
-def _frame(env, sample) -> np.ndarray:
+def _debug_axis_primitives(
+    target_contact_frame,
+    pad_centers_world,
+    pad_axes_world,
+    actual_wrist,
+    desired_wrist,
+    *,
+    env_origin_world=(0.0, 0.0, 0.0),
+) -> dict[str, list[object]]:
+    """Build render-only left-contact geometry in simulator world coordinates."""
+
+    from run_putmarker_skill_program import _quat_to_matrix
+
+    origin = np.asarray(env_origin_world, dtype=np.float64)
+    target_contact = np.asarray(target_contact_frame, dtype=np.float64).copy()
+    actual = np.asarray(actual_wrist, dtype=np.float64).copy()
+    desired = np.asarray(desired_wrist, dtype=np.float64).copy()
+    for pose in (target_contact, actual, desired):
+        pose[:3] += origin
+    pads = np.asarray(pad_centers_world, dtype=np.float64)
+    pad_axes = np.asarray(pad_axes_world, dtype=np.float64)
+    if pads.shape != (2, 3) or pad_axes.shape != (2, 3):
+        raise ValueError("debug axes require exactly two left pad centers and axes")
+
+    starts: list[tuple[float, float, float]] = []
+    ends: list[tuple[float, float, float]] = []
+    colors: list[tuple[float, float, float, float]] = []
+    sizes: list[float] = []
+    labels: list[str] = []
+
+    def line(start, end, color, size, label):
+        starts.append(tuple(np.asarray(start, dtype=np.float64)))
+        ends.append(tuple(np.asarray(end, dtype=np.float64)))
+        colors.append(color)
+        sizes.append(float(size))
+        labels.append(label)
+
+    target_rgb = (
+        (1.0, 0.08, 0.08, 1.0),
+        (0.08, 1.0, 0.08, 1.0),
+        (0.08, 0.35, 1.0, 1.0),
+    )
+    target_rotation = _quat_to_matrix(target_contact[3:])
+    for axis, (length, color) in enumerate(
+        zip((0.090, 0.055, 0.055), target_rgb, strict=True)
+    ):
+        line(
+            target_contact[:3],
+            target_contact[:3] + length * target_rotation[:, axis],
+            color,
+            6.0 if axis == 0 else 4.0,
+            "target_tangent" if axis == 0 else f"target_axis_{axis}",
+        )
+
+    pad_color = (1.0, 0.05, 0.85, 1.0)
+    cross_half_width = 0.005
+    for pad_index, center in enumerate(pads):
+        for axis in range(3):
+            delta = np.zeros(3, dtype=np.float64)
+            delta[axis] = cross_half_width
+            line(
+                center - delta,
+                center + delta,
+                pad_color,
+                5.0,
+                f"pad_{pad_index}_center",
+            )
+    line(pads[0], pads[1], pad_color, 5.0, "jaw_closing_line")
+
+    mean_depth_axis = np.mean(pad_axes, axis=0)
+    mean_depth_norm = float(np.linalg.norm(mean_depth_axis))
+    if mean_depth_norm <= 1.0e-9:
+        raise ValueError("left pad depth axes have no finite mean direction")
+    mean_depth_axis /= mean_depth_norm
+    pad_mean = np.mean(pads, axis=0)
+    line(
+        pad_mean,
+        pad_mean + 0.075 * mean_depth_axis,
+        (0.55, 1.0, 0.05, 1.0),
+        6.0,
+        "mean_pad_depth_axis",
+    )
+
+    for pose, color, size, label in (
+        (actual, (0.05, 0.95, 1.0, 1.0), 4.0, "actual_wrist"),
+        (desired, (1.0, 1.0, 1.0, 1.0), 5.0, "desired_wrist"),
+    ):
+        rotation = _quat_to_matrix(pose[3:])
+        for axis in range(3):
+            line(
+                pose[:3],
+                pose[:3] + 0.060 * rotation[:, axis],
+                color,
+                size,
+                f"{label}_axis_{axis}",
+            )
+    line(
+        actual[:3],
+        desired[:3],
+        (1.0, 0.55, 0.02, 1.0),
+        7.0,
+        "actual_to_desired_correction",
+    )
+    return {
+        "starts": starts,
+        "ends": ends,
+        "colors": colors,
+        "sizes": sizes,
+        "labels": labels,
+    }
+
+
+def _draw_left_contact_debug(
+    env,
+    draw,
+    sample,
+    target_contact_frame,
+    desired_left_wrist,
+) -> None:
+    if draw is None:
+        return
+    draw.clear_lines()
+    primitives = _debug_axis_primitives(
+        target_contact_frame,
+        sample["left_pad_centers_world"],
+        sample["left_pad_axes_world"],
+        sample["left_eef_pose"],
+        desired_left_wrist,
+        env_origin_world=env.scene.env_origins[0].detach().cpu().numpy(),
+    )
+    draw.draw_lines(
+        primitives["starts"],
+        primitives["ends"],
+        primitives["colors"],
+        primitives["sizes"],
+    )
+
+
+def _debug_axis_legend(frame: np.ndarray) -> np.ndarray:
     import cv2
 
+    frame = frame.copy()
+    band_top = frame.shape[0] - 22
+    frame[band_top:, :] = (0.18 * frame[band_top:, :]).astype(np.uint8)
+    items = (
+        ("TGT tangent=x", (255, 60, 60)),
+        ("PADS/JAW", (255, 20, 220)),
+        ("DEPTH", (145, 255, 20)),
+        ("WRIST ACT", (20, 240, 255)),
+        ("WRIST DES", (255, 255, 255)),
+        ("ACT->DES", (255, 140, 5)),
+    )
+    x = 8
+    for label, rgb in items:
+        frame[band_top + 6 : band_top + 16, x : x + 10] = rgb
+        cv2.putText(
+            frame,
+            label,
+            (x + 14, band_top + 16),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.36,
+            (245, 245, 245),
+            1,
+            cv2.LINE_AA,
+        )
+        x += 24 + int(7.2 * len(label))
+    return frame
+
+
+def _frame(
+    env,
+    sample,
+    *,
+    debug_axis_draw=None,
+    target_left_contact_frame=None,
+    desired_left_wrist=None,
+) -> np.ndarray:
+    import cv2
+
+    if debug_axis_draw is not None:
+        _draw_left_contact_debug(
+            env,
+            debug_axis_draw,
+            sample,
+            target_left_contact_frame,
+            desired_left_wrist,
+        )
     panels = []
     env.sim.render()
     for camera_name in ("top_camera", "left_wrist_camera", "right_wrist_camera"):
@@ -1105,7 +1302,8 @@ def _frame(env, sample) -> np.ndarray:
         for row, line in enumerate(lines):
             cv2.putText(image, line, (12, 28 + 25 * row), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (245, 245, 245), 1, cv2.LINE_AA)
         panels.append(cv2.resize(image, (320, 240), interpolation=cv2.INTER_AREA))
-    return np.concatenate(panels, axis=1)
+    frame = np.concatenate(panels, axis=1)
+    return _debug_axis_legend(frame) if debug_axis_draw is not None else frame
 
 
 def _transition_trace(samples):
@@ -1216,6 +1414,42 @@ def main(argv: list[str] | None = None) -> None:
         )
     if args.render and not args.video:
         raise ValueError("--render requires --video")
+    diagnostic_requested = bool(
+        args.render_diagnostic_only or args.diagnostic_reference_trace
+    )
+    if diagnostic_requested and not (
+        args.render_diagnostic_only and args.diagnostic_reference_trace
+    ):
+        raise ValueError(
+            "render diagnostic requires --render-diagnostic-only and "
+            "--diagnostic-reference-trace"
+        )
+    if args.render_diagnostic_only:
+        if not (args.render and args.acquisition_only and args.expect_failure):
+            raise ValueError(
+                "render diagnostic requires render, acquisition-only, and "
+                "expect-failure modes"
+            )
+        if args.demo_hdf5:
+            raise ValueError("render diagnostic is non-training and forbids HDF5 output")
+        if any(value is not None for value in identity_values):
+            raise ValueError("render diagnostic consumes no repair-attempt identity")
+        if args.controller_plugin_py:
+            raise ValueError("render diagnostic forbids controller plugins")
+        if (
+            not args.target_left_source_approach_corridor
+            or args.target_source_left_first_acquisition
+        ):
+            raise ValueError(
+                "this diagnostic must replay the sealed cycle-3 source corridor"
+            )
+        reference_trace = Path(args.diagnostic_reference_trace).resolve()
+        if not reference_trace.is_file():
+            raise FileNotFoundError(
+                f"diagnostic reference trace is missing: {reference_trace}"
+            )
+        if reference_trace == Path(args.trace_npz).resolve():
+            raise ValueError("diagnostic output trace must be fresh")
     if args.mode in {"skill", "replay_center"} and not args.source_keyframes:
         raise ValueError(f"{args.mode} mode requires --source-keyframes")
     calibration_requested = bool(
@@ -1517,6 +1751,7 @@ def main(argv: list[str] | None = None) -> None:
         target_left_grasp_orientation_override_local_wxyz = None
         static_precontact_jaw_translation = None
         source_contact_frame_correction = None
+        diagnostic_target_left_contact_frame = None
         if trajectory is not None:
             from judo_isaaclab.put_pot import (
                 MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
@@ -1772,6 +2007,7 @@ def main(argv: list[str] | None = None) -> None:
                         "target_contact_frame_local"
                     ],
                 )
+                diagnostic_target_left_contact_frame = target_contact_world.copy()
                 desired_pregrasp = transfer_marker_pose(
                     source_left_pregrasp["left_eef_pose"],
                     source_pregrasp_contact_world,
@@ -2069,11 +2305,22 @@ def main(argv: list[str] | None = None) -> None:
             robust_bimanual_latch_ready,
         )
 
+        debug_axis_draw = None
         if args.render:
             render_started = time.monotonic()
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
             timers.add("render_encode", time.monotonic() - render_started)
+        if args.render_diagnostic_only:
+            if diagnostic_target_left_contact_frame is None:
+                raise RuntimeError("target left contact frame was not measured")
+            from isaacsim.core.utils.extensions import enable_extension
+
+            if not enable_extension("isaacsim.util.debug_draw"):
+                raise RuntimeError("could not enable isaacsim.util.debug_draw")
+            import isaacsim.util.debug_draw._debug_draw as debug_draw
+
+            debug_axis_draw = debug_draw.acquire_debug_draw_interface()
         rollout_started = time.monotonic()
         for step in range(total_steps):
             if repair_prefix_steps is not None and step < repair_prefix_steps:
@@ -3590,7 +3837,15 @@ def main(argv: list[str] | None = None) -> None:
                 )
             if encoder is not None:
                 render_started = time.monotonic()
-                frame = _frame(env, sample)
+                frame = _frame(
+                    env,
+                    sample,
+                    debug_axis_draw=debug_axis_draw,
+                    target_left_contact_frame=(
+                        diagnostic_target_left_contact_frame
+                    ),
+                    desired_left_wrist=desired_left[-1],
+                )
                 encoder.write(frame)
                 frame_stats.append((float(frame.mean()), float(frame.std())))
                 timers.add("render_encode", time.monotonic() - render_started)
@@ -3685,6 +3940,60 @@ def main(argv: list[str] | None = None) -> None:
         validation_started = time.monotonic()
         trace_demo_at_validation_start_s = timers.seconds["trace_demo"]
         video = _probe(args.video) if args.render else None
+        diagnostic_replay = None
+        if args.render_diagnostic_only:
+            reference_path = Path(args.diagnostic_reference_trace).resolve()
+            with np.load(reference_path, allow_pickle=False) as reference:
+                if "actions" not in reference.files:
+                    raise ValueError("diagnostic reference trace has no actions")
+                reference_actions = np.asarray(reference["actions"], dtype=np.float32)
+            replay_actions = np.asarray(actions, dtype=np.float32)
+            exact_actions = bool(
+                reference_actions.shape == replay_actions.shape
+                and np.array_equal(reference_actions, replay_actions)
+            )
+            max_abs_action_difference = (
+                0.0
+                if exact_actions
+                else (
+                    float(np.max(np.abs(reference_actions - replay_actions)))
+                    if reference_actions.shape == replay_actions.shape
+                    else None
+                )
+            )
+            diagnostic_replay = {
+                "classification": "deterministic_render_diagnostic_only",
+                "training_eligible": False,
+                "causal_mechanism_attempt_consumed": False,
+                "physics_or_controller_changes": False,
+                "reference_trace": {
+                    "path": str(reference_path),
+                    "sha256": _sha256(reference_path),
+                    "actions_shape": list(reference_actions.shape),
+                    "actions_bytes_sha256": hashlib.sha256(
+                        reference_actions.tobytes()
+                    ).hexdigest(),
+                },
+                "replay_actions": {
+                    "shape": list(replay_actions.shape),
+                    "bytes_sha256": hashlib.sha256(
+                        replay_actions.tobytes()
+                    ).hexdigest(),
+                    "exactly_equal": exact_actions,
+                    "maximum_absolute_difference": max_abs_action_difference,
+                },
+                "overlay": {
+                    "target_left_contact_frame": True,
+                    "target_tangent_axis": "local_x",
+                    "actual_left_pad_centers": 2,
+                    "jaw_closing_line": True,
+                    "mean_pad_depth_axis": True,
+                    "actual_left_wrist_frame": True,
+                    "desired_left_wrist_frame": True,
+                    "actual_to_desired_correction_vector": True,
+                    "screen_space_color_legend": True,
+                },
+            }
         desired_error = []
         if trajectory is not None:
             desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - np.asarray(desired_left[i])[:3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - np.asarray(desired_right[i])[:3])) for i in range(len(left_eef))]
@@ -3795,6 +4104,10 @@ def main(argv: list[str] | None = None) -> None:
             "fully_decodable": bool(
                 video is not None and video["full_decode_returncode"] == 0
             ),
+            "diagnostic_actions_identical": bool(
+                diagnostic_replay is None
+                or diagnostic_replay["replay_actions"]["exactly_equal"]
+            ),
         }
         if args.classification_run:
             if args.mode != "replay":
@@ -3809,6 +4122,10 @@ def main(argv: list[str] | None = None) -> None:
         elif args.expect_failure:
             acceptance_checks = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "h264_nonempty", "fully_decodable")}
             acceptance_checks["expected_coded_task_failure"] = not bool(final["task_success"])
+            if args.render_diagnostic_only:
+                acceptance_checks["diagnostic_actions_identical"] = checks[
+                    "diagnostic_actions_identical"
+                ]
         else:
             acceptance_checks = checks
             if direct_replay is not None:
@@ -3893,6 +4210,7 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "grasp_assistance": "none",
                 "acquisition_only": bool(args.acquisition_only),
+                "render_diagnostic": diagnostic_replay,
                 "acquisition_latch": acquisition_latch,
                 "static_precontact_jaw_translation": (
                     static_precontact_jaw_translation

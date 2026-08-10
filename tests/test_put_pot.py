@@ -176,9 +176,44 @@ def test_source_demo_approach_corridor_rejects_unbounded_waypoint_change():
 
 from run_putpot_skill_program import (
     _build_center_repair,
+    _debug_axis_primitives,
     _install_procedural_ground,
     _sparse_joint_nominal,
 )
+
+
+def test_render_debug_axes_measure_contact_and_wrist_frames_without_commands():
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = identity.copy()
+    target[:3] = [0.20, 0.30, 0.40]
+    actual = identity.copy()
+    actual[:3] = [0.10, 0.20, 0.30]
+    desired = identity.copy()
+    desired[:3] = [0.11, 0.18, 0.33]
+    pads = np.asarray([[1.0, 2.0, 3.0], [1.0, 2.1, 3.0]])
+    axes = np.asarray([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+
+    result = _debug_axis_primitives(
+        target,
+        pads,
+        axes,
+        actual,
+        desired,
+        env_origin_world=[1.0, 2.0, 3.0],
+    )
+
+    assert len(result["starts"]) == len(result["ends"]) == 18
+    assert result["labels"].count("pad_0_center") == 3
+    assert result["labels"].count("pad_1_center") == 3
+    tangent = result["labels"].index("target_tangent")
+    np.testing.assert_allclose(result["starts"][tangent], [1.20, 2.30, 3.40])
+    np.testing.assert_allclose(result["ends"][tangent], [1.29, 2.30, 3.40])
+    depth = result["labels"].index("mean_pad_depth_axis")
+    np.testing.assert_allclose(result["starts"][depth], [1.0, 2.05, 3.0])
+    np.testing.assert_allclose(result["ends"][depth], [1.0, 2.05, 3.075])
+    correction = result["labels"].index("actual_to_desired_correction")
+    np.testing.assert_allclose(result["starts"][correction], [1.10, 2.20, 3.30])
+    np.testing.assert_allclose(result["ends"][correction], [1.11, 2.18, 3.33])
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
