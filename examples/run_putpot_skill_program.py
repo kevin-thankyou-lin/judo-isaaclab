@@ -154,6 +154,19 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-contact-frame-radial-clearance-m",
+        type=float,
+        help=(
+            "Measured outward target-contact-normal clearance for a tangent-safe "
+            "left pregrasp waypoint."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-contact-frame-radial-waypoint-step",
+        type=int,
+        help="Acquisition step at which the tangent-safe radial waypoint is reached.",
+    )
+    parser.add_argument(
         "--target-source-left-first-acquisition",
         action="store_true",
         help=(
@@ -1552,6 +1565,25 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "contact-frame preorientation requires the source approach corridor"
         )
+    radial_waypoint_requested = any(
+        value is not None
+        for value in (
+            args.target_left_contact_frame_radial_clearance_m,
+            args.target_left_contact_frame_radial_waypoint_step,
+        )
+    )
+    if radial_waypoint_requested and not all(
+        value is not None
+        for value in (
+            args.target_left_contact_frame_radial_clearance_m,
+            args.target_left_contact_frame_radial_waypoint_step,
+        )
+    ):
+        raise ValueError("radial clearance waypoint requires distance and step")
+    if radial_waypoint_requested and not preorientation_requested:
+        raise ValueError(
+            "radial clearance waypoint requires measured contact-frame preorientation"
+        )
     if (
         args.target_source_left_first_acquisition
         and not args.target_left_source_approach_corridor
@@ -1932,10 +1964,12 @@ def main(argv: list[str] | None = None) -> None:
         if source_contact_requested:
             from judo_isaaclab.put_marker import (
                 compose_pose as compose_marker_pose,
+                quaternion_rotate as rotate_marker_vector,
                 transfer_pose as transfer_marker_pose,
             )
             from judo_isaaclab.put_pot import (
                 apply_contact_frame_preorientation,
+                apply_contact_frame_radial_clearance_waypoint,
                 apply_precontact_source_frame_correction,
                 apply_source_demo_approach_corridor,
                 source_contact_frame_grasp_pose,
@@ -2095,7 +2129,36 @@ def main(argv: list[str] | None = None) -> None:
                     trajectory_receipt["contact_frame_preorientation"] = (
                         preorientation_receipt
                     )
-                    mechanism = "target_contact_frame_preorientation_before_contact"
+                    if radial_waypoint_requested:
+                        target_contact_normal_world = rotate_marker_vector(
+                            target_contact_world[3:],
+                            np.asarray([0.0, 0.0, 1.0], dtype=np.float64),
+                        )
+                        trajectory, radial_waypoint_receipt = (
+                            apply_contact_frame_radial_clearance_waypoint(
+                                trajectory,
+                                left_reset_pose,
+                                desired_pregrasp,
+                                target_contact_normal_world,
+                                clearance_m=(
+                                    args.target_left_contact_frame_radial_clearance_m
+                                ),
+                                waypoint_step=(
+                                    args.target_left_contact_frame_radial_waypoint_step
+                                ),
+                                maximum_position_step_m=args.max_position_step,
+                            )
+                        )
+                        trajectory_receipt["radial_clearance_waypoint"] = (
+                            radial_waypoint_receipt
+                        )
+                        mechanism = (
+                            "target_contact_frame_radial_clearance_waypoint"
+                        )
+                    else:
+                        mechanism = (
+                            "target_contact_frame_preorientation_before_contact"
+                        )
                 else:
                     mechanism = (
                         "source_demo_left_first_acquisition_chronology"

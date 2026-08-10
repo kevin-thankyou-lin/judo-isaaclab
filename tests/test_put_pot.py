@@ -26,6 +26,7 @@ from judo_isaaclab.put_pot import (
     apply_static_precontact_jaw_axis_translation,
     apply_precontact_source_frame_correction,
     apply_contact_frame_preorientation,
+    apply_contact_frame_radial_clearance_waypoint,
     apply_source_demo_approach_corridor,
     apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
@@ -248,6 +249,73 @@ def test_contact_frame_preorientation_rejects_short_force_free_lead():
             trajectory.left_poses[trajectory.waypoint_steps["bimanual_pregrasp"]],
             alignment_complete_step=20,
             prior_first_force_step=30,
+        )
+
+
+def test_contact_frame_radial_waypoint_changes_only_pregrasp_left_positions():
+    start = _pose(0.0, 0.0, 0.5)
+    program = PutPotSkillProgram(start, _pose(0.0, 1.0, 0.5))
+    program.bimanual_handle_grasp(
+        _pose(0.2, 0.0, 0.5),
+        _pose(0.2, 1.0, 0.5),
+        _pose(0.3, 0.0, 0.5),
+        _pose(0.3, 1.0, 0.5),
+        approach_steps=30,
+        left_close_steps=10,
+        right_close_steps=5,
+        simultaneous=True,
+    )
+    original = program.build()
+    pregrasp = original.waypoint_steps["bimanual_pregrasp"]
+    desired = original.left_poses[pregrasp]
+
+    corrected, receipt = apply_contact_frame_radial_clearance_waypoint(
+        original,
+        start,
+        desired,
+        [0.0, 2.0, 0.0],
+        clearance_m=0.042,
+        waypoint_step=15,
+        maximum_position_step_m=0.05,
+    )
+
+    assert corrected.left_poses[15, :3] == pytest.approx(
+        desired[:3] + [0.0, 0.042, 0.0]
+    )
+    assert corrected.left_poses[:, 3:] == pytest.approx(original.left_poses[:, 3:])
+    assert corrected.left_poses[pregrasp:] == pytest.approx(
+        original.left_poses[pregrasp:]
+    )
+    assert corrected.right_poses == pytest.approx(original.right_poses)
+    assert corrected.grippers == pytest.approx(original.grippers)
+    assert receipt["signed_waypoint_translation_world_m"] == pytest.approx(
+        [0.0, 0.042, 0.0]
+    )
+    assert receipt["left_orientations_unchanged"] is True
+
+
+def test_contact_frame_radial_waypoint_rejects_unbounded_clearance():
+    start = _pose()
+    program = PutPotSkillProgram(start, _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(0.1, 1.0),
+        _pose(x=0.2),
+        _pose(0.2, 1.0),
+        approach_steps=30,
+        left_close_steps=5,
+        right_close_steps=5,
+        simultaneous=True,
+    )
+    trajectory = program.build()
+    with pytest.raises(ValueError, match="clearance bounds"):
+        apply_contact_frame_radial_clearance_waypoint(
+            trajectory,
+            start,
+            trajectory.left_poses[trajectory.waypoint_steps["bimanual_pregrasp"]],
+            [0.0, 1.0, 0.0],
+            clearance_m=0.051,
+            waypoint_step=15,
         )
 
 from run_putpot_skill_program import (

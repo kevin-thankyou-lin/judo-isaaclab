@@ -850,6 +850,118 @@ def apply_contact_frame_preorientation(
     )
 
 
+def apply_contact_frame_radial_clearance_waypoint(
+    trajectory: SkillTrajectory,
+    left_start_pose: Any,
+    desired_left_pregrasp_pose: Any,
+    target_contact_normal_world: Any,
+    *,
+    clearance_m: float,
+    waypoint_step: int,
+    maximum_clearance_m: float = 0.05,
+    maximum_position_step_m: float = 0.025,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Route the open jaw around the handle tangent before radial ingress.
+
+    The waypoint is the mapped pregrasp translated along the measured target
+    contact-frame normal.  Only pre-pregrasp left translations change; the
+    pregrasp/grasp endpoints, wrist orientations, right arm, and grippers stay
+    fixed.  This prevents a long handle from being swept by one pad while the
+    jaw is still travelling along its tangent.
+    """
+
+    start = _pose(left_start_pose, "left_start_pose")
+    desired_pregrasp = _pose(
+        desired_left_pregrasp_pose, "desired_left_pregrasp_pose"
+    )
+    normal = np.asarray(target_contact_normal_world, dtype=np.float64)
+    values = np.asarray(
+        [clearance_m, maximum_clearance_m, maximum_position_step_m],
+        dtype=np.float64,
+    )
+    if normal.shape != (3,) or np.any(~np.isfinite(normal)):
+        raise ValueError("target contact normal must be a finite three-vector")
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= 1.0e-9:
+        raise ValueError("target contact normal must be nonzero")
+    normal /= normal_norm
+    if (
+        np.any(~np.isfinite(values))
+        or clearance_m <= 0.0
+        or maximum_clearance_m <= 0.0
+        or clearance_m > maximum_clearance_m
+        or maximum_position_step_m <= 0.0
+    ):
+        raise ValueError("radial clearance bounds are invalid")
+
+    pregrasp_end = trajectory.waypoint_steps.get(
+        "left_pregrasp", trajectory.waypoint_steps.get("bimanual_pregrasp")
+    )
+    grasp_anchor = trajectory.waypoint_steps.get("left_handle_grasp")
+    waypoint = int(waypoint_step)
+    if (
+        pregrasp_end is None
+        or grasp_anchor is None
+        or not 0 <= waypoint < pregrasp_end < grasp_anchor
+    ):
+        raise ValueError("radial waypoint is outside the left acquisition corridor")
+
+    original = trajectory.left_poses.copy()
+    left = original.copy()
+    waypoint_pose = desired_pregrasp.copy()
+    waypoint_pose[:3] += float(clearance_m) * normal
+    first = interpolate_poses(start, waypoint_pose, waypoint + 1)
+    second = interpolate_poses(
+        waypoint_pose, desired_pregrasp, pregrasp_end - waypoint
+    )
+    left[: waypoint + 1, :3] = first[:, :3]
+    left[waypoint + 1 : pregrasp_end + 1, :3] = second[:, :3]
+
+    previous_positions = np.concatenate(
+        (start[None, :3], left[:grasp_anchor, :3]), axis=0
+    )
+    position_steps = np.linalg.norm(
+        left[: grasp_anchor + 1, :3] - previous_positions, axis=1
+    )
+    maximum_observed = float(np.max(position_steps))
+    if maximum_observed > maximum_position_step_m + 1.0e-12:
+        raise ValueError("radial clearance waypoint exceeds position step bound")
+
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=trajectory.right_poses.copy(),
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "waypoint_step": waypoint,
+            "pregrasp_end_step": int(pregrasp_end),
+            "target_contact_normal_world": normal.tolist(),
+            "clearance_m": float(clearance_m),
+            "maximum_clearance_m": float(maximum_clearance_m),
+            "signed_waypoint_translation_world_m": (
+                float(clearance_m) * normal
+            ).tolist(),
+            "waypoint_pose": waypoint_pose.tolist(),
+            "maximum_position_step_m": maximum_observed,
+            "position_step_bound_m": float(maximum_position_step_m),
+            "left_orientations_unchanged": bool(
+                np.array_equal(left[:, 3:], original[:, 3:])
+            ),
+            "left_pregrasp_pose_unchanged": bool(
+                np.allclose(left[pregrasp_end], desired_pregrasp, atol=1.0e-12)
+            ),
+            "left_post_pregrasp_unchanged": bool(
+                np.array_equal(left[pregrasp_end:], original[pregrasp_end:])
+            ),
+            "right_trajectory_unchanged": True,
+            "grippers_unchanged": True,
+        },
+    )
+
+
 def _linear_contact_feedback_poses(
     start: Any,
     target: Any,
