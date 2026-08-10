@@ -11,6 +11,10 @@ import subprocess
 import sys
 
 
+TRACEBACK_MARKER = b"Traceback (most recent call last):"
+SWALLOWED_TRACEBACK_RETURNCODE = 70
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True)
@@ -30,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.parent.mkdir(parents=True, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc)
+    traceback_detected = False
     with open(log_path, "xb") as log:
         process = subprocess.Popen(
             command,
@@ -38,18 +43,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         assert process.stdout is not None
         for block in iter(process.stdout.readline, b""):
+            traceback_detected = traceback_detected or TRACEBACK_MARKER in block
             log.write(block)
             log.flush()
             sys.stdout.buffer.write(block)
             sys.stdout.buffer.flush()
-        returncode = int(process.wait())
+        child_returncode = int(process.wait())
         os.fsync(log.fileno())
+    returncode = (
+        SWALLOWED_TRACEBACK_RETURNCODE
+        if child_returncode == 0 and traceback_detected
+        else child_returncode
+    )
     finished = datetime.datetime.now(datetime.timezone.utc)
     status = {
-        "schema_version": 1,
+        "schema_version": 2,
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
         "command": command,
+        "child_returncode": child_returncode,
+        "traceback_detected": traceback_detected,
         "returncode": returncode,
         "log": str(log_path),
         "bookkeeping_complete": True,

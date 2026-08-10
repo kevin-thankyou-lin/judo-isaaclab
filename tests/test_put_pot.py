@@ -365,8 +365,20 @@ from run_putpot_skill_program import (
     _build_center_repair,
     _debug_axis_primitives,
     _install_procedural_ground,
+    _milestone_reanchor_enabled,
     _sparse_joint_nominal,
 )
+
+
+def test_forced_right_first_stabilization_cannot_enter_old_milestone_reanchor():
+    assert _milestone_reanchor_enabled(
+        right_first_close=True,
+        forced_right_first_stabilization=False,
+    )
+    assert not _milestone_reanchor_enabled(
+        right_first_close=True,
+        forced_right_first_stabilization=True,
+    )
 
 
 def test_render_debug_axes_measure_contact_and_wrist_frames_without_commands():

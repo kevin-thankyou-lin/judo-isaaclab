@@ -27,6 +27,13 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "examples"))
 
 
+def _milestone_reanchor_enabled(
+    *, right_first_close: bool, forced_right_first_stabilization: bool
+) -> bool:
+    """Keep forced source chronology isolated from older feedback mechanisms."""
+    return bool(right_first_close and not forced_right_first_stabilization)
+
+
 def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gear-repo", required=True)
@@ -2642,7 +2649,12 @@ def main(argv: list[str] | None = None) -> None:
             actions.append(action[0].detach().cpu().numpy())
             pot_poses.append(sample["pot_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
             if (
-                right_first_close
+                _milestone_reanchor_enabled(
+                    right_first_close=right_first_close,
+                    forced_right_first_stabilization=bool(
+                        args.target_right_first_stabilized_acquisition
+                    ),
+                )
                 and step == right_grasp_step
                 and sample["right_grasp"]
             ):
