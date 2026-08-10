@@ -1640,12 +1640,16 @@ def main(argv: list[str] | None = None) -> None:
                 )
             with open(critic_path, encoding="utf-8") as stream:
                 critic = json.load(stream)
+            critic_gate = critic.get(
+                "gate_decision", critic.get("strict_gate_decision", {})
+            )
+            critic_acquisition_failed = (
+                critic_gate.get("robust_bilateral_latch") is False
+                or critic_gate.get("robust_acquisition_passed") is False
+            )
             if (
                 critic.get("classification") != "failure_or_critic"
-                or critic.get("gate_decision", {}).get(
-                    "robust_bilateral_latch"
-                )
-                is not False
+                or not critic_acquisition_failed
                 or critic.get("artifacts", {}).get("trace_sha256")
                 != _sha256(calibration_path)
             ):
