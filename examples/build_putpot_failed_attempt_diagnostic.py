@@ -114,51 +114,115 @@ def main(argv: list[str] | None = None) -> None:
             if left_actions.shape == right_actions.shape and left_actions.size
             else None
         )
-        correction = diagnostic_result["protocol"]["source_contact_frame_correction"]
-        measurement = correction["frame_measurement"]
-        target_contact = _compose_pose(
-            correction["deterministic_target_pot_pose"],
-            measurement["target_contact_frame_local"],
-        )
+        protocol = diagnostic_result["protocol"]
+        correction = protocol["source_contact_frame_correction"]
+        geometry = protocol["parameters"]["geometry_conditioned_handle_grasp"]
         first_contact = int(
-            diagnostic_result["protocol"]["acquisition_latch"]["first_contact_step"]
+            protocol["acquisition_latch"]["first_contact_step"]
         )
-        actual_wrist = np.asarray(right["left_eef_poses"][first_contact], dtype=float)
-        target_wrist = np.asarray(
-            right["desired_left_eef_poses"][first_contact], dtype=float
+        pot_pose = np.asarray(right["pot_poses"][first_contact], dtype=float)
+        cooktop_pose = np.asarray(
+            right["cooktop_poses"][first_contact]
+            if "cooktop_poses" in right.files
+            else diagnostic_result["terminal"]["cooktop_pose"],
+            dtype=float,
         )
-        pads = np.asarray(right["left_pad_centers_world"][first_contact], dtype=float)
-        pad_axes = np.asarray(right["left_pad_axes_world"][first_contact], dtype=float)
+        target_contacts = {
+            arm: _compose_pose(
+                pot_pose,
+                geometry[arm]["target_contact_frame_local"],
+            )
+            for arm in ("left", "right")
+        }
+        actual_wrists = {
+            arm: np.asarray(right[f"{arm}_eef_poses"][first_contact], dtype=float)
+            for arm in ("left", "right")
+        }
+        target_wrists = {
+            arm: np.asarray(
+                right[f"desired_{arm}_eef_poses"][first_contact], dtype=float
+            )
+            for arm in ("left", "right")
+        }
+        pads = {
+            arm: np.asarray(
+                right[f"{arm}_pad_centers_world"][first_contact], dtype=float
+            )
+            for arm in ("left", "right")
+        }
+        pad_axes = {
+            arm: np.asarray(
+                right[f"{arm}_pad_axes_world"][first_contact], dtype=float
+            )
+            for arm in ("left", "right")
+        }
+        control_vectors = {
+            arm: target_wrists[arm][:3] - actual_wrists[arm][:3]
+            for arm in ("left", "right")
+        }
+        if (
+            "local_mpc_active" in right.files
+            and bool(right["local_mpc_active"][first_contact])
+        ):
+            control_vectors["left"] = np.asarray(
+                right["local_mpc_translation_control_world_m"][first_contact],
+                dtype=float,
+            )
     if not exact or maximum_difference != 0.0:
         raise ValueError("diagnostic replay actions are not exactly identical")
     render = diagnostic_result.get("protocol", {}).get("render_diagnostic", {})
     overlay_source = render.get("overlay", {})
-    overlay = {
-        "target_handle_contact_frame": overlay_source.get(
-            "target_left_contact_frame"
-        )
-        is True,
-        "target_handle_tangent_axis": overlay_source.get("target_tangent_axis")
-        == "local_x",
-        "actual_pad_centers": overlay_source.get("actual_left_pad_centers") == 2,
-        "actual_pad_axes": overlay_source.get("actual_left_pad_axes") == 2,
-        "jaw_closing_line": overlay_source.get("jaw_closing_line") is True,
-        "target_wrist_frame": overlay_source.get("target_left_wrist_frame") is True,
-        "actual_wrist_frame": overlay_source.get("actual_left_wrist_frame") is True,
-        "signed_correction_vectors": (
-            overlay_source.get("actual_to_desired_correction_vector") is True
-            and overlay_source.get(
-                "jaw_midpoint_to_target_contact_correction_vector"
-            )
-            is True
-        ),
-        "screen_space_color_legend": overlay_source.get(
-            "screen_space_color_legend"
-        )
-        is True,
+    overlay_names = (
+        "pot_body_frame",
+        "cooktop_target_frame",
+        "left_handle_contact_frame",
+        "right_handle_contact_frame",
+        "left_gripper_wrist_frames",
+        "right_gripper_wrist_frames",
+        "left_pad_centers_axes",
+        "right_pad_centers_axes",
+        "left_jaw_closing_line",
+        "right_jaw_closing_line",
+        "signed_residual_vectors",
+        "signed_control_vectors",
+        "screen_space_color_legend",
+    )
+    overlay = {name: overlay_source.get(name) is True for name in overlay_names}
+    translation = target_wrists["left"][:3] - actual_wrists["left"][:3]
+    rotation = _axis_angle_deg(
+        actual_wrists["left"][3:], target_wrists["left"][3:]
+    )
+    frame_receipt = {
+        "pot_body_frame": pot_pose.tolist(),
+        "cooktop_target_frame": cooktop_pose.tolist(),
+        "handle_contact_frames": {
+            arm: target_contacts[arm].tolist() for arm in ("left", "right")
+        },
+        "gripper_wrist_frames": {
+            arm: {
+                "actual": actual_wrists[arm].tolist(),
+                "desired": target_wrists[arm].tolist(),
+            }
+            for arm in ("left", "right")
+        },
+        "pad_centers": {
+            arm: pads[arm].tolist() for arm in ("left", "right")
+        },
+        "pad_axes": {
+            arm: pad_axes[arm].tolist() for arm in ("left", "right")
+        },
+        "jaw_closing_lines": {
+            arm: (pads[arm][1] - pads[arm][0]).tolist()
+            for arm in ("left", "right")
+        },
+        "signed_residual_vectors_world_m": {
+            arm: (target_contacts[arm][:3] - pads[arm].mean(axis=0)).tolist()
+            for arm in ("left", "right")
+        },
+        "signed_control_vectors_world_m": {
+            arm: control_vectors[arm].tolist() for arm in ("left", "right")
+        },
     }
-    translation = target_wrist[:3] - actual_wrist[:3]
-    rotation = _axis_angle_deg(actual_wrist[3:], target_wrist[3:])
     receipt = {
         "schema_version": 1,
         "classification": "action_identical_render_diagnostic",
@@ -195,6 +259,7 @@ def main(argv: list[str] | None = None) -> None:
             ),
         },
         "overlay": overlay,
+        "frame_receipt": frame_receipt,
         "measured_residuals": {
             "sample_step": first_contact,
             "signed_translation_residual_world_m": translation.tolist(),
@@ -202,13 +267,13 @@ def main(argv: list[str] | None = None) -> None:
             "signed_rotation_residual_axis_angle_deg": rotation,
             "rotation_norm_deg": float(np.linalg.norm(rotation)),
             "jaw_midpoint_to_target_contact_world_m": (
-                target_contact[:3] - pads.mean(axis=0)
+                target_contacts["left"][:3] - pads["left"].mean(axis=0)
             ).tolist(),
-            "target_contact_frame_world": target_contact.tolist(),
-            "actual_pad_centers_world": pads.tolist(),
-            "actual_pad_axes_world": pad_axes.tolist(),
-            "actual_wrist_pose": actual_wrist.tolist(),
-            "target_wrist_pose": target_wrist.tolist(),
+            "target_contact_frame_world": target_contacts["left"].tolist(),
+            "actual_pad_centers_world": pads["left"].tolist(),
+            "actual_pad_axes_world": pad_axes["left"].tolist(),
+            "actual_wrist_pose": actual_wrists["left"].tolist(),
+            "target_wrist_pose": target_wrists["left"].tolist(),
         },
         "next_mechanism_prediction": {
             "mechanism_id": args.next_mechanism_id,

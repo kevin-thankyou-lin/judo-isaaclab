@@ -437,6 +437,7 @@ def _ik_action(
     right_dls_gain: float = 1.0,
     integrate_right_ik: bool = False,
     integrate_left_ik: bool = False,
+    joint_nominal_weight: float | None = None,
 ):
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
@@ -491,11 +492,23 @@ def _ik_action(
             (arm_name == "left_arm" and integrate_left_ik)
             or (arm_name == "right_arm" and integrate_right_ik)
         )
-        anchor = (
-            arm.data.joint_pos[:, :6]
-            if integrate
-            else action[:, action_start : action_start + 6]
-        )
+        if joint_nominal_weight is not None and not (
+            0.0 <= joint_nominal_weight <= 1.0
+        ):
+            raise ValueError("joint_nominal_weight must be in [0, 1]")
+        nominal_anchor = action[:, action_start : action_start + 6]
+        if integrate:
+            current_anchor = arm.data.joint_pos[:, :6]
+            anchor = (
+                current_anchor
+                if joint_nominal_weight is None
+                else (
+                    (1.0 - float(joint_nominal_weight)) * current_anchor
+                    + float(joint_nominal_weight) * nominal_anchor
+                )
+            )
+        else:
+            anchor = nominal_anchor
         targets = anchor + float(gain) * delta
         limits = arm.data.joint_pos_limits[:, :6]
         action[:, action_start : action_start + 6] = torch.maximum(

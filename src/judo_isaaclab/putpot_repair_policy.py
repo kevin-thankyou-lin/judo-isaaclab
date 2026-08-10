@@ -51,15 +51,31 @@ DEFAULT_POLICY = {
 }
 
 DIAGNOSTIC_OVERLAY_REQUIREMENTS = (
-    "target_handle_contact_frame",
-    "target_handle_tangent_axis",
-    "actual_pad_centers",
-    "actual_pad_axes",
-    "jaw_closing_line",
-    "target_wrist_frame",
-    "actual_wrist_frame",
-    "signed_correction_vectors",
+    "pot_body_frame",
+    "cooktop_target_frame",
+    "left_handle_contact_frame",
+    "right_handle_contact_frame",
+    "left_gripper_wrist_frames",
+    "right_gripper_wrist_frames",
+    "left_pad_centers_axes",
+    "right_pad_centers_axes",
+    "left_jaw_closing_line",
+    "right_jaw_closing_line",
+    "signed_residual_vectors",
+    "signed_control_vectors",
     "screen_space_color_legend",
+)
+
+DIAGNOSTIC_FRAME_RECEIPT_REQUIREMENTS = (
+    "pot_body_frame",
+    "cooktop_target_frame",
+    "handle_contact_frames",
+    "gripper_wrist_frames",
+    "pad_centers",
+    "pad_axes",
+    "jaw_closing_lines",
+    "signed_residual_vectors_world_m",
+    "signed_control_vectors_world_m",
 )
 
 
@@ -308,6 +324,7 @@ def load_failed_attempt_diagnostic(path: str | Path) -> dict[str, Any]:
         "action_parity",
         "protocol",
         "overlay",
+        "frame_receipt",
         "measured_residuals",
         "next_mechanism_prediction",
     }
@@ -337,6 +354,42 @@ def load_failed_attempt_diagnostic(path: str | Path) -> dict[str, Any]:
         overlay.get(name) is not True for name in DIAGNOSTIC_OVERLAY_REQUIREMENTS
     ):
         raise ValueError("diagnostic coordinate-axis overlay gate failed")
+    frame_receipt = value.get("frame_receipt")
+    if not isinstance(frame_receipt, Mapping) or set(frame_receipt) != set(
+        DIAGNOSTIC_FRAME_RECEIPT_REQUIREMENTS
+    ):
+        raise ValueError("diagnostic bimanual frame receipt is incomplete")
+    for name in ("pot_body_frame", "cooktop_target_frame"):
+        _pose(frame_receipt.get(name), f"diagnostic {name}")
+    for name in (
+        "handle_contact_frames",
+        "gripper_wrist_frames",
+        "pad_centers",
+        "pad_axes",
+        "jaw_closing_lines",
+        "signed_residual_vectors_world_m",
+        "signed_control_vectors_world_m",
+    ):
+        arms = frame_receipt.get(name)
+        if not isinstance(arms, Mapping) or set(arms) != {"left", "right"}:
+            raise ValueError(f"diagnostic {name} must contain both arms")
+    for arm in ("left", "right"):
+        _pose(frame_receipt["handle_contact_frames"][arm], f"{arm} handle frame")
+        wrists = frame_receipt["gripper_wrist_frames"][arm]
+        if not isinstance(wrists, Mapping) or set(wrists) != {"actual", "desired"}:
+            raise ValueError(f"diagnostic {arm} wrist frames are incomplete")
+        _pose(wrists["actual"], f"{arm} actual wrist")
+        _pose(wrists["desired"], f"{arm} desired wrist")
+        for name in ("pad_centers", "pad_axes"):
+            array = np.asarray(frame_receipt[name][arm], dtype=np.float64)
+            if array.shape != (2, 3) or not np.all(np.isfinite(array)):
+                raise ValueError(f"diagnostic {arm} {name} must have shape (2, 3)")
+        for name in (
+            "jaw_closing_lines",
+            "signed_residual_vectors_world_m",
+            "signed_control_vectors_world_m",
+        ):
+            _require_vector(frame_receipt[name][arm], f"{arm} {name}")
     residuals = value.get("measured_residuals")
     if not isinstance(residuals, Mapping):
         raise ValueError("diagnostic receipt has no measured residuals")
@@ -467,33 +520,10 @@ def validate_failed_attempt_diagnostic(
     ):
         raise ValueError("diagnostic result protocol gate failed")
     result_overlay = render_receipt.get("overlay", {})
-    result_overlay_passes = {
-        "target_handle_contact_frame": result_overlay.get(
-            "target_left_contact_frame"
-        )
-        is True,
-        "target_handle_tangent_axis": result_overlay.get("target_tangent_axis")
-        == "local_x",
-        "actual_pad_centers": result_overlay.get("actual_left_pad_centers") == 2,
-        "actual_pad_axes": result_overlay.get("actual_left_pad_axes") == 2,
-        "jaw_closing_line": result_overlay.get("jaw_closing_line") is True,
-        "target_wrist_frame": result_overlay.get("target_left_wrist_frame") is True,
-        "actual_wrist_frame": result_overlay.get("actual_left_wrist_frame") is True,
-        "signed_correction_vectors": (
-            result_overlay.get("actual_to_desired_correction_vector") is True
-            and result_overlay.get(
-                "jaw_midpoint_to_target_contact_correction_vector"
-            )
-            is True
-        ),
-        "screen_space_color_legend": result_overlay.get(
-            "screen_space_color_legend"
-        )
-        is True,
-    }
-    if result_overlay_passes != {
-        name: True for name in DIAGNOSTIC_OVERLAY_REQUIREMENTS
-    }:
+    if not isinstance(result_overlay, Mapping) or any(
+        result_overlay.get(name) is not True
+        for name in DIAGNOSTIC_OVERLAY_REQUIREMENTS
+    ):
         raise ValueError("diagnostic result coordinate-axis overlay gate failed")
     if not isinstance(video_receipt, Mapping) or not (
         video_receipt.get("codec") == "h264"

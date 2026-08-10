@@ -364,9 +364,11 @@ def test_contact_frame_radial_waypoint_rejects_unbounded_clearance():
 from run_putpot_skill_program import (
     _build_center_repair,
     _debug_axis_primitives,
+    _debug_scene_primitives,
     _install_procedural_ground,
     _milestone_reanchor_enabled,
     _sparse_joint_nominal,
+    _write_rollout_trace,
 )
 
 
@@ -420,6 +422,92 @@ def test_render_debug_axes_measure_contact_and_wrist_frames_without_commands():
     )
     np.testing.assert_allclose(result["starts"][handle_correction], [1.0, 2.05, 3.0])
     np.testing.assert_allclose(result["ends"][handle_correction], [1.20, 2.30, 3.40])
+
+
+def test_render_debug_scene_receives_every_bimanual_frame_and_control_vector():
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    pads = {
+        "left": np.asarray([[0.1, -0.02, 0.2], [0.1, 0.02, 0.2]]),
+        "right": np.asarray([[-0.1, -0.02, 0.2], [-0.1, 0.02, 0.2]]),
+    }
+    axes = {
+        arm: np.asarray([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+        for arm in ("left", "right")
+    }
+    frames = {arm: identity.copy() for arm in ("left", "right")}
+    controls = {"left": [0.001, 0.0, 0.0], "right": [0.0, 0.0, 0.0]}
+
+    result = _debug_scene_primitives(
+        identity,
+        identity,
+        frames,
+        pads,
+        axes,
+        frames,
+        frames,
+        control_vectors_world=controls,
+    )
+
+    required = {
+        "pot_body_axis_0",
+        "cooktop_target_axis_0",
+        "left_handle_contact_axis_0",
+        "right_handle_contact_axis_0",
+        "left_actual_wrist_axis_0",
+        "right_actual_wrist_axis_0",
+        "left_desired_wrist_axis_0",
+        "right_desired_wrist_axis_0",
+        "left_pad_0_center",
+        "right_pad_1_center",
+        "left_pad_0_axis",
+        "right_pad_1_axis",
+        "left_jaw_closing_line",
+        "right_jaw_closing_line",
+        "left_signed_residual",
+        "right_signed_residual",
+        "left_signed_control",
+        "right_signed_control",
+    }
+    assert required.issubset(result["labels"])
+    assert len(result["starts"]) == len(result["ends"]) == len(result["labels"])
+
+
+def test_failed_rollout_partial_trace_is_immutable_and_action_complete(tmp_path):
+    pose = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    sample = {
+        "cooktop_pose": pose,
+        "left_finger_forces_n": [0.0, 0.0],
+        "left_pad_fractions": [float("nan"), float("nan")],
+        "right_finger_forces_n": [2.0, 2.0],
+        "right_pad_fractions": [0.5, 0.5],
+        "left_pad_axes_world": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        "right_pad_axes_world": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        "left_pad_centers_world": [[0.0, -0.01, 0.0], [0.0, 0.01, 0.0]],
+        "right_pad_centers_world": [[0.1, -0.01, 0.0], [0.1, 0.01, 0.0]],
+        "program_stage": "handle_local_mpc_contact_window",
+    }
+    trace = tmp_path / "partial_trace.npz"
+    arguments = {
+        "actions": [np.arange(14, dtype=np.float32)],
+        "pot_poses": [pose],
+        "left_eef": [pose],
+        "right_eef": [pose],
+        "desired_left": [pose],
+        "desired_right": [pose],
+        "samples": [{}, sample],
+        "joint_nominal": None,
+        "local_mpc_frame_receipts": [],
+        "partial": True,
+    }
+
+    _write_rollout_trace(trace, **arguments)
+    with np.load(trace, allow_pickle=False) as saved:
+        np.testing.assert_array_equal(saved["actions"], arguments["actions"])
+        assert bool(saved["partial_trace"])
+        assert saved["left_pad_centers_world"].shape == (1, 2, 3)
+        assert saved["right_pad_axes_world"].shape == (1, 2, 3)
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        _write_rollout_trace(trace, **arguments)
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():

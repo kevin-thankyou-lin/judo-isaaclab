@@ -12,6 +12,7 @@ from judo_isaaclab.putpot_program_spec import load_program_spec
 from judo_isaaclab.putpot_runtime import append_jsonl, read_jsonl
 from judo_isaaclab.putpot_repair_policy import (
     DEFAULT_POLICY,
+    load_failed_attempt_diagnostic,
     sha256_file,
     source_demo_card_receipt,
 )
@@ -209,15 +210,18 @@ def _diagnostic_receipt(
                 "training_eligible": False,
                 "replay_actions": {"exactly_equal": exact},
                 "overlay": {
-                    "target_left_contact_frame": True,
-                    "target_tangent_axis": "local_x",
-                    "actual_left_pad_centers": 2,
-                    "actual_left_pad_axes": 2,
-                    "jaw_closing_line": True,
-                    "target_left_wrist_frame": True,
-                    "actual_left_wrist_frame": True,
-                    "actual_to_desired_correction_vector": True,
-                    "jaw_midpoint_to_target_contact_correction_vector": True,
+                    "pot_body_frame": True,
+                    "cooktop_target_frame": True,
+                    "left_handle_contact_frame": True,
+                    "right_handle_contact_frame": True,
+                    "left_gripper_wrist_frames": True,
+                    "right_gripper_wrist_frames": True,
+                    "left_pad_centers_axes": True,
+                    "right_pad_centers_axes": True,
+                    "left_jaw_closing_line": True,
+                    "right_jaw_closing_line": True,
+                    "signed_residual_vectors": True,
+                    "signed_control_vectors": True,
                     "screen_space_color_legend": True,
                 },
             },
@@ -262,15 +266,51 @@ def _diagnostic_receipt(
             "attempt_identity": None,
         },
         "overlay": {
-            "target_handle_contact_frame": True,
-            "target_handle_tangent_axis": True,
-            "actual_pad_centers": True,
-            "actual_pad_axes": True,
-            "jaw_closing_line": True,
-            "target_wrist_frame": True,
-            "actual_wrist_frame": True,
-            "signed_correction_vectors": True,
+            "pot_body_frame": True,
+            "cooktop_target_frame": True,
+            "left_handle_contact_frame": True,
+            "right_handle_contact_frame": True,
+            "left_gripper_wrist_frames": True,
+            "right_gripper_wrist_frames": True,
+            "left_pad_centers_axes": True,
+            "right_pad_centers_axes": True,
+            "left_jaw_closing_line": True,
+            "right_jaw_closing_line": True,
+            "signed_residual_vectors": True,
+            "signed_control_vectors": True,
             "screen_space_color_legend": True,
+        },
+        "frame_receipt": {
+            "pot_body_frame": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            "cooktop_target_frame": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            "handle_contact_frames": {
+                "left": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                "right": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            },
+            "gripper_wrist_frames": {
+                arm: {
+                    "actual": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                    "desired": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                }
+                for arm in ("left", "right")
+            },
+            "pad_centers": {
+                arm: [[0.0, -0.01, 0.0], [0.0, 0.01, 0.0]]
+                for arm in ("left", "right")
+            },
+            "pad_axes": {
+                arm: [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+                for arm in ("left", "right")
+            },
+            "jaw_closing_lines": {
+                arm: [0.0, 0.02, 0.0] for arm in ("left", "right")
+            },
+            "signed_residual_vectors_world_m": {
+                arm: [0.001, -0.002, 0.003] for arm in ("left", "right")
+            },
+            "signed_control_vectors_world_m": {
+                arm: [0.001, 0.0, 0.0] for arm in ("left", "right")
+            },
         },
         "measured_residuals": {
             "signed_translation_residual_world_m": [0.001, -0.002, 0.003],
@@ -613,3 +653,17 @@ def test_next_attempt_accepts_only_exact_decoded_nonconsuming_diagnostic(
     assert second["prior_diagnostic_receipt_sha256"] == sha256_file(
         second["prior_diagnostic_receipt_json"]
     )
+
+
+def test_diagnostic_receipt_requires_complete_bimanual_frames(tmp_path):
+    session_path, _, receipt_path = _session(tmp_path)
+    _enable_source_first_policy(session_path, tmp_path)
+    first = submit_program_request(session_path, _spec(tmp_path, 1))
+    _ack_failed_grasp(receipt_path, first)
+    diagnostic = _diagnostic_receipt(tmp_path, first)
+    value = json.loads(diagnostic.read_text(encoding="utf-8"))
+    del value["frame_receipt"]["pad_axes"]["right"]
+    diagnostic.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="pad_axes must contain both arms"):
+        load_failed_attempt_diagnostic(diagnostic)
