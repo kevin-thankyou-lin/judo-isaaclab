@@ -59,47 +59,34 @@ def test_diagnosis_prompt_requires_trace_and_synchronized_video():
     prompt = _module()._prompt(_boundary())
 
     assert "its trace, and the synchronized skill.mp4" in prompt
-    assert "exactly one evidence-linked revised Python controller plugin" in prompt
+    assert "submit exactly one revised controller/spec" in prompt
     assert len(prompt) < 2048
 
 
 def test_diagnosis_prompt_enforces_falsifiable_progress_contract():
     prompt = _module()._prompt(_boundary())
 
-    assert "FIRST_FAILED_STAGE" in prompt
-    assert "PRIMARY_METRIC_BEFORE_AND_AFTER" in prompt
-    assert "one falsifiable HYPOTHESIS" in prompt
-    assert "EXPECTED_DELTA" in prompt
-    assert "REPAIR_FAMILY" in prompt
-    assert "SCOPE=local_or_structural" in prompt
-    assert "does not prove physical progress" in prompt
+    assert "EARLIEST_FAILED_STAGE" in prompt
+    assert "falsifiable hypothesis" in prompt
+    assert "expected task delta" in prompt
+    assert "shared repair-library family" in prompt
 
 
 def test_diagnosis_prompt_requires_causal_acquisition_audit():
     prompt = _module()._prompt(_boundary())
 
-    assert "FIRST_CONTACT_ARM" in prompt
-    assert "FIRST_CONTACT_STEP" in prompt
-    assert "CONTACT_ORDER" in prompt
-    assert "PREGRASP_OBJECT_MOTION" in prompt
-    assert "OBJECT_MOTION_BEFORE_PEER_CONTACT" in prompt
-    assert "per-pad force/contact windows" in prompt
-    assert "earliest contacting arm" in prompt
-    assert "do not tune the downstream wrist" in prompt
-    assert "object-motion abort threshold" in prompt
-    assert "contact-gated stop/backoff" in prompt
-    assert "sustained dual-pad contact" in prompt
+    assert "SOURCE_DEMO_CARD" in prompt
+    assert "contact order and object-relative frames" in prompt
+    assert "centered, force-backed robust-latch gate" in prompt
+    assert "do not tune a later stage" in prompt
 
 
 def test_diagnosis_prompt_escalates_repeated_nonprogress_structurally():
     prompt = _module()._prompt(_boundary())
 
-    assert "two attempts in one repair family" in prompt
-    assert "without material improvement in the primary metric" in prompt
-    assert "abandon that family" in prompt
-    assert "structural Python change" in prompt
-    assert "approach, contact frame, or trajectory primitive" in prompt
-    assert "spend another cycle on an exhausted repair family" in prompt
+    assert "one never-used causal mechanism" in prompt
+    assert "reused mechanisms" in prompt
+    assert "family after two non-improving attempts" in prompt
 
 
 def test_deduplicates_wakes_for_same_receipt_and_allows_bounded_retry():
@@ -171,9 +158,7 @@ def test_prompt_requires_diagnosis_and_duplicate_preflight():
     prompt = module._prompt(_boundary())
 
     assert "inspect /results/attempt_002/skill_result.json" in prompt
-    assert "exactly one evidence-linked revised Python controller plugin" in prompt
-    assert "requires new control flow or geometry logic" in prompt
-    assert "Do not blind-repeat" in prompt
+    assert "--repair-proposal-json" in prompt
     assert "do nothing duplicate" in prompt
 
 

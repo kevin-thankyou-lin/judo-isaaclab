@@ -21,6 +21,11 @@ from typing import Any
 
 import numpy as np
 
+from judo_isaaclab.putpot_repair_policy import (
+    DEFAULT_POLICY,
+    write_source_demo_card,
+)
+
 from run_three_task_asset_campaign import (
     _atomic_json,
     _command,
@@ -447,8 +452,11 @@ def refresh_ledger(
         "campaign": str(output_root.resolve()),
         "policy": (
             "target-direct geometry-conditioned deterministic semantic program per task; "
-            "source demonstration supplies phase/contact intent but source semantic success "
-            "is not required; reanchor contact milestones; separate task and motion gates; "
+            "source demonstration card supplies phase/contact intent and object-relative "
+            "frames but source semantic success is not required; enforce earliest-failure "
+            "and robust-latch admission before transport; "
+            "one rollout per causal mechanism and two non-improving attempts per shared "
+            "repair family; reanchor contact milestones; separate task and motion gates; "
             "numbered immutable attempts; preserve hash-verified successes; stop on first "
             "failed pair; PutPot round-robin visits capped at four diagnose-to-repair cycles; "
             "one heavy Isaac process"
@@ -655,6 +663,10 @@ def _putpot_worker_visit(
     code_head = _git_head()
     epoch_root = repair_root / "repair_epochs" / repair_epoch
     epoch_root.mkdir(parents=True, exist_ok=False)
+    source_demo_card_path = epoch_root / "source_demo_card.json"
+    source_demo_card = write_source_demo_card(
+        source_keyframes, source_demo_card_path
+    )
     request_path = epoch_root / "requests.jsonl"
     receipt_path = epoch_root / "worker_receipts.jsonl"
     with open(request_path, "x", encoding="utf-8"):
@@ -671,7 +683,7 @@ def _putpot_worker_visit(
     )
     session_path = epoch_root / "interactive_session.json"
     session = {
-        "schema_version": 3,
+        "schema_version": 4,
         "pair": record["pair_id"],
         "code_head": code_head,
         "repair_root": str(repair_root.resolve()),
@@ -679,6 +691,8 @@ def _putpot_worker_visit(
         "repair_epoch": repair_epoch,
         "first_lifetime_attempt": first_number,
         "attempt_limit": attempt_limit,
+        "source_demo_card": source_demo_card,
+        "repair_policy": dict(DEFAULT_POLICY),
         "initial_controller_plugin_py": str(
             (
                 Path(initial_controller_plugin_py)

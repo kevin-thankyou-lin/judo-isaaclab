@@ -81,6 +81,34 @@ def test_putpot_rendered_worker_accepts_without_second_isaac_launch(
 ):
     module = _module()
     monkeypatch.setattr(module, "_git_head", lambda: "candidate-head")
+
+    def fake_source_card(_source_keyframes, output):
+        value = {
+            "schema_version": 1,
+            "source_dataset": "/source.hdf5",
+            "source_dataset_sha256": "a" * 64,
+            "source_assets": {"pot": {}, "cooktop": {}},
+            "stage_sequence": ["staged_bilateral_acquisition"],
+            "contact_order": ["left", "right"],
+            "semantic_frames": {},
+            "latch_contract": {},
+            "lift_direction_in_source_world": [0.0, 0.0, 1.0],
+            "transport_contract": {
+                "frame": "observed_pot_pose",
+                "preserve_loaded_object_local_grasp_transforms": True,
+                "zero_jump_at_handoff": True,
+            },
+            "release_contract": {},
+        }
+        output.write_text(json.dumps(value), encoding="utf-8")
+        return {
+            "path": str(output.resolve()),
+            "sha256": module._sha256(output),
+            "schema_version": 1,
+            "contact_order": ["left", "right"],
+        }
+
+    monkeypatch.setattr(module, "write_source_demo_card", fake_source_card)
     revised_spec = tmp_path / "revised_spec.json"
     revised = json.loads(
         (module.REPO_ROOT / "configs/putpot_semantic_program_v4.json").read_text()

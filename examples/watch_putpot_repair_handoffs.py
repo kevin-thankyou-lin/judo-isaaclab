@@ -102,6 +102,9 @@ def inspect_epoch(receipt_path, *, active_worker_pid=None):
         "latest_program_spec_sha256": (
             latest.get("program_spec", {}).get("sha256") if latest else None
         ),
+        "source_demo_card": session.get("source_demo_card"),
+        "repair_policy": session.get("repair_policy"),
+        "latest_repair_evidence": latest.get("repair_evidence") if latest else None,
         "ready_since_epoch_s": ready_since,
         "worker_pid": active_worker_pid,
     }
@@ -188,31 +191,20 @@ def _prompt(boundary: dict[str, Any]) -> str:
             f"Pair {boundary['pair']} acknowledged "
             f"{boundary['attempts_completed']}/{boundary['attempt_limit']}; inspect "
             f"{boundary['latest_result_json']}, its trace, and the synchronized "
-            "skill.mp4; compare the prior cycle. State FIRST_FAILED_STAGE, "
-            "PRIMARY_METRIC_BEFORE_AND_AFTER, one falsifiable HYPOTHESIS, "
-            "EXPECTED_DELTA, REPAIR_FAMILY, and SCOPE=local_or_structural. For a "
-            "grasp miss reconstruct FIRST_CONTACT_ARM, FIRST_CONTACT_STEP, "
-            "CONTACT_ORDER, PREGRASP_OBJECT_MOTION, "
-            "OBJECT_MOTION_BEFORE_PEER_CONTACT, and per-pad force/contact windows. "
-            "If motion is material before peer arrival, the earliest contacting "
-            "arm is upstream; do not tune the downstream wrist against its "
-            "displaced target. State an evidence-derived object-motion abort "
-            "threshold and use a safer standoff, contact-gated stop/backoff, "
-            "ordering, synchronized acquisition, or observed-pose reanchoring. "
-            "Gate transport on sustained dual-pad contact for a stated validation "
-            "window. A new hash does not prove physical progress. Use a local "
-            "repair only when the upstream approach/contact frame is correct and "
-            "the residual is within its authority. If two attempts in one repair "
-            "family fail at the same stage without material improvement in the "
-            "primary metric, abandon "
-            "that family: make a structural Python change to the upstream "
-            "approach, contact frame, or trajectory primitive, or rotate. Submit "
-            "exactly one evidence-linked revised Python controller plugin and/or "
-            f"spec through {boundary['session_json']}. Prefer controller code when "
-            "the failure requires new control flow or geometry logic. Do not "
-            "blind-repeat, spend "
-            "another cycle on an exhausted repair family, weaken gates, or restart "
-            "Isaac."
+            "skill.mp4. Return first to SOURCE_DEMO_CARD="
+            f"{(boundary.get('source_demo_card') or {}).get('path')}; compare its "
+            "contact order and object-relative frames to the failed trace. The "
+            "receipt's EARLIEST_FAILED_STAGE="
+            f"{(boundary.get('latest_repair_evidence') or {}).get('earliest_failed_stage')} "
+            "is authoritative: do not tune a later stage. Transport is inadmissible "
+            "until the trace passes the centered, force-backed robust-latch gate. "
+            "Choose one shared repair-library family and one never-used causal "
+            "mechanism; state a falsifiable hypothesis and end-to-end expected task "
+            "delta. Write a repair-proposal JSON citing the source-card hash and "
+            "latest request, then submit exactly one revised controller/spec plus "
+            f"--repair-proposal-json through {boundary['session_json']}. The queue "
+            "will reject reused mechanisms, wrong-stage tuning, and a family after "
+            "two non-improving attempts. Do not weaken gates or restart Isaac."
         )
     return (
         "Continue the terminal PutPot campaign. The previous asset visit has "

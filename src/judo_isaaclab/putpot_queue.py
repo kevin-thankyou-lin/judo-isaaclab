@@ -10,6 +10,11 @@ from typing import Any
 
 from .putpot_program_spec import load_program_spec
 from .putpot_controller_protocol import sha256_file
+from .putpot_repair_policy import (
+    load_repair_proposal,
+    load_source_demo_card,
+    validate_repair_admission,
+)
 from .putpot_runtime import (
     append_jsonl,
     read_jsonl,
@@ -62,6 +67,7 @@ def submit_program_request(
     program_spec_json: str | os.PathLike[str],
     *,
     controller_plugin_py: str | os.PathLike[str] | None = None,
+    repair_proposal_json: str | os.PathLike[str] | None = None,
     ambiguity_reason: str | None = None,
 ) -> dict[str, Any]:
     """Append one immutable spec and reloadable Python controller revision."""
@@ -76,6 +82,34 @@ def submit_program_request(
     cycle = len(queued_attempts) + 1
     if cycle > int(session["attempt_limit"]):
         raise ValueError("PutPot diagnose-to-repair cycle limit exceeded")
+
+    source_demo_card = session.get("source_demo_card")
+    repair_policy = session.get("repair_policy")
+    proposal = None
+    if repair_policy is not None:
+        if int(session["attempt_limit"]) > int(
+            repair_policy["maximum_attempts_per_visit"]
+        ):
+            raise ValueError("session attempt limit exceeds source-first policy")
+        if not isinstance(source_demo_card, dict):
+            raise ValueError("source-first session has no source-demo card")
+        card = load_source_demo_card(source_demo_card["path"])
+        if source_demo_card.get("sha256") != sha256_file(source_demo_card["path"]):
+            raise ValueError("source-demo card hash changed")
+        if card["schema_version"] != source_demo_card.get("schema_version"):
+            raise ValueError("source-demo card receipt schema mismatch")
+        if cycle == 1 and repair_proposal_json is not None:
+            raise ValueError("baseline request cannot carry a repair proposal")
+        if cycle > 1:
+            if repair_proposal_json is None:
+                raise ValueError("post-baseline request requires a repair proposal")
+            proposal = load_repair_proposal(repair_proposal_json)
+            validate_repair_admission(
+                proposal,
+                session=session,
+                prior_requests=queued_attempts,
+                prior_receipts=receipts,
+            )
 
     source_spec = load_program_spec(program_spec_json)
     previous = receipts[-1] if receipts else None
@@ -131,6 +165,23 @@ def submit_program_request(
     if plugin_sha256 != source_plugin_sha256:
         raise RuntimeError("immutable PutPot controller-plugin hash changed")
 
+    immutable_proposal = None
+    proposal_sha256 = None
+    if proposal is not None:
+        proposal_root = Path(session["epoch_root"]) / "repair_proposals"
+        proposal_root.mkdir(parents=True, exist_ok=True)
+        immutable_proposal = proposal_root / f"proposal_{cycle:03d}.json"
+        with open(repair_proposal_json, "rb") as source, open(
+            immutable_proposal, "xb"
+        ) as target:
+            shutil.copyfileobj(source, target)
+            target.flush()
+            os.fsync(target.fileno())
+        immutable_value = load_repair_proposal(immutable_proposal)
+        if immutable_value != proposal:
+            raise RuntimeError("immutable PutPot repair-proposal copy changed")
+        proposal_sha256 = sha256_file(immutable_proposal)
+
     argv = list(session["static_argv"])
     video_path = None
     if "--render" in argv:
@@ -180,6 +231,12 @@ def submit_program_request(
         "program_spec_sha256": spec.sha256,
         "controller_plugin_py": str(immutable_plugin.resolve()),
         "controller_plugin_sha256": plugin_sha256,
+        "source_demo_card": source_demo_card,
+        "repair_proposal": proposal,
+        "repair_proposal_json": (
+            None if immutable_proposal is None else str(immutable_proposal.resolve())
+        ),
+        "repair_proposal_sha256": proposal_sha256,
         "ambiguity_reason": ambiguity_reason,
     }
     append_jsonl(session["request_jsonl"], request)

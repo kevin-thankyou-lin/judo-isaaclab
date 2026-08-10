@@ -35,6 +35,12 @@ from judo_isaaclab.putpot_runtime import (
 )
 from judo_isaaclab.putpot_program_spec import load_program_spec
 from judo_isaaclab.putpot_controller_protocol import sha256_file
+from judo_isaaclab.putpot_repair_policy import (
+    load_repair_proposal,
+    load_source_demo_card,
+    repair_evidence,
+    training_data_route,
+)
 import run_putpot_skill_program as putpot
 
 
@@ -195,6 +201,7 @@ def main() -> None:
                     },
                 )
                 break
+            index = completed + 1
             try:
                 program_spec = load_program_spec(request["program_spec_json"])
                 if program_spec.sha256 != request["program_spec_sha256"]:
@@ -211,6 +218,22 @@ def main() -> None:
                     raise ValueError(
                         "request controller-plugin hash does not match file bytes"
                     )
+                source_demo_card = request.get("source_demo_card")
+                if source_demo_card is not None:
+                    loaded_card = load_source_demo_card(source_demo_card["path"])
+                    if sha256_file(source_demo_card["path"]) != source_demo_card["sha256"]:
+                        raise ValueError("request source-demo card hash changed")
+                    if loaded_card["schema_version"] != source_demo_card["schema_version"]:
+                        raise ValueError("request source-demo card schema mismatch")
+                    proposal_path = request.get("repair_proposal_json")
+                    if index > 1 and not proposal_path:
+                        raise ValueError("post-baseline request has no repair proposal")
+                    if proposal_path:
+                        loaded_proposal = load_repair_proposal(proposal_path)
+                        if sha256_file(proposal_path) != request.get("repair_proposal_sha256"):
+                            raise ValueError("request repair-proposal hash changed")
+                        if loaded_proposal != request.get("repair_proposal"):
+                            raise ValueError("request repair-proposal receipt mismatch")
                 previous_plugin_sha256 = (
                     None
                     if previous_attempt_receipt is None
@@ -249,7 +272,6 @@ def main() -> None:
                     },
                 )
                 continue
-            index = completed + 1
             attempt_started_monotonic = time.monotonic()
             started = datetime.now(timezone.utc).isoformat()
             result_path = Path(request["result_json"])
@@ -362,6 +384,15 @@ def main() -> None:
                 if isinstance(runtime_receipt, dict)
                 else {}
             )
+            repair_summary = None
+            if isinstance(result, dict):
+                try:
+                    repair_summary = repair_evidence(result)
+                except (KeyError, OSError, TypeError, ValueError) as exc:
+                    error = f"ValueError: invalid repair evidence: {exc}"
+                    classification = diagnostic_classification(result, error)
+                    recommendation = render_recommendation(result, error)
+            data_route = training_data_route(result, error)
             completed += 1
             receipt = {
                 "type": "attempt",
@@ -394,6 +425,11 @@ def main() -> None:
                 "failed_stage_program_parameter_observations": (
                     failed_stage_observations
                 ),
+                "source_demo_card": request.get("source_demo_card"),
+                "repair_proposal": request.get("repair_proposal"),
+                "repair_proposal_sha256": request.get("repair_proposal_sha256"),
+                "repair_evidence": repair_summary,
+                "training_data_route": data_route,
                 "ambiguity_reason": request.get("ambiguity_reason"),
                 "acknowledged": True,
             }
