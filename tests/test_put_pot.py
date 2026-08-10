@@ -24,6 +24,7 @@ from judo_isaaclab.put_pot import (
     YAM_LEFT_FINGER_PIVOT_LOCAL_M,
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     apply_static_precontact_jaw_axis_translation,
+    apply_precontact_source_frame_correction,
     apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
@@ -54,6 +55,7 @@ from judo_isaaclab.put_pot import (
     handle_axial_contact_scale,
     maximum_bimanual_position_step_m,
     measure_handle_center_in_open_jaw,
+    source_contact_frame_grasp_pose,
     milestone_reanchor_within_authored_clearance,
     mirror_handle_position_in_receiving_jaw_frame,
     orient_loaded_jaw_around_authored_handle,
@@ -1137,6 +1139,75 @@ def test_open_jaw_measurement_predicts_positive_pad0_to_pad1_translation():
     )
     assert axis == pytest.approx([1.0, 0.0, 0.0])
     assert residual == pytest.approx(0.030)
+
+
+def test_source_contact_frame_pose_centers_jaw_and_predicts_pad_margins():
+    source_wrist = _pose(x=0.1, y=0.02, z=0.03)
+    source_contact = _pose(x=0.1)
+    target_root = _pose(x=0.5, y=-0.2, z=0.1)
+    target_contact = _pose(x=0.1)
+    calibration_wrist = _pose()
+    centers = np.asarray([[0.0, -0.05, -0.01], [0.0, 0.05, -0.01]])
+    axes = np.asarray([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
+    with pytest.raises(ValueError, match="jaw centering exceeds"):
+        source_contact_frame_grasp_pose(
+            source_wrist,
+            _pose(),
+            target_root,
+            source_contact,
+            target_contact,
+            calibration_wrist,
+            centers,
+            axes,
+        )
+    # Raise the bound explicitly for this synthetic 20 mm residual.
+    desired, receipt = source_contact_frame_grasp_pose(
+        source_wrist,
+        _pose(),
+        target_root,
+        source_contact,
+        target_contact,
+        calibration_wrist,
+        centers,
+        axes,
+        maximum_jaw_centering_m=0.021,
+    )
+    assert desired[:3] == pytest.approx([0.6, -0.2, 0.13])
+    assert receipt["signed_jaw_centering_m"] == pytest.approx(0.02)
+    assert receipt["jaw_center_residual_after_m"] == pytest.approx(0.0)
+    assert receipt["predicted_contact_pad_fractions"] == pytest.approx(
+        [0.5 - 0.02 / YAM_FINGER_PAD_AXIS_LENGTH_M] * 2
+    )
+
+
+def test_source_contact_frame_correction_changes_only_left_acquisition():
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(x=0.1, y=1.0),
+        _pose(x=0.2),
+        _pose(x=0.2, y=1.0),
+        approach_steps=4,
+        left_close_steps=3,
+        right_close_steps=2,
+        simultaneous=True,
+    )
+    trajectory = program.build()
+    half_turn = np.asarray([0.9238795325, 0.0, 0.3826834324, 0.0])
+    desired = np.asarray([0.23, -0.02, 0.01, *half_turn])
+    corrected, receipt = apply_precontact_source_frame_correction(
+        trajectory,
+        desired,
+        maximum_position_correction_m=0.05,
+    )
+    anchor = trajectory.waypoint_steps["left_handle_grasp"]
+    assert corrected.left_poses[anchor] == pytest.approx(desired)
+    assert corrected.right_poses == pytest.approx(trajectory.right_poses)
+    assert corrected.grippers == pytest.approx(trajectory.grippers)
+    assert receipt["position_correction_norm_m"] == pytest.approx(
+        np.linalg.norm([0.03, -0.02, 0.01])
+    )
+    assert receipt["orientation_correction_deg"] == pytest.approx(45.0)
 
 
 def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():

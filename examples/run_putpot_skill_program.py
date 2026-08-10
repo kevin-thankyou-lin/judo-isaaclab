@@ -96,6 +96,22 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         help="Zero-based open-jaw sample in the immutable calibration trace.",
     )
+    parser.add_argument(
+        "--target-left-source-contact-calibration-trace",
+        help=(
+            "Immutable failed acquisition trace used only to recover the rigid "
+            "open-jaw pad frame for a source-contact-frame correction."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-source-contact-calibration-step",
+        type=int,
+        help="Zero-based open-jaw sample for the source-contact-frame correction.",
+    )
+    parser.add_argument(
+        "--target-left-source-contact-critic-json",
+        help="Immutable critic receipt that owns the calibration trace.",
+    )
     return parser.parse_args(argv)
 
 
@@ -633,6 +649,14 @@ def _build_skill(
     right_grasp = transfer_initial("right_handle_grasp", "right")
     left_pregrasp = transfer_initial("left_pregrasp", "left")
     right_pregrasp = transfer_initial("right_pregrasp", "right")
+    for arm in ("left", "right"):
+        source_contact, target_contact = contact_frames[arm]
+        grasp_geometry[arm]["source_contact_frame_local"] = (
+            source_contact.tolist()
+        )
+        grasp_geometry[arm]["target_contact_frame_local"] = (
+            target_contact.tolist()
+        )
     from judo_isaaclab.put_pot import (
         geometry_conditioned_target_handle_symmetry,
     )
@@ -1189,6 +1213,31 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("--acquisition-only requires an immutable source-demo card")
     if calibration_requested and not args.acquisition_only:
         raise ValueError("static precontact calibration is acquisition-only")
+    source_contact_requested = any(
+        value is not None
+        for value in (
+            args.target_left_source_contact_calibration_trace,
+            args.target_left_source_contact_calibration_step,
+            args.target_left_source_contact_critic_json,
+        )
+    )
+    if source_contact_requested and not all(
+        value is not None
+        for value in (
+            args.target_left_source_contact_calibration_trace,
+            args.target_left_source_contact_calibration_step,
+            args.target_left_source_contact_critic_json,
+        )
+    ):
+        raise ValueError(
+            "source-contact correction requires trace, sample step, and critic"
+        )
+    if source_contact_requested and not args.acquisition_only:
+        raise ValueError("source-contact correction is acquisition-only")
+    if source_contact_requested and calibration_requested:
+        raise ValueError(
+            "source-contact correction cannot reuse static translation calibration"
+        )
     if (
         args.support_clearance_m < 0.0
         or args.transport_clearance_m <= 0.0
@@ -1428,6 +1477,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         target_left_grasp_orientation_override_local_wxyz = None
         static_precontact_jaw_translation = None
+        source_contact_frame_correction = None
         if trajectory is not None:
             from judo_isaaclab.put_pot import (
                 MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
@@ -1555,6 +1605,135 @@ def main(argv: list[str] | None = None) -> None:
             handle_grasp_geometry["left"][
                 "static_precontact_jaw_translation"
             ] = static_precontact_jaw_translation
+        if source_contact_requested:
+            from judo_isaaclab.put_pot import (
+                apply_precontact_source_frame_correction,
+                source_contact_frame_grasp_pose,
+            )
+
+            calibration_path = Path(
+                args.target_left_source_contact_calibration_trace
+            ).resolve()
+            critic_path = Path(
+                args.target_left_source_contact_critic_json
+            ).resolve()
+            if not calibration_path.is_file():
+                raise FileNotFoundError(
+                    f"source-contact calibration trace is missing: {calibration_path}"
+                )
+            if not critic_path.is_file():
+                raise FileNotFoundError(
+                    f"source-contact critic is missing: {critic_path}"
+                )
+            with open(critic_path, encoding="utf-8") as stream:
+                critic = json.load(stream)
+            if (
+                critic.get("classification") != "failure_or_critic"
+                or critic.get("gate_decision", {}).get(
+                    "robust_bilateral_latch"
+                )
+                is not False
+                or critic.get("artifacts", {}).get("trace_sha256")
+                != _sha256(calibration_path)
+            ):
+                raise ValueError(
+                    "source-contact critic does not own a failed calibration trace"
+                )
+            with np.load(calibration_path, allow_pickle=False) as calibration:
+                required_arrays = {
+                    "left_eef_poses",
+                    "left_pad_centers_world",
+                    "left_pad_axes_world",
+                }
+                if not required_arrays.issubset(calibration.files):
+                    raise ValueError(
+                        "source-contact calibration trace lacks wrist/pad geometry"
+                    )
+                calibration_step = int(
+                    args.target_left_source_contact_calibration_step
+                )
+                if not 0 <= calibration_step < len(
+                    calibration["left_eef_poses"]
+                ):
+                    raise ValueError(
+                        "source-contact calibration step is out of range"
+                    )
+                calibration_wrist = np.asarray(
+                    calibration["left_eef_poses"][calibration_step],
+                    dtype=np.float64,
+                )
+                calibration_pad_centers = np.asarray(
+                    calibration["left_pad_centers_world"][calibration_step],
+                    dtype=np.float64,
+                )
+                calibration_pad_axes = np.asarray(
+                    calibration["left_pad_axes_world"][calibration_step],
+                    dtype=np.float64,
+                )
+            source_left_grasp = keyframes["frames"]["left_handle_grasp"]
+            desired_grasp, frame_receipt = source_contact_frame_grasp_pose(
+                source_left_grasp["left_eef_pose"],
+                source_left_grasp["pot_pose"],
+                target_geometry.root_pose,
+                handle_grasp_geometry["left"][
+                    "source_contact_frame_local"
+                ],
+                handle_grasp_geometry["left"][
+                    "target_contact_frame_local"
+                ],
+                calibration_wrist,
+                calibration_pad_centers,
+                calibration_pad_axes,
+            )
+            predicted_fractions = np.asarray(
+                frame_receipt["predicted_contact_pad_fractions"],
+                dtype=np.float64,
+            )
+            if not np.all(
+                np.isfinite(predicted_fractions)
+                & (predicted_fractions >= 0.10)
+                & (predicted_fractions <= 0.90)
+            ):
+                raise ValueError(
+                    "source-contact prediction does not center both pad contacts"
+                )
+            target_handle_size = (
+                target_parts.negative_handle_size
+                if int(handle_grasp_geometry["left"]["handle_side"]) < 0
+                else target_parts.positive_handle_size
+            )
+            position_bound = float(
+                np.linalg.norm(target_handle_size) + args.collision_clearance_m
+            )
+            trajectory, trajectory_receipt = (
+                apply_precontact_source_frame_correction(
+                    trajectory,
+                    desired_grasp,
+                    maximum_position_correction_m=position_bound,
+                )
+            )
+            source_contact_frame_correction = {
+                "mechanism": "source_local_contact_frame_wrist_correction",
+                "calibration_trace": {
+                    "path": str(calibration_path),
+                    "sha256": _sha256(calibration_path),
+                    "sample_step": calibration_step,
+                },
+                "critic": {
+                    "path": str(critic_path),
+                    "sha256": _sha256(critic_path),
+                },
+                "source_keyframe": {
+                    "name": "left_handle_grasp",
+                    "sample_index": int(source_left_grasp["sample_index"]),
+                },
+                "right_trajectory_unchanged": True,
+                "frame_measurement": frame_receipt,
+                "trajectory_correction": trajectory_receipt,
+            }
+            handle_grasp_geometry["left"][
+                "source_contact_frame_correction"
+            ] = source_contact_frame_correction
         joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
         # Centering deliberately departs from the edge-biased source support
         # pose, even when source and target geometry are identical.  Track the
@@ -3604,6 +3783,9 @@ def main(argv: list[str] | None = None) -> None:
                 "acquisition_latch": acquisition_latch,
                 "static_precontact_jaw_translation": (
                     static_precontact_jaw_translation
+                ),
+                "source_contact_frame_correction": (
+                    source_contact_frame_correction
                 ),
                 "milestone_feedback_horizon_steps": (
                     milestone_feedback_horizon_steps

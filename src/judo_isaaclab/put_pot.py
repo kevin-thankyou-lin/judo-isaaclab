@@ -331,6 +331,261 @@ def apply_static_precontact_jaw_axis_translation(
     )
 
 
+def source_contact_frame_grasp_pose(
+    source_wrist_pose: Any,
+    source_root_pose: Any,
+    target_root_pose: Any,
+    source_contact_frame_local: Any,
+    target_contact_frame_local: Any,
+    calibration_wrist_pose: Any,
+    calibration_pad_centers_world: Any,
+    calibration_pad_axes_world: Any,
+    *,
+    maximum_jaw_centering_m: float = 0.010,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Map the demonstrated wrist/contact frame and center its open target jaw.
+
+    The calibration trace contributes only rigid gripper geometry: both pad
+    centers and tip-to-base axes expressed in the wrist frame.  The target
+    wrist is transferred through the matched *local* source/target handle
+    frames, then translated by the small residual that places the target
+    contact origin on the open-jaw midplane.  This is deliberately distinct
+    from translating the old wrist along a whole-handle bounding-box axis.
+    """
+
+    source_wrist = _pose(source_wrist_pose, "source_wrist_pose")
+    source_root = _pose(source_root_pose, "source_root_pose")
+    target_root = _pose(target_root_pose, "target_root_pose")
+    source_contact_local = _pose(
+        source_contact_frame_local, "source_contact_frame_local"
+    )
+    target_contact_local = _pose(
+        target_contact_frame_local, "target_contact_frame_local"
+    )
+    calibration_wrist = _pose(
+        calibration_wrist_pose, "calibration_wrist_pose"
+    )
+    pad_centers = np.asarray(calibration_pad_centers_world, dtype=np.float64)
+    pad_axes = np.asarray(calibration_pad_axes_world, dtype=np.float64)
+    if pad_centers.shape != (2, 3) or not np.all(np.isfinite(pad_centers)):
+        raise ValueError("calibration pad centers must contain two finite points")
+    if pad_axes.shape != (2, 3) or not np.all(np.isfinite(pad_axes)):
+        raise ValueError("calibration pad axes must contain two finite axes")
+    if not np.isfinite(maximum_jaw_centering_m) or maximum_jaw_centering_m < 0.0:
+        raise ValueError("maximum jaw centering must be finite and nonnegative")
+
+    source_contact_world = compose_pose(source_root, source_contact_local)
+    target_contact_world = compose_pose(target_root, target_contact_local)
+    mapped = transfer_pose(
+        source_wrist, source_contact_world, target_contact_world
+    )
+    calibration_inverse = inverse_pose(calibration_wrist)
+    pad_centers_local = np.stack(
+        [
+            compose_pose(
+                calibration_inverse,
+                [*center, 1.0, 0.0, 0.0, 0.0],
+            )[:3]
+            for center in pad_centers
+        ]
+    )
+    pad_axes_local = np.stack(
+        [
+            quaternion_rotate(calibration_inverse[3:], axis)
+            for axis in pad_axes
+        ]
+    )
+    pad_axes_local /= np.linalg.norm(pad_axes_local, axis=1)[:, None]
+
+    def predict_pad_frame(wrist: np.ndarray):
+        centers = np.stack(
+            [
+                wrist[:3] + quaternion_rotate(wrist[3:], center)
+                for center in pad_centers_local
+            ]
+        )
+        axes = np.stack(
+            [quaternion_rotate(wrist[3:], axis) for axis in pad_axes_local]
+        )
+        axes /= np.linalg.norm(axes, axis=1)[:, None]
+        jaw_axis = centers[1] - centers[0]
+        jaw_separation = float(np.linalg.norm(jaw_axis))
+        if jaw_separation < MISSING_FINGER_JAW_AXIS_MIN_M:
+            raise ValueError("calibration jaw is not open")
+        jaw_axis /= jaw_separation
+        mean_pad_axis = np.mean(axes, axis=0)
+        mean_pad_axis /= np.linalg.norm(mean_pad_axis)
+        return centers, axes, jaw_axis, mean_pad_axis, jaw_separation
+
+    mapped_centers, _, mapped_jaw, _, _ = predict_pad_frame(mapped)
+    signed_centering = float(
+        np.dot(
+            np.mean(mapped_centers, axis=0) - target_contact_world[:3],
+            mapped_jaw,
+        )
+    )
+    if abs(signed_centering) > maximum_jaw_centering_m + 1.0e-12:
+        raise ValueError("source contact-frame jaw centering exceeds geometry bound")
+    corrected = mapped.copy()
+    centering_translation = -signed_centering * mapped_jaw
+    corrected[:3] += centering_translation
+    centers, axes, jaw_axis, mean_pad_axis, jaw_separation = predict_pad_frame(
+        corrected
+    )
+    contact_origin = target_contact_world[:3]
+    predicted_fractions = np.asarray(
+        [
+            0.5
+            + np.dot(contact_origin - center, axis)
+            / YAM_FINGER_PAD_AXIS_LENGTH_M
+            for center, axis in zip(centers, axes)
+        ],
+        dtype=np.float64,
+    )
+    target_tangent = quaternion_rotate(
+        target_contact_world[3:], np.asarray([1.0, 0.0, 0.0])
+    )
+
+    def acute_angle_degrees(left: np.ndarray, right: np.ndarray) -> float:
+        cosine = abs(
+            float(np.dot(left, right))
+            / (float(np.linalg.norm(left)) * float(np.linalg.norm(right)))
+        )
+        return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+    return corrected, {
+        "source_contact_frame_local": source_contact_local.tolist(),
+        "target_contact_frame_local": target_contact_local.tolist(),
+        "source_wrist_pose": source_wrist.tolist(),
+        "mapped_target_wrist_pose_before_centering": mapped.tolist(),
+        "target_wrist_pose": corrected.tolist(),
+        "jaw_axis_world": jaw_axis.tolist(),
+        "mean_pad_axis_world": mean_pad_axis.tolist(),
+        "target_handle_tangent_world": target_tangent.tolist(),
+        "jaw_to_handle_tangent_deg": acute_angle_degrees(
+            jaw_axis, target_tangent
+        ),
+        "pad_to_handle_tangent_deg": acute_angle_degrees(
+            mean_pad_axis, target_tangent
+        ),
+        "predicted_pad_centers_world": centers.tolist(),
+        "predicted_pad_axes_world": axes.tolist(),
+        "predicted_contact_pad_fractions": predicted_fractions.tolist(),
+        "jaw_separation_m": jaw_separation,
+        "signed_jaw_centering_m": signed_centering,
+        "jaw_centering_translation_world_m": centering_translation.tolist(),
+        "maximum_jaw_centering_m": float(maximum_jaw_centering_m),
+        "jaw_centering_bound_margin_m": float(
+            maximum_jaw_centering_m - abs(signed_centering)
+        ),
+        "jaw_center_residual_after_m": float(
+            np.dot(
+                np.mean(centers, axis=0) - target_contact_world[:3],
+                jaw_axis,
+            )
+        ),
+    }
+
+
+def apply_precontact_source_frame_correction(
+    trajectory: SkillTrajectory,
+    desired_left_grasp_pose: Any,
+    *,
+    maximum_position_correction_m: float,
+    maximum_orientation_correction_rad: float = 0.5 * np.pi,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Ramp one measured source-contact SE(3) correction into acquisition only."""
+
+    desired = _pose(desired_left_grasp_pose, "desired_left_grasp_pose")
+    values = np.asarray(
+        [maximum_position_correction_m, maximum_orientation_correction_rad],
+        dtype=np.float64,
+    )
+    if np.any(~np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("source-frame correction bounds must be finite and nonnegative")
+    steps = trajectory.waypoint_steps
+    anchor = steps.get("left_handle_grasp")
+    pregrasp_end = steps.get("left_pregrasp", steps.get("bimanual_pregrasp"))
+    grasp_candidates = [
+        steps.get(name)
+        for name in (
+            "left_handle_grasp",
+            "right_handle_grasp",
+            "bimanual_contact_hold",
+        )
+        if steps.get(name) is not None
+    ]
+    ramp_start = steps.get("right_handle_grasp", -1) + 1 if "left_pregrasp" in steps else 0
+    if (
+        anchor is None
+        or pregrasp_end is None
+        or not grasp_candidates
+        or not 0 <= ramp_start <= pregrasp_end <= anchor
+    ):
+        raise ValueError("trajectory has no ordered left acquisition window")
+    grasp_end = max(grasp_candidates)
+    current = trajectory.left_poses[anchor].copy()
+    translation = desired[:3] - current[:3]
+    translation_norm = float(np.linalg.norm(translation))
+    if translation_norm > maximum_position_correction_m + 1.0e-12:
+        raise ValueError("source contact-frame position correction exceeds geometry bound")
+    current_inverse_quaternion = current[3:] * np.asarray(
+        [1.0, -1.0, -1.0, -1.0]
+    )
+    rotation = quaternion_multiply(desired[3:], current_inverse_quaternion)
+    rotation /= np.linalg.norm(rotation)
+    orientation_rad = float(
+        2.0 * np.arccos(np.clip(abs(rotation[0]), -1.0, 1.0))
+    )
+    if orientation_rad > maximum_orientation_correction_rad + 1.0e-12:
+        raise ValueError("source contact-frame orientation correction exceeds bound")
+
+    left = trajectory.left_poses.copy()
+    fractions = _minimum_jerk_fraction(pregrasp_end - ramp_start + 1)
+    partial_rotations = _slerp(
+        np.asarray([1.0, 0.0, 0.0, 0.0]), rotation, fractions
+    )
+    for offset, step in enumerate(range(ramp_start, pregrasp_end + 1)):
+        left[step, :3] += fractions[offset] * translation
+        left[step, 3:] = quaternion_multiply(
+            partial_rotations[offset], left[step, 3:]
+        )
+        left[step, 3:] /= np.linalg.norm(left[step, 3:])
+    for step in range(pregrasp_end + 1, grasp_end + 1):
+        left[step, :3] += translation
+        left[step, 3:] = quaternion_multiply(rotation, left[step, 3:])
+        left[step, 3:] /= np.linalg.norm(left[step, 3:])
+
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=trajectory.right_poses.copy(),
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "current_left_grasp_pose": current.tolist(),
+            "desired_left_grasp_pose": desired.tolist(),
+            "position_correction_world_m": translation.tolist(),
+            "position_correction_norm_m": translation_norm,
+            "maximum_position_correction_m": float(
+                maximum_position_correction_m
+            ),
+            "orientation_correction_wxyz": rotation.tolist(),
+            "orientation_correction_rad": orientation_rad,
+            "orientation_correction_deg": float(np.degrees(orientation_rad)),
+            "maximum_orientation_correction_rad": float(
+                maximum_orientation_correction_rad
+            ),
+            "ramp_start_step": int(ramp_start),
+            "pregrasp_end_step": int(pregrasp_end),
+            "left_grasp_anchor_step": int(anchor),
+            "grasp_end_step": int(grasp_end),
+        },
+    )
+
+
 def _linear_contact_feedback_poses(
     start: Any,
     target: Any,
