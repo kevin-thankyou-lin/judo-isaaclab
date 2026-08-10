@@ -30,7 +30,11 @@ def collision_components(asset_path: str) -> tuple[np.ndarray, ...]:
     if not stage:
         raise ValueError(f"could not open USD stage: {asset_path}")
     result = []
-    for prim in stage.TraverseAll():
+    # IsaacLab's current URDF converter authors visual and collision groups as
+    # instanceable references even when the top-level asset is requested as
+    # non-instanceable.  Traverse instance proxies so those authored collision
+    # meshes remain semantic evidence instead of being mistaken for absence.
+    for prim in Usd.PrimRange.Stage(stage, Usd.TraverseInstanceProxies()):
         if not prim.IsA(UsdGeom.Mesh) or "/collisions/" not in str(prim.GetPath()):
             continue
         points = np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=np.float64)
