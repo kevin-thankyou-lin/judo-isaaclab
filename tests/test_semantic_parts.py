@@ -64,6 +64,23 @@ def test_infer_pot_parts_uses_handle_overhang_not_asset_id():
     ) == (-1, 1)
 
 
+def test_infer_pot_parts_excludes_broad_tall_shell_from_handles():
+    components = [
+        _box((-0.09, -0.09, -0.002), (0.09, 0.09, 0.002)),
+        _box((-0.102, -0.102, 0.0), (0.102, 0.102, 0.122)),
+        _box((0.102, -0.022, 0.035), (0.176, 0.022, 0.085)),
+        _box((-0.176, -0.022, 0.035), (-0.102, 0.022, 0.085)),
+    ]
+
+    parts = infer_pot_parts(components)
+
+    np.testing.assert_allclose(parts.body_xy_min, [-0.102, -0.102])
+    np.testing.assert_allclose(parts.body_xy_max, [0.102, 0.102])
+    np.testing.assert_allclose(parts.positive_handle_frame[:3], [0.139, 0.0, 0.06])
+    np.testing.assert_allclose(parts.negative_handle_frame[:3], [-0.139, 0.0, 0.06])
+    np.testing.assert_allclose(parts.positive_handle_size, [0.074, 0.044, 0.05])
+
+
 def test_pot_handle_contact_frame_uses_nearest_authored_segment_tangent():
     negative = _rod((-0.12, -0.02, 0.01), (-0.19, 0.03, 0.06), radius=0.004)
     positive = _rod((0.12, 0.02, 0.01), (0.19, -0.03, 0.06), radius=0.004)

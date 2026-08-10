@@ -177,6 +177,23 @@ def infer_pot_parts(values: Iterable[object]) -> PotParts:
     all_points = np.concatenate(components)
     global_min, global_max = _bounds(all_points)
     body_min, body_max = _footprint(components)
+    # Some single-link URDFs author the vertical body shell as one tall mesh and
+    # the bottom/interior as a narrower, thin mesh.  The footprint heuristic is
+    # intentionally floor-based, but treating that narrower floor as the whole
+    # body makes the broad shell look like part of *both* handles.  Expand only
+    # with components broad in both horizontal axes; true side handles are
+    # narrow in at least their transverse axis.
+    floor_xy_size = body_max[:2] - body_min[:2]
+    broad_body = []
+    for points in components:
+        minimum, maximum = _bounds(points)
+        xy_size = maximum[:2] - minimum[:2]
+        if np.all(xy_size >= 0.55 * floor_xy_size):
+            broad_body.append(points)
+    if broad_body:
+        broad_min, broad_max = _union_bounds(broad_body)
+        body_min[:2] = np.minimum(body_min[:2], broad_min[:2])
+        body_max[:2] = np.maximum(body_max[:2], broad_max[:2])
     overhang = np.asarray(
         [
             body_min[0] - global_min[0],
