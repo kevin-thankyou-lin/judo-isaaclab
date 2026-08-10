@@ -34,6 +34,66 @@ def _milestone_reanchor_enabled(
     return bool(right_first_close and not forced_right_first_stabilization)
 
 
+def _extend_handle_local_acquisition_window(
+    trajectory,
+    joint_nominal,
+    extension_steps: int,
+    *,
+    maximum_extension_steps: int = 120,
+):
+    """Append a bounded, stationary nominal window for event-gated acquisition."""
+
+    if not 0 <= extension_steps <= maximum_extension_steps:
+        raise ValueError(
+            "handle-local acquisition extension must be in "
+            f"[0, {maximum_extension_steps}]"
+        )
+    if extension_steps == 0:
+        return trajectory, joint_nominal
+    from judo_isaaclab.put_marker import SkillTrajectory
+
+    if "handle_local_acquisition_extension" in trajectory.waypoint_steps:
+        raise ValueError("handle-local acquisition window was already extended")
+    def repeat_pose(pose):
+        return np.repeat(
+            np.asarray(pose, dtype=np.float64)[None], extension_steps, axis=0
+        )
+    extended = SkillTrajectory(
+        left_poses=np.concatenate(
+            (trajectory.left_poses, repeat_pose(trajectory.left_poses[-1]))
+        ),
+        right_poses=np.concatenate(
+            (trajectory.right_poses, repeat_pose(trajectory.right_poses[-1]))
+        ),
+        grippers=np.concatenate(
+            (
+                trajectory.grippers,
+                np.repeat(
+                    np.asarray(trajectory.grippers[-1], dtype=np.float64)[None],
+                    extension_steps,
+                    axis=0,
+                ),
+            )
+        ),
+        stage_names=trajectory.stage_names
+        + ("handle_local_acquisition_extension",) * extension_steps,
+        waypoint_steps={
+            **trajectory.waypoint_steps,
+            "handle_local_acquisition_extension": trajectory.steps
+            + extension_steps
+            - 1,
+        },
+    )
+    nominal = np.asarray(joint_nominal, dtype=np.float64)
+    extended_nominal = np.concatenate(
+        (
+            nominal,
+            np.repeat(nominal[-1][None], extension_steps, axis=0),
+        )
+    )
+    return extended, extended_nominal
+
+
 def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gear-repo", required=True)
@@ -203,6 +263,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Use the same bounded handle-local controller to acquire a robust "
             "right dual-pad latch before enabling the left contact window."
+        ),
+    )
+    parser.add_argument(
+        "--target-handle-local-mpc-acquisition-extension-steps",
+        type=int,
+        default=0,
+        help=(
+            "Bounded event-gated acquisition continuation after the source-timed "
+            "window; valid only with acquisition-only handle-local MPC."
         ),
     )
     return parser.parse_args(argv)
@@ -1931,6 +2000,13 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "right handle-local bootstrap requires handle-local MPC acquisition"
         )
+    if args.target_handle_local_mpc_acquisition_extension_steps:
+        if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
+            raise ValueError(
+                "handle-local acquisition extension requires acquisition-only MPC"
+            )
+        if not 1 <= args.target_handle_local_mpc_acquisition_extension_steps <= 120:
+            raise ValueError("handle-local acquisition extension exceeds 120 frames")
     if (
         args.target_source_left_first_acquisition
         and not args.target_left_source_approach_corridor
@@ -2609,18 +2685,22 @@ def main(argv: list[str] | None = None) -> None:
                         )
                 else:
                     mechanism = (
-                        "right_first_handle_local_receding_horizon_bootstrap"
-                        if args.target_right_handle_local_mpc_bootstrap
+                        "event_gated_handle_local_acquisition_window_extension"
+                        if args.target_handle_local_mpc_acquisition_extension_steps
                         else (
-                            "deterministic_handle_local_receding_horizon_acquisition"
-                            if args.target_handle_local_mpc_acquisition
+                            "right_first_handle_local_receding_horizon_bootstrap"
+                            if args.target_right_handle_local_mpc_bootstrap
                             else (
-                                "right_first_stabilized_source_contact_acquisition"
-                                if args.target_right_first_stabilized_acquisition
+                                "deterministic_handle_local_receding_horizon_acquisition"
+                                if args.target_handle_local_mpc_acquisition
                                 else (
-                                    "source_demo_left_first_acquisition_chronology"
-                                    if args.target_source_left_first_acquisition
-                                    else "source_demo_pregrasp_contact_corridor"
+                                    "right_first_stabilized_source_contact_acquisition"
+                                    if args.target_right_first_stabilized_acquisition
+                                    else (
+                                        "source_demo_left_first_acquisition_chronology"
+                                        if args.target_source_left_first_acquisition
+                                        else "source_demo_pregrasp_contact_corridor"
+                                    )
                                 )
                             )
                         )
@@ -2709,6 +2789,16 @@ def main(argv: list[str] | None = None) -> None:
             )
             if trajectory is not None else None
         )
+        if args.target_handle_local_mpc_acquisition_extension_steps:
+            extension_steps = int(
+                args.target_handle_local_mpc_acquisition_extension_steps
+            )
+            trajectory, joint_nominal = _extend_handle_local_acquisition_window(
+                trajectory,
+                joint_nominal,
+                extension_steps,
+            )
+            grasp_complete_step += extension_steps
         pregrasp_complete_step = (
             trajectory.waypoint_steps["bimanual_pregrasp"]
             if trajectory is not None else None
@@ -5160,6 +5250,16 @@ def main(argv: list[str] | None = None) -> None:
                 ],
                 "source_demo_near_contact_action_authority": False,
                 "source_joint_nominal_weight_in_contact_window": 0.0,
+                "event_gated_acquisition_extension": {
+                    "enabled": bool(
+                        args.target_handle_local_mpc_acquisition_extension_steps
+                    ),
+                    "maximum_allowed_steps": 120,
+                    "executed_steps": int(
+                        args.target_handle_local_mpc_acquisition_extension_steps
+                    ),
+                    "transport_commands": False,
+                },
                 "config": handle_local_mpc_config_receipt(local_mpc_config),
                 "frame_receipts": local_mpc_frame_receipts,
                 "contact_window_frames": len(local_mpc_frame_receipts),
