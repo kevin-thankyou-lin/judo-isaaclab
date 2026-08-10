@@ -440,7 +440,11 @@ def _ik_action(
     import torch
     from isaaclab.utils.math import compute_pose_error, subtract_frame_transforms
 
-    from judo_isaaclab.task_space import damped_least_squares, resolve_end_effector_body_index
+    from judo_isaaclab.task_space import (
+        damped_least_squares,
+        resolve_end_effector_body_index,
+        resolve_link_jacobian,
+    )
 
     action = torch.as_tensor(
         joint_nominal, dtype=torch.float32, device=env.device
@@ -451,8 +455,7 @@ def _ik_action(
     ):
         arm = env.scene[arm_name]
         body_index = resolve_end_effector_body_index(env, arm_name)
-        jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
-        jacobian = arm.root_physx_view.get_jacobians()[:, jacobian_index, :, :6]
+        jacobian = resolve_link_jacobian(arm, body_index)
         current = arm.data.body_pose_w[:, body_index]
         base = arm.data.root_pose_w
         desired = torch.as_tensor(desired, dtype=torch.float32, device=env.device).reshape(1, 7)

@@ -28,6 +28,21 @@ def resolve_end_effector_body_index(
         ) from error
 
 
+def resolve_link_jacobian(
+    arm: Any,
+    body_index: int,
+    joint_count: int = 6,
+) -> Any:
+    """Return a torch link-frame Jacobian across Isaac Lab API generations."""
+    jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
+    link_jacobians = getattr(arm.data, "body_link_jacobian_w", None)
+    if link_jacobians is not None:
+        link_jacobians = getattr(link_jacobians, "torch", link_jacobians)
+    else:
+        link_jacobians = arm.root_physx_view.get_jacobians()
+    return link_jacobians[:, jacobian_index, :, :joint_count]
+
+
 def damped_least_squares(jacobian: Any, twist: Any, damping: float) -> Any:
     """Map batched Cartesian residuals to joint residuals without an SVD."""
     import torch
@@ -76,10 +91,9 @@ class DampedLeastSquaresTaskSpaceAdapter:
         body_index = resolve_end_effector_body_index(
             env, self.arm_name, self.end_effector_body_name
         )
-        jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
-        jacobian = arm.root_physx_view.get_jacobians()[
-            :, jacobian_index, :, : self.arm_joint_count
-        ]
+        jacobian = resolve_link_jacobian(
+            arm, body_index, self.arm_joint_count
+        )
         joint_delta = damped_least_squares(
             jacobian,
             controls[:, self.base_action_dim :],
@@ -170,10 +184,9 @@ class DampedLeastSquaresPoseTrackingAdapter:
         body_index = resolve_end_effector_body_index(
             env, self.arm_name, self.end_effector_body_name
         )
-        jacobian_index = body_index - 1 if arm.is_fixed_base else body_index
-        jacobian = arm.root_physx_view.get_jacobians()[
-            :, jacobian_index, :, : self.arm_joint_count
-        ]
+        jacobian = resolve_link_jacobian(
+            arm, body_index, self.arm_joint_count
+        )
         current_pose = arm.data.body_pose_w[:, body_index]
         base_pose = arm.data.root_pose_w
         reference = self._reference[self._step].expand(controls.shape[0], -1)

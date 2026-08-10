@@ -6,6 +6,7 @@ from judo_isaaclab.task_space import (
     DampedLeastSquaresPoseTrackingAdapter,
     damped_least_squares,
     resolve_end_effector_body_index,
+    resolve_link_jacobian,
 )
 
 
@@ -25,6 +26,33 @@ def test_damped_least_squares_is_batched_and_finite():
     assert result.shape == (2, 6)
     torch.testing.assert_close(result, twist / 1.01)
     assert torch.isfinite(result).all()
+
+
+def test_resolve_link_jacobian_uses_new_proxy_torch_view():
+    jacobians = torch.arange(1 * 3 * 6 * 7).reshape(1, 3, 6, 7)
+    arm = _Namespace(
+        is_fixed_base=True,
+        data=_Namespace(
+            body_link_jacobian_w=_Namespace(torch=jacobians)
+        ),
+    )
+
+    result = resolve_link_jacobian(arm, body_index=2, joint_count=6)
+
+    torch.testing.assert_close(result, jacobians[:, 1, :, :6])
+
+
+def test_resolve_link_jacobian_preserves_legacy_physx_view():
+    jacobians = torch.arange(1 * 3 * 6 * 7).reshape(1, 3, 6, 7)
+    arm = _Namespace(
+        is_fixed_base=False,
+        data=_Namespace(),
+        root_physx_view=_Namespace(get_jacobians=lambda: jacobians),
+    )
+
+    result = resolve_link_jacobian(arm, body_index=2, joint_count=5)
+
+    torch.testing.assert_close(result, jacobians[:, 2, :, :5])
 
 
 def test_pose_tracking_adapter_rejects_invalid_reference_shape():

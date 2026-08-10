@@ -14,6 +14,7 @@ _EXPORTS = {
     "DampedLeastSquaresPoseTrackingAdapter": "judo_isaaclab.task_space",
     "DampedLeastSquaresTaskSpaceAdapter": "judo_isaaclab.task_space",
     "resolve_end_effector_body_index": "judo_isaaclab.task_space",
+    "resolve_link_jacobian": "judo_isaaclab.task_space",
     "StageSpec": "judo_isaaclab.adaptation",
     "TaskAdaptationBundle": "judo_isaaclab.adaptation",
     "TrialEvidence": "judo_isaaclab.adaptation",
