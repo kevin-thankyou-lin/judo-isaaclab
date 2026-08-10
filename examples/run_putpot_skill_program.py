@@ -120,6 +120,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "handle contact frame. Acquisition-only mode only."
         ),
     )
+    parser.add_argument(
+        "--target-source-left-first-acquisition",
+        action="store_true",
+        help=(
+            "Preserve the source card's left-then-right acquisition order by "
+            "holding the right gripper open at pregrasp through left closure."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -875,6 +883,16 @@ def _build_skill(
     grasp_geometry["left"]["transport_frontload_horizontal_axis"] = (
         transport_frontload_horizontal_axis
     )
+    source_left_first = bool(
+        getattr(args, "target_source_left_first_acquisition", False)
+    )
+    if source_left_first and right_first_close:
+        raise ValueError(
+            "source left-first acquisition conflicts with right-first close"
+        )
+    grasp_geometry["left"]["source_left_first_acquisition"] = (
+        source_left_first
+    )
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
@@ -885,7 +903,7 @@ def _build_skill(
         approach_steps=110,
         left_close_steps=grasp_hold_steps if right_first_close else 60,
         right_close_steps=60 if right_first_close else grasp_hold_steps,
-        simultaneous=not right_first_close,
+        simultaneous=not right_first_close and not source_left_first,
         right_first=right_first_close,
         defer_left_pregrasp=bool(
             grasp_geometry["left"].get("defer_left_pregrasp", False)
@@ -1249,6 +1267,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.target_left_source_approach_corridor and not source_contact_requested:
         raise ValueError(
             "source approach corridor requires source-contact calibration inputs"
+        )
+    if (
+        args.target_source_left_first_acquisition
+        and not args.target_left_source_approach_corridor
+    ):
+        raise ValueError(
+            "source left-first acquisition requires the measured source corridor"
         )
     if (
         args.support_clearance_m < 0.0
@@ -1767,7 +1792,11 @@ def main(argv: list[str] | None = None) -> None:
                         maximum_orientation_step_rad=args.max_rotation_step,
                     )
                 )
-                mechanism = "source_demo_pregrasp_contact_corridor"
+                mechanism = (
+                    "source_demo_left_first_acquisition_chronology"
+                    if args.target_source_left_first_acquisition
+                    else "source_demo_pregrasp_contact_corridor"
+                )
             else:
                 trajectory, trajectory_receipt = (
                     apply_precontact_source_frame_correction(
@@ -1805,7 +1834,13 @@ def main(argv: list[str] | None = None) -> None:
                     if args.target_left_source_approach_corridor
                     else None
                 ),
-                "right_trajectory_unchanged": True,
+                "right_trajectory_unchanged": not bool(
+                    args.target_source_left_first_acquisition
+                ),
+                "right_acquisition_endpoint_preserved": True,
+                "right_acquisition_delayed_until_left_close": bool(
+                    args.target_source_left_first_acquisition
+                ),
                 "frame_measurement": frame_receipt,
                 "trajectory_correction": trajectory_receipt,
             }

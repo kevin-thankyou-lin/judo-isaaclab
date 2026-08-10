@@ -2763,6 +2763,38 @@ def test_simultaneous_bimanual_close_reaches_both_handles_before_hold():
     )
 
 
+def test_source_left_first_close_holds_proven_right_pregrasp_open():
+    right_pregrasp = _pose(0.1, 1.0)
+    right_grasp = _pose(0.2, 1.0)
+    program = PutPotSkillProgram(_pose(), _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(0.1),
+        right_pregrasp,
+        _pose(0.2),
+        right_grasp,
+        approach_steps=2,
+        left_close_steps=3,
+        right_close_steps=4,
+        simultaneous=False,
+        right_first=False,
+    )
+    trajectory = program.build()
+    pregrasp_end = trajectory.waypoint_steps["bimanual_pregrasp"]
+    left_close_end = trajectory.waypoint_steps["left_handle_grasp"]
+    right_close_end = trajectory.waypoint_steps["right_handle_grasp"]
+
+    assert trajectory.right_poses[
+        pregrasp_end + 1 : left_close_end + 1
+    ] == pytest.approx(
+        np.broadcast_to(
+            right_pregrasp, (left_close_end - pregrasp_end, 7)
+        )
+    )
+    assert trajectory.grippers[left_close_end] == pytest.approx([0.0, -0.0475])
+    assert trajectory.right_poses[right_close_end] == pytest.approx(right_grasp)
+    assert trajectory.grippers[right_close_end] == pytest.approx([0.0, 0.0])
+
+
 def test_supported_center_slide_releases_left_before_exact_center_motion():
     program = PutPotSkillProgram(_pose(), _pose(0.0, 1.0, 0.0))
     program.bimanual_handle_grasp(
