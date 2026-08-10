@@ -596,6 +596,7 @@ def apply_source_demo_approach_corridor(
     maximum_orientation_correction_rad: float = 0.5 * np.pi,
     maximum_position_step_m: float = 0.025,
     maximum_orientation_step_rad: float = 0.16,
+    preserve_left_hold_until_step: int | None = None,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Replace only the left acquisition corridor with source-frame waypoints.
 
@@ -643,6 +644,13 @@ def apply_source_demo_approach_corridor(
     ):
         raise ValueError("trajectory has no ordered left acquisition corridor")
     grasp_end = max(grasp_candidates)
+    hold_until = (
+        None
+        if preserve_left_hold_until_step is None
+        else int(preserve_left_hold_until_step)
+    )
+    if hold_until is not None and not 0 <= hold_until < pregrasp_end:
+        raise ValueError("preserved left hold is outside the acquisition corridor")
     current_pregrasp = trajectory.left_poses[pregrasp_end].copy()
     current_grasp = trajectory.left_poses[grasp_anchor].copy()
 
@@ -667,9 +675,15 @@ def apply_source_demo_approach_corridor(
         raise ValueError("source approach orientation correction exceeds bound")
 
     left = trajectory.left_poses.copy()
-    left[: pregrasp_end + 1] = interpolate_poses(
-        start, desired_pregrasp, pregrasp_end + 1
-    )
+    ramp_start = 0 if hold_until is None else hold_until + 1
+    if hold_until is None:
+        left[: pregrasp_end + 1] = interpolate_poses(
+            start, desired_pregrasp, pregrasp_end + 1
+        )
+    else:
+        left[ramp_start : pregrasp_end + 1] = interpolate_poses(
+            left[hold_until], desired_pregrasp, pregrasp_end - hold_until
+        )
     left[pregrasp_end + 1 : grasp_anchor + 1] = interpolate_poses(
         desired_pregrasp, desired_grasp, grasp_anchor - pregrasp_end
     )
@@ -724,6 +738,14 @@ def apply_source_demo_approach_corridor(
             "position_step_bound_m": float(maximum_position_step_m),
             "orientation_step_bound_rad": float(maximum_orientation_step_rad),
             "pregrasp_end_step": int(pregrasp_end),
+            "preserve_left_hold_until_step": hold_until,
+            "left_hold_preserved": bool(
+                hold_until is not None
+                and np.array_equal(
+                    left[: hold_until + 1],
+                    trajectory.left_poses[: hold_until + 1],
+                )
+            ),
             "left_grasp_anchor_step": int(grasp_anchor),
             "grasp_end_step": int(grasp_end),
         },

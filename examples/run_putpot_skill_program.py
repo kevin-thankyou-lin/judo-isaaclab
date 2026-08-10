@@ -174,6 +174,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "holding the right gripper open at pregrasp through left closure."
         ),
     )
+    parser.add_argument(
+        "--target-right-first-stabilized-acquisition",
+        action="store_true",
+        help=(
+            "Acquire the proven right endpoint first, hold the left arm at reset, "
+            "then run the source-mapped left acquisition. Acquisition-only mode."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -807,13 +815,25 @@ def _build_skill(
         geometry_conditioned_vertical_rise_fraction,
     )
 
-    right_first_close = geometry_conditioned_right_first_close(
-        handle_size(source_parts, left_side),
-        handle_size(target_parts, left_side),
-        target_parts.handle_axis,
-        grasp_geometry["left"]["predicted_pad_imbalance_m"],
+    forced_right_first_stabilization = bool(
+        getattr(args, "target_right_first_stabilized_acquisition", False)
+    )
+    right_first_close = (
+        forced_right_first_stabilization
+        or geometry_conditioned_right_first_close(
+            handle_size(source_parts, left_side),
+            handle_size(target_parts, left_side),
+            target_parts.handle_axis,
+            grasp_geometry["left"]["predicted_pad_imbalance_m"],
+        )
     )
     grasp_geometry["left"]["right_first_close"] = right_first_close
+    grasp_geometry["left"]["forced_right_first_stabilization"] = (
+        forced_right_first_stabilization
+    )
+    grasp_geometry["left"]["defer_left_pregrasp"] = (
+        forced_right_first_stabilization
+    )
     peer_contact_hold_steps = geometry_conditioned_peer_contact_hold_steps(
         handle_size(target_parts, left_side),
         handle_size(target_parts, right_side),
@@ -822,7 +842,7 @@ def _build_skill(
     grasp_geometry["left"]["peer_contact_hold_steps"] = (
         peer_contact_hold_steps
     )
-    if right_first_close:
+    if right_first_close and not forced_right_first_stabilization:
         approach = left_pregrasp[:3] - left_grasp[:3]
         approach_norm = float(np.linalg.norm(approach))
         if approach_norm <= 1.0e-9:
@@ -1584,6 +1604,17 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "radial clearance waypoint requires measured contact-frame preorientation"
         )
+    if args.target_right_first_stabilized_acquisition:
+        if not (args.acquisition_only and args.target_left_source_approach_corridor):
+            raise ValueError(
+                "right-first stabilization requires acquisition-only source corridor"
+            )
+        if args.target_source_left_first_acquisition:
+            raise ValueError("right-first and source-left-first acquisition conflict")
+        if preorientation_requested or radial_waypoint_requested:
+            raise ValueError(
+                "right-first stabilization cannot reuse exhausted entry corrections"
+            )
     if (
         args.target_source_left_first_acquisition
         and not args.target_left_source_approach_corridor
@@ -2109,6 +2140,11 @@ def main(argv: list[str] | None = None) -> None:
                         maximum_position_correction_m=position_bound,
                         maximum_position_step_m=args.max_position_step,
                         maximum_orientation_step_rad=args.max_rotation_step,
+                        preserve_left_hold_until_step=(
+                            trajectory.waypoint_steps["right_handle_grasp"]
+                            if args.target_right_first_stabilized_acquisition
+                            else None
+                        ),
                     )
                 )
                 if preorientation_requested:
@@ -2161,9 +2197,13 @@ def main(argv: list[str] | None = None) -> None:
                         )
                 else:
                     mechanism = (
-                        "source_demo_left_first_acquisition_chronology"
-                        if args.target_source_left_first_acquisition
-                        else "source_demo_pregrasp_contact_corridor"
+                        "right_first_stabilized_source_contact_acquisition"
+                        if args.target_right_first_stabilized_acquisition
+                        else (
+                            "source_demo_left_first_acquisition_chronology"
+                            if args.target_source_left_first_acquisition
+                            else "source_demo_pregrasp_contact_corridor"
+                        )
                     )
             else:
                 trajectory, trajectory_receipt = (
@@ -2208,6 +2248,9 @@ def main(argv: list[str] | None = None) -> None:
                 "right_acquisition_endpoint_preserved": True,
                 "right_acquisition_delayed_until_left_close": bool(
                     args.target_source_left_first_acquisition
+                ),
+                "right_first_stabilization": bool(
+                    args.target_right_first_stabilized_acquisition
                 ),
                 "frame_measurement": frame_receipt,
                 "trajectory_correction": trajectory_receipt,

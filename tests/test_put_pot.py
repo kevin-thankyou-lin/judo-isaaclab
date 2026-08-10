@@ -177,6 +177,49 @@ def test_source_demo_approach_corridor_rejects_unbounded_waypoint_change():
         )
 
 
+def test_source_corridor_preserves_deferred_left_hold_for_right_stabilizer():
+    start = _pose(0.0, 0.0, 0.5)
+    program = PutPotSkillProgram(start, _pose(0.0, 1.0, 0.5))
+    program.bimanual_handle_grasp(
+        _pose(0.2, 0.0, 0.5),
+        _pose(0.2, 1.0, 0.5),
+        _pose(0.3, 0.0, 0.5),
+        _pose(0.3, 1.0, 0.5),
+        approach_steps=10,
+        left_close_steps=6,
+        right_close_steps=5,
+        right_first=True,
+        defer_left_pregrasp=True,
+    )
+    original = program.build()
+    hold = original.waypoint_steps["right_handle_grasp"]
+    desired_pregrasp = _pose(0.18, 0.04, 0.55)
+    desired_grasp = _pose(0.20, 0.02, 0.54)
+
+    corrected, receipt = apply_source_demo_approach_corridor(
+        original,
+        start,
+        desired_pregrasp,
+        desired_grasp,
+        maximum_position_correction_m=0.2,
+        maximum_position_step_m=0.1,
+        preserve_left_hold_until_step=hold,
+    )
+
+    pregrasp = original.waypoint_steps["left_pregrasp"]
+    assert corrected.left_poses[: hold + 1] == pytest.approx(
+        original.left_poses[: hold + 1]
+    )
+    assert corrected.left_poses[pregrasp] == pytest.approx(desired_pregrasp)
+    assert corrected.left_poses[original.waypoint_steps["left_handle_grasp"]] == (
+        pytest.approx(desired_grasp)
+    )
+    assert corrected.right_poses == pytest.approx(original.right_poses)
+    assert corrected.grippers == pytest.approx(original.grippers)
+    assert receipt["preserve_left_hold_until_step"] == hold
+    assert receipt["left_hold_preserved"] is True
+
+
 def test_contact_frame_preorientation_changes_only_early_left_orientations():
     start = _pose(0.0, 0.0, 0.5)
     program = PutPotSkillProgram(start, _pose(0.0, 1.0, 0.5))
