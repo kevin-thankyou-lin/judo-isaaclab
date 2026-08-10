@@ -197,6 +197,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "deterministic bounded handle-local receding-horizon controller."
         ),
     )
+    parser.add_argument(
+        "--target-right-handle-local-mpc-bootstrap",
+        action="store_true",
+        help=(
+            "Use the same bounded handle-local controller to acquire a robust "
+            "right dual-pad latch before enabling the left contact window."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1638,6 +1646,7 @@ def _write_rollout_trace(
     local_jaw = np.full(count, np.nan, dtype=np.float32)
     local_source_weight = np.full(count, np.nan, dtype=np.float32)
     local_fail_closed = np.zeros(count, dtype=bool)
+    local_active_arm = np.full(count, "", dtype="<U5")
     for item in local_mpc_frame_receipts:
         step = int(item["program_step"])
         if not 0 <= step < count:
@@ -1645,6 +1654,10 @@ def _write_rollout_trace(
         receipt = item["receipt"]
         control = receipt["executed_control"]
         local_active[step] = True
+        active_arm = str(item.get("active_arm", "left"))
+        if active_arm not in {"left", "right"}:
+            raise ValueError(f"invalid handle-local MPC active arm: {active_arm}")
+        local_active_arm[step] = active_arm
         local_translation[step] = control["translation_world_m"]
         local_rotation[step] = control["rotation_axis_angle_world_rad"]
         local_jaw[step] = control["jaw_increment"]
@@ -1693,6 +1706,7 @@ def _write_rollout_trace(
         ),
         program_stages=np.asarray([sample["program_stage"] for sample in rows]),
         local_mpc_active=local_active,
+        local_mpc_active_arm=local_active_arm,
         local_mpc_translation_control_world_m=local_translation,
         local_mpc_rotation_control_axis_angle_world_rad=local_rotation,
         local_mpc_jaw_increment=local_jaw,
@@ -1910,6 +1924,13 @@ def main(argv: list[str] | None = None) -> None:
             )
         if args.controller_plugin_py:
             raise ValueError("handle-local MPC cannot be combined with a controller plugin")
+    if (
+        args.target_right_handle_local_mpc_bootstrap
+        and not args.target_handle_local_mpc_acquisition
+    ):
+        raise ValueError(
+            "right handle-local bootstrap requires handle-local MPC acquisition"
+        )
     if (
         args.target_source_left_first_acquisition
         and not args.target_left_source_approach_corridor
@@ -2163,6 +2184,10 @@ def main(argv: list[str] | None = None) -> None:
         diagnostic_target_contact_frames_local = None
         local_mpc_left_jaw_axis_prior_local = None
         local_mpc_left_pad_axis_prior_local = None
+        local_mpc_right_contact_prior_local = None
+        local_mpc_right_jaw_axis_prior_local = None
+        local_mpc_right_pad_axis_prior_local = None
+        local_mpc_right_frame_receipt = None
         if trajectory is not None:
             from judo_isaaclab.put_pot import (
                 MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
@@ -2351,6 +2376,14 @@ def main(argv: list[str] | None = None) -> None:
                     "left_pad_centers_world",
                     "left_pad_axes_world",
                 }
+                if args.target_right_handle_local_mpc_bootstrap:
+                    required_arrays.update(
+                        {
+                            "right_eef_poses",
+                            "right_pad_centers_world",
+                            "right_pad_axes_world",
+                        }
+                    )
                 if not required_arrays.issubset(calibration.files):
                     raise ValueError(
                         "source-contact calibration trace lacks wrist/pad geometry"
@@ -2380,6 +2413,19 @@ def main(argv: list[str] | None = None) -> None:
                     calibration["left_pad_axes_world"][calibration_step],
                     dtype=np.float64,
                 )
+                if args.target_right_handle_local_mpc_bootstrap:
+                    calibration_right_wrist = np.asarray(
+                        calibration["right_eef_poses"][calibration_step],
+                        dtype=np.float64,
+                    )
+                    calibration_right_pad_centers = np.asarray(
+                        calibration["right_pad_centers_world"][calibration_step],
+                        dtype=np.float64,
+                    )
+                    calibration_right_pad_axes = np.asarray(
+                        calibration["right_pad_axes_world"][calibration_step],
+                        dtype=np.float64,
+                    )
             source_left_grasp = keyframes["frames"]["left_handle_grasp"]
             desired_grasp, frame_receipt = source_contact_frame_grasp_pose(
                 source_left_grasp["left_eef_pose"],
@@ -2404,6 +2450,57 @@ def main(argv: list[str] | None = None) -> None:
                 calibration_pot_inverse[3:],
                 np.asarray(frame_receipt["mean_pad_axis_world"], dtype=np.float64),
             )
+            if args.target_right_handle_local_mpc_bootstrap:
+                source_right_grasp = keyframes["frames"]["right_handle_grasp"]
+                (
+                    desired_right_source_contact_wrist,
+                    local_mpc_right_frame_receipt,
+                ) = source_contact_frame_grasp_pose(
+                    source_right_grasp["right_eef_pose"],
+                    source_right_grasp["pot_pose"],
+                    calibration_pot_pose,
+                    handle_grasp_geometry["right"][
+                        "source_contact_frame_local"
+                    ],
+                    handle_grasp_geometry["right"][
+                        "target_contact_frame_local"
+                    ],
+                    calibration_right_wrist,
+                    calibration_right_pad_centers,
+                    calibration_right_pad_axes,
+                )
+                right_predicted_fractions = np.asarray(
+                    local_mpc_right_frame_receipt[
+                        "predicted_contact_pad_fractions"
+                    ],
+                    dtype=np.float64,
+                )
+                if not np.all(
+                    np.isfinite(right_predicted_fractions)
+                    & (right_predicted_fractions >= 0.10)
+                    & (right_predicted_fractions <= 0.90)
+                ):
+                    raise ValueError(
+                        "right source-contact prediction does not center both pads"
+                    )
+                local_mpc_right_contact_prior_local = compose_marker_pose(
+                    calibration_pot_inverse,
+                    desired_right_source_contact_wrist,
+                )
+                local_mpc_right_jaw_axis_prior_local = rotate_marker_vector(
+                    calibration_pot_inverse[3:],
+                    np.asarray(
+                        local_mpc_right_frame_receipt["jaw_axis_world"],
+                        dtype=np.float64,
+                    ),
+                )
+                local_mpc_right_pad_axis_prior_local = rotate_marker_vector(
+                    calibration_pot_inverse[3:],
+                    np.asarray(
+                        local_mpc_right_frame_receipt["mean_pad_axis_world"],
+                        dtype=np.float64,
+                    ),
+                )
             predicted_fractions = np.asarray(
                 frame_receipt["predicted_contact_pad_fractions"],
                 dtype=np.float64,
@@ -2512,15 +2609,19 @@ def main(argv: list[str] | None = None) -> None:
                         )
                 else:
                     mechanism = (
-                        "deterministic_handle_local_receding_horizon_acquisition"
-                        if args.target_handle_local_mpc_acquisition
+                        "right_first_handle_local_receding_horizon_bootstrap"
+                        if args.target_right_handle_local_mpc_bootstrap
                         else (
-                            "right_first_stabilized_source_contact_acquisition"
-                            if args.target_right_first_stabilized_acquisition
+                            "deterministic_handle_local_receding_horizon_acquisition"
+                            if args.target_handle_local_mpc_acquisition
                             else (
-                                "source_demo_left_first_acquisition_chronology"
-                                if args.target_source_left_first_acquisition
-                                else "source_demo_pregrasp_contact_corridor"
+                                "right_first_stabilized_source_contact_acquisition"
+                                if args.target_right_first_stabilized_acquisition
+                                else (
+                                    "source_demo_left_first_acquisition_chronology"
+                                    if args.target_source_left_first_acquisition
+                                    else "source_demo_pregrasp_contact_corridor"
+                                )
                             )
                         )
                     )
@@ -2563,8 +2664,14 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 "right_trajectory_unchanged": not bool(
                     args.target_source_left_first_acquisition
+                    or args.target_right_handle_local_mpc_bootstrap
                 ),
-                "right_acquisition_endpoint_preserved": True,
+                "right_acquisition_endpoint_preserved": not bool(
+                    args.target_right_handle_local_mpc_bootstrap
+                ),
+                "right_handle_local_bootstrap": bool(
+                    args.target_right_handle_local_mpc_bootstrap
+                ),
                 "right_acquisition_delayed_until_left_close": bool(
                     args.target_source_left_first_acquisition
                 ),
@@ -2572,6 +2679,9 @@ def main(argv: list[str] | None = None) -> None:
                     args.target_right_first_stabilized_acquisition
                 ),
                 "frame_measurement": frame_receipt,
+                "right_bootstrap_frame_measurement": (
+                    local_mpc_right_frame_receipt
+                ),
                 "trajectory_correction": trajectory_receipt,
             }
             handle_grasp_geometry["left"][
@@ -2633,6 +2743,10 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_contact_window_step = 0
         local_mpc_robust_streak = 0
         local_mpc_latch_ready = False
+        local_mpc_right_contact_window_step = 0
+        local_mpc_right_robust_streak = 0
+        local_mpc_right_latch_ready = False
+        local_mpc_right_bootstrap_start_step = None
         local_mpc_fail_closed = False
         local_mpc_fail_reason = None
         local_mpc_last_control_vectors_world = {
@@ -2649,6 +2763,16 @@ def main(argv: list[str] | None = None) -> None:
                 maximum_translation_step_m=min(0.004, args.max_position_step),
                 maximum_rotation_step_rad=min(0.08, args.max_rotation_step),
             )
+            if args.target_right_handle_local_mpc_bootstrap:
+                right_jaw = np.asarray(trajectory.grippers[:, 1], dtype=np.float64)
+                right_closure = np.flatnonzero(
+                    right_jaw > right_jaw[0] + 1.0e-9
+                )
+                if not len(right_closure):
+                    raise ValueError(
+                        "right handle-local bootstrap has no source-timed jaw closure"
+                    )
+                local_mpc_right_bootstrap_start_step = int(right_closure[0])
         missing_finger_corrections = {"left": 0.0, "right": 0.0}
         missing_finger_depth_corrections = {"left": 0.0, "right": 0.0}
         missing_finger_streaks = {"left": 0, "right": 0}
@@ -2967,21 +3091,47 @@ def main(argv: list[str] | None = None) -> None:
                         from judo_isaaclab.put_marker import compose_pose
                         from judo_isaaclab.putpot_local_mpc import (
                             contact_window_joint_nominal_weight,
+                            handle_local_bootstrap_active,
                             handle_local_mpc_active,
                             handle_local_mpc_step,
                         )
 
-                        mpc_active = handle_local_mpc_active(
+                        right_bootstrap_active = bool(
+                            args.target_right_handle_local_mpc_bootstrap
+                            and handle_local_bootstrap_active(
+                                enabled=not local_mpc_fail_closed,
+                                latch_ready=local_mpc_right_latch_ready,
+                                step=step,
+                                bootstrap_start_step=(
+                                    local_mpc_right_bootstrap_start_step
+                                ),
+                                grasp_complete_step=grasp_complete_step,
+                            )
+                        )
+                        left_mpc_active = handle_local_mpc_active(
                             enabled=not local_mpc_fail_closed,
-                            peer_latched=bool(samples[-1]["right_grasp"]),
+                            peer_latched=(
+                                local_mpc_right_latch_ready
+                                if args.target_right_handle_local_mpc_bootstrap
+                                else bool(samples[-1]["right_grasp"])
+                            ),
                             step=step,
                             peer_latch_step=right_grasp_step,
                             grasp_complete_step=grasp_complete_step,
                         )
+                        mpc_active = right_bootstrap_active or left_mpc_active
+                        right_contact_hold = bool(
+                            args.target_right_handle_local_mpc_bootstrap
+                            and local_mpc_right_latch_ready
+                        )
                         joint_nominal_weight = contact_window_joint_nominal_weight(
-                            active=mpc_active
-                        ) if mpc_active else None
+                            active=True
+                        ) if (mpc_active or right_contact_hold) else None
                         if mpc_active:
+                            active_arm = (
+                                "right" if right_bootstrap_active else "left"
+                            )
+                            peer_arm = "left" if active_arm == "right" else "right"
                             contact_origin = None
                             for prior_sample in samples:
                                 all_forces = np.concatenate(
@@ -3031,87 +3181,146 @@ def main(argv: list[str] | None = None) -> None:
                                     - contact_origin
                                 )
                             )
+                            jaw_index = 13 if active_arm == "right" else 6
+                            gripper_index = 1 if active_arm == "right" else 0
                             current_jaw = float(
-                                actions[-1][6] if actions else grippers[0]
+                                actions[-1][jaw_index]
+                                if actions
+                                else grippers[gripper_index]
                             )
                             observed_handle = compose_pose(
                                 samples[-1]["pot_pose"],
-                                diagnostic_target_contact_frames_local["left"],
+                                diagnostic_target_contact_frames_local[active_arm],
+                            )
+                            contact_prior_local = (
+                                local_mpc_right_contact_prior_local
+                                if active_arm == "right"
+                                else local_mpc_left_contact_prior
                             )
                             object_relative_prior = compose_pose(
                                 samples[-1]["pot_pose"],
-                                local_mpc_left_contact_prior,
+                                contact_prior_local,
+                            )
+                            jaw_axis_prior_local = (
+                                local_mpc_right_jaw_axis_prior_local
+                                if active_arm == "right"
+                                else local_mpc_left_jaw_axis_prior_local
+                            )
+                            pad_axis_prior_local = (
+                                local_mpc_right_pad_axis_prior_local
+                                if active_arm == "right"
+                                else local_mpc_left_pad_axis_prior_local
+                            )
+                            warm_start_target = (
+                                right_target
+                                if active_arm == "right"
+                                else left_target
+                            )
+                            active_streak = (
+                                local_mpc_right_robust_streak
+                                if active_arm == "right"
+                                else local_mpc_robust_streak
                             )
                             local_command = handle_local_mpc_step(
-                                contact_window_step=local_mpc_contact_window_step,
+                                contact_window_step=(
+                                    local_mpc_right_contact_window_step
+                                    if active_arm == "right"
+                                    else local_mpc_contact_window_step
+                                ),
                                 observed_pot_pose=samples[-1]["pot_pose"],
                                 observed_handle_contact_frame=observed_handle,
-                                active_wrist_pose=samples[-1]["left_eef_pose"],
-                            object_relative_wrist_prior=object_relative_prior,
-                            object_relative_jaw_axis_prior=(
-                                local_mpc_left_jaw_axis_prior_local
-                            ),
-                            object_relative_pad_depth_axis_prior=(
-                                local_mpc_left_pad_axis_prior_local
-                            ),
-                                source_warm_start_wrist_pose=left_target,
+                                active_wrist_pose=samples[-1][
+                                    f"{active_arm}_eef_pose"
+                                ],
+                                object_relative_wrist_prior=object_relative_prior,
+                                object_relative_jaw_axis_prior=jaw_axis_prior_local,
+                                object_relative_pad_depth_axis_prior=(
+                                    pad_axis_prior_local
+                                ),
+                                source_warm_start_wrist_pose=warm_start_target,
                                 active_pad_centers_world=samples[-1][
-                                    "left_pad_centers_world"
+                                    f"{active_arm}_pad_centers_world"
                                 ],
                                 active_pad_axes_world=samples[-1][
-                                    "left_pad_axes_world"
+                                    f"{active_arm}_pad_axes_world"
                                 ],
                                 active_pad_fractions=samples[-1][
-                                    "left_pad_fractions"
+                                    f"{active_arm}_pad_fractions"
                                 ],
                                 active_finger_forces_n=samples[-1][
-                                    "left_finger_forces_n"
+                                    f"{active_arm}_finger_forces_n"
                                 ],
                                 peer_pad_fractions=samples[-1][
-                                    "right_pad_fractions"
+                                    f"{peer_arm}_pad_fractions"
                                 ],
                                 peer_finger_forces_n=samples[-1][
-                                    "right_finger_forces_n"
+                                    f"{peer_arm}_finger_forces_n"
                                 ],
-                                active_grasp=bool(samples[-1]["left_grasp"]),
-                                peer_grasp=bool(samples[-1]["right_grasp"]),
+                                active_grasp=bool(
+                                    samples[-1][f"{active_arm}_grasp"]
+                                ),
+                                peer_grasp=bool(
+                                    samples[-1][f"{peer_arm}_grasp"]
+                                ),
                                 pre_peer_pot_displacement_m=pre_peer_displacement_m,
                                 current_jaw_command=current_jaw,
-                                robust_streak=local_mpc_robust_streak,
+                                robust_streak=active_streak,
+                                require_peer_latch=active_arm == "left",
                                 config=local_mpc_config,
                             )
                             local_mpc_frame_receipts.append(
                                 {
                                     "program_step": step,
+                                    "active_arm": active_arm,
                                     "receipt": local_command.frame_receipt,
                                 }
                             )
-                            local_mpc_contact_window_step += 1
-                            local_mpc_robust_streak = local_command.robust_streak
-                            local_mpc_latch_ready = (
-                                local_command.robust_latch_ready
-                            )
-                            left_target = local_command.wrist_target_pose
-                            right_target = np.asarray(
-                                samples[-1]["right_eef_pose"], dtype=np.float64
-                            )
-                            grippers[0] = local_command.jaw_command
-                            if actions:
-                                grippers[1] = float(actions[-1][13])
-                            stage = "handle_local_mpc_contact_window"
+                            if active_arm == "right":
+                                local_mpc_right_contact_window_step += 1
+                                local_mpc_right_robust_streak = (
+                                    local_command.robust_streak
+                                )
+                                local_mpc_right_latch_ready = (
+                                    local_command.robust_latch_ready
+                                )
+                                right_target = local_command.wrist_target_pose
+                                left_target = np.asarray(
+                                    samples[-1]["left_eef_pose"],
+                                    dtype=np.float64,
+                                )
+                                grippers[1] = local_command.jaw_command
+                                if actions:
+                                    grippers[0] = float(actions[-1][6])
+                                stage = "right_handle_local_mpc_bootstrap"
+                            else:
+                                local_mpc_contact_window_step += 1
+                                local_mpc_robust_streak = (
+                                    local_command.robust_streak
+                                )
+                                local_mpc_latch_ready = (
+                                    local_command.robust_latch_ready
+                                )
+                                left_target = local_command.wrist_target_pose
+                                right_target = np.asarray(
+                                    samples[-1]["right_eef_pose"],
+                                    dtype=np.float64,
+                                )
+                                grippers[0] = local_command.jaw_command
+                                if actions:
+                                    grippers[1] = float(actions[-1][13])
+                                stage = "handle_local_mpc_contact_window"
                             local_mpc_last_control_vectors_world = {
-                                "left": np.asarray(
+                                "left": np.zeros(3, dtype=np.float64),
+                                "right": np.zeros(3, dtype=np.float64),
+                            }
+                            local_mpc_last_control_vectors_world[active_arm] = (
+                                np.asarray(
                                     local_command.frame_receipt[
                                         "executed_control"
                                     ]["translation_world_m"],
                                     dtype=np.float64,
-                                ),
-                                "right": right_target[:3]
-                                - np.asarray(
-                                    samples[-1]["right_eef_pose"],
-                                    dtype=np.float64,
-                                )[:3],
-                            }
+                                )
+                            )
                             if local_command.fail_closed:
                                 local_mpc_fail_closed = True
                                 local_mpc_fail_reason = local_command.fail_reason
@@ -3131,6 +3340,12 @@ def main(argv: list[str] | None = None) -> None:
                                     ),
                                     flush=True,
                                 )
+                        elif right_contact_hold:
+                            right_target = np.asarray(
+                                samples[-1]["right_eef_pose"], dtype=np.float64
+                            )
+                            if actions:
+                                grippers[1] = float(actions[-1][13])
                     action = _ik_action(
                         env,
                         left_target,
@@ -4928,8 +5143,16 @@ def main(argv: list[str] | None = None) -> None:
                 "global_trajectory_optimizer": False,
                 "candidate_sampling": False,
                 "random_rollout_search": False,
-                "active_wrist": "left",
-                "peer_strategy": "right_first_observed_wrist_hold",
+                "active_wrist_sequence": (
+                    ["right", "left"]
+                    if args.target_right_handle_local_mpc_bootstrap
+                    else ["left"]
+                ),
+                "peer_strategy": (
+                    "right_robust_dual_pad_bootstrap_then_observed_wrist_hold"
+                    if args.target_right_handle_local_mpc_bootstrap
+                    else "right_first_observed_wrist_hold"
+                ),
                 "source_demo_authority": [
                     "coarse_stage_order",
                     "object_relative_pregrasp_grasp_prior",
@@ -4940,6 +5163,18 @@ def main(argv: list[str] | None = None) -> None:
                 "config": handle_local_mpc_config_receipt(local_mpc_config),
                 "frame_receipts": local_mpc_frame_receipts,
                 "contact_window_frames": len(local_mpc_frame_receipts),
+                "right_bootstrap": {
+                    "enabled": bool(
+                        args.target_right_handle_local_mpc_bootstrap
+                    ),
+                    "start_step": local_mpc_right_bootstrap_start_step,
+                    "contact_window_frames": local_mpc_right_contact_window_step,
+                    "robust_streak": local_mpc_right_robust_streak,
+                    "robust_latch_ready": local_mpc_right_latch_ready,
+                    "source_contact_frame_measurement": (
+                        local_mpc_right_frame_receipt
+                    ),
+                },
                 "robust_streak": local_mpc_robust_streak,
                 "robust_latch_ready": local_mpc_latch_ready,
                 "fail_closed": local_mpc_fail_closed,

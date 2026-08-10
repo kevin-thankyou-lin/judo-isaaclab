@@ -6,6 +6,7 @@ import pytest
 from judo_isaaclab.putpot_local_mpc import (
     HandleLocalMpcConfig,
     contact_window_joint_nominal_weight,
+    handle_local_bootstrap_active,
     handle_local_mpc_active,
     handle_local_mpc_frame_receipt_complete,
     handle_local_mpc_step,
@@ -109,6 +110,29 @@ def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     assert command.frame_receipt["latch"]["consecutive_frames"] == 15
 
 
+def test_peer_free_bootstrap_requires_robust_active_dual_pad_latch():
+    streak = 0
+    for index in range(15):
+        command = handle_local_mpc_step(
+            **_inputs(
+                contact_window_step=index,
+                active_finger_forces_n=[1.5, 1.5],
+                active_pad_fractions=[0.25, 0.75],
+                active_grasp=True,
+                peer_finger_forces_n=[0.0, 0.0],
+                peer_pad_fractions=[np.nan, np.nan],
+                peer_grasp=False,
+                robust_streak=streak,
+            ),
+            require_peer_latch=False,
+        )
+        streak = command.robust_streak
+    assert command.robust_latch_ready
+    assert command.frame_receipt["latch"]["robust_frame"]
+    assert not command.frame_receipt["latch"]["strict_four_pad_frame"]
+    assert not command.frame_receipt["latch"]["peer_required"]
+
+
 def test_local_mpc_output_is_deterministic_and_frame_receipt_is_complete():
     first = handle_local_mpc_step(**_inputs(contact_window_step=2))
     second = handle_local_mpc_step(**_inputs(contact_window_step=2))
@@ -119,6 +143,9 @@ def test_local_mpc_output_is_deterministic_and_frame_receipt_is_complete():
     incomplete = copy.deepcopy(first.frame_receipt)
     del incomplete["observed_frames"]["active_pad_axes"]
     assert not handle_local_mpc_frame_receipt_complete(incomplete)
+    incomplete_latch = copy.deepcopy(first.frame_receipt)
+    del incomplete_latch["latch"]["peer_required"]
+    assert not handle_local_mpc_frame_receipt_complete(incomplete_latch)
 
 
 def test_non_contact_activation_and_nominal_behavior_are_unchanged():
@@ -151,3 +178,41 @@ def test_non_contact_activation_and_nominal_behavior_are_unchanged():
         grasp_complete_step=246,
     )
     assert contact_window_joint_nominal_weight(active=False) == 1.0
+
+
+def test_peer_free_bootstrap_activation_is_bounded_to_acquisition_window():
+    assert not handle_local_bootstrap_active(
+        enabled=False,
+        latch_ready=False,
+        step=110,
+        bootstrap_start_step=110,
+        grasp_complete_step=356,
+    )
+    assert not handle_local_bootstrap_active(
+        enabled=True,
+        latch_ready=False,
+        step=109,
+        bootstrap_start_step=110,
+        grasp_complete_step=356,
+    )
+    assert handle_local_bootstrap_active(
+        enabled=True,
+        latch_ready=False,
+        step=110,
+        bootstrap_start_step=110,
+        grasp_complete_step=356,
+    )
+    assert not handle_local_bootstrap_active(
+        enabled=True,
+        latch_ready=True,
+        step=170,
+        bootstrap_start_step=110,
+        grasp_complete_step=356,
+    )
+    assert not handle_local_bootstrap_active(
+        enabled=True,
+        latch_ready=False,
+        step=357,
+        bootstrap_start_step=110,
+        grasp_complete_step=356,
+    )

@@ -86,6 +86,27 @@ def handle_local_mpc_active(
     )
 
 
+def handle_local_bootstrap_active(
+    *,
+    enabled: bool,
+    latch_ready: bool,
+    step: int,
+    bootstrap_start_step: int,
+    grasp_complete_step: int,
+) -> bool:
+    """Select a bounded active-arm bootstrap before the peer acquisition."""
+
+    if min(step, bootstrap_start_step, grasp_complete_step) < 0:
+        raise ValueError("bootstrap steps must be nonnegative")
+    if bootstrap_start_step > grasp_complete_step:
+        raise ValueError("bootstrap must start before grasp completion")
+    return bool(
+        enabled
+        and not latch_ready
+        and bootstrap_start_step <= step <= grasp_complete_step
+    )
+
+
 def contact_window_joint_nominal_weight(
     *, active: bool, non_contact_weight: float = 1.0
 ) -> float:
@@ -222,6 +243,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
     residuals = receipt.get("signed_residuals", {})
     controls = receipt.get("executed_control", {})
     constraints = receipt.get("hard_constraints", {})
+    latch = receipt.get("latch", {})
     return bool(
         set(residuals)
         == {
@@ -252,6 +274,17 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "rotation_step_within_bound",
             "jaw_step_within_bound",
         }
+        and set(latch)
+        == {
+            "active_force_and_margin",
+            "peer_force_and_margin",
+            "peer_required",
+            "robust_frame",
+            "strict_four_pad_frame",
+            "consecutive_frames",
+            "required_consecutive_frames",
+            "ready",
+        }
     )
 
 
@@ -276,6 +309,7 @@ def handle_local_mpc_step(
     pre_peer_pot_displacement_m: float,
     current_jaw_command: float,
     robust_streak: int,
+    require_peer_latch: bool = True,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
 ) -> HandleLocalMpcCommand:
     """Plan and return the first bounded active-wrist and jaw control increment."""
@@ -353,12 +387,20 @@ def handle_local_mpc_step(
         pre_peer_pot_displacement_m
         <= config.maximum_pre_peer_pot_motion_m + 1.0e-12
     )
-    robust_frame = bool(
+    active_robust = _robust_arm(forces, fractions, config)
+    peer_robust = _robust_arm(peer_forces, peer_fractions, config)
+    strict_four_pad_frame = bool(
         active_grasp
         and peer_grasp
-        and _robust_arm(forces, fractions, config)
-        and _robust_arm(peer_forces, peer_fractions, config)
+        and active_robust
+        and peer_robust
         and pot_motion_ok
+    )
+    robust_frame = bool(
+        active_grasp
+        and active_robust
+        and pot_motion_ok
+        and (not require_peer_latch or (peer_grasp and peer_robust))
     )
     next_streak = robust_streak + 1 if robust_frame else 0
     fail_reason = None
@@ -459,9 +501,11 @@ def handle_local_mpc_step(
             ),
         },
         "latch": {
-            "active_force_and_margin": _robust_arm(forces, fractions, config),
-            "peer_force_and_margin": _robust_arm(peer_forces, peer_fractions, config),
-            "strict_four_pad_frame": robust_frame,
+            "active_force_and_margin": active_robust,
+            "peer_force_and_margin": peer_robust,
+            "peer_required": bool(require_peer_latch),
+            "robust_frame": robust_frame,
+            "strict_four_pad_frame": strict_four_pad_frame,
             "consecutive_frames": next_streak,
             "required_consecutive_frames": config.robust_latch_steps,
             "ready": next_streak >= config.robust_latch_steps,
