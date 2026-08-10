@@ -28,6 +28,7 @@ STAGES = (
 REPAIR_FAMILY_STAGE = {
     "staged_bilateral_acquisition": "bimanual_handle_grasp",
     "grasp_depth_correction": "bimanual_handle_grasp",
+    "contact_frame_entry_alignment": "bimanual_handle_grasp",
     "zero_jump_transport": "smooth_bimanual_transport",
     "object_local_corotation": "smooth_bimanual_transport",
     "support_frame_alignment": "support_alignment",

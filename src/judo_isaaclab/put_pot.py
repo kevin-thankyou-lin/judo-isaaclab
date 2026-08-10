@@ -730,6 +730,126 @@ def apply_source_demo_approach_corridor(
     )
 
 
+def apply_contact_frame_preorientation(
+    trajectory: SkillTrajectory,
+    left_start_pose: Any,
+    desired_left_pregrasp_pose: Any,
+    *,
+    alignment_complete_step: int,
+    prior_first_force_step: int,
+    minimum_force_free_lead_steps: int = ROBUST_BIMANUAL_LATCH_STEPS,
+    maximum_orientation_step_rad: float = 0.16,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Finish the source-mapped wrist orientation before the contact sweep.
+
+    A straight reset-to-pregrasp interpolation can reach a wide target handle
+    while the wrist is still rotating.  This primitive changes only the left
+    wrist orientations before the authored pregrasp: it completes the known
+    source contact-frame orientation in a measured force-free window and then
+    holds it until the normal source-mapped pregrasp-to-grasp motion begins.
+    Positions, grippers, the right arm, and both mapped endpoints are preserved.
+    """
+
+    start = _pose(left_start_pose, "left_start_pose")
+    desired_pregrasp = _pose(
+        desired_left_pregrasp_pose, "desired_left_pregrasp_pose"
+    )
+    complete = int(alignment_complete_step)
+    first_force = int(prior_first_force_step)
+    lead = int(minimum_force_free_lead_steps)
+    if complete < 0 or first_force < 0 or lead < 1:
+        raise ValueError("contact-frame preorientation steps are invalid")
+    if complete > first_force - lead:
+        raise ValueError(
+            "contact-frame preorientation lacks the required force-free lead"
+        )
+    if (
+        not np.isfinite(maximum_orientation_step_rad)
+        or maximum_orientation_step_rad <= 0.0
+    ):
+        raise ValueError("maximum orientation step must be finite and positive")
+
+    steps = trajectory.waypoint_steps
+    pregrasp_end = steps.get("left_pregrasp", steps.get("bimanual_pregrasp"))
+    grasp_anchor = steps.get("left_handle_grasp")
+    if (
+        pregrasp_end is None
+        or grasp_anchor is None
+        or not 0 <= complete < first_force < pregrasp_end < grasp_anchor
+    ):
+        raise ValueError(
+            "contact-frame preorientation is outside the left acquisition corridor"
+        )
+
+    original = trajectory.left_poses.copy()
+    left = original.copy()
+    orientation_ramp = interpolate_poses(
+        start,
+        np.concatenate((start[:3], desired_pregrasp[3:])),
+        complete + 1,
+    )[:, 3:]
+    left[: complete + 1, 3:] = orientation_ramp
+    left[complete + 1 : pregrasp_end + 1, 3:] = desired_pregrasp[3:]
+
+    previous_quaternions = np.concatenate(
+        (start[None, 3:], left[:grasp_anchor, 3:]), axis=0
+    )
+    dots = np.abs(
+        np.sum(left[: grasp_anchor + 1, 3:] * previous_quaternions, axis=1)
+    )
+    orientation_steps = 2.0 * np.arccos(np.clip(dots, -1.0, 1.0))
+    maximum_observed = float(np.max(orientation_steps))
+    if maximum_observed > maximum_orientation_step_rad + 1.0e-12:
+        raise ValueError("contact-frame preorientation exceeds orientation step bound")
+
+    prior_quaternion = original[first_force, 3:]
+    correction = quaternion_multiply(
+        desired_pregrasp[3:],
+        prior_quaternion * np.asarray([1.0, -1.0, -1.0, -1.0]),
+    )
+    correction /= np.linalg.norm(correction)
+    if correction[0] < 0.0:
+        correction = -correction
+    vector_norm = float(np.linalg.norm(correction[1:]))
+    correction_angle = 2.0 * np.arctan2(vector_norm, float(correction[0]))
+    correction_axis_angle_deg = (
+        np.zeros(3, dtype=np.float64)
+        if vector_norm <= 1.0e-12
+        else np.degrees(correction_angle) * correction[1:] / vector_norm
+    )
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=trajectory.right_poses.copy(),
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "alignment_complete_step": complete,
+            "prior_first_force_step": first_force,
+            "force_free_lead_steps": first_force - complete,
+            "minimum_force_free_lead_steps": lead,
+            "prior_first_force_orientation_correction_axis_angle_deg": (
+                correction_axis_angle_deg.tolist()
+            ),
+            "prior_first_force_orientation_correction_deg": float(
+                np.linalg.norm(correction_axis_angle_deg)
+            ),
+            "maximum_orientation_step_rad": maximum_observed,
+            "orientation_step_bound_rad": float(maximum_orientation_step_rad),
+            "left_translations_unchanged": bool(
+                np.array_equal(left[:, :3], original[:, :3])
+            ),
+            "left_pregrasp_pose_unchanged": bool(
+                np.allclose(left[pregrasp_end], desired_pregrasp, atol=1.0e-12)
+            ),
+            "right_trajectory_unchanged": True,
+            "grippers_unchanged": True,
+        },
+    )
+
+
 def _linear_contact_feedback_poses(
     start: Any,
     target: Any,

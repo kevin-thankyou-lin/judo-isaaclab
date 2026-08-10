@@ -25,6 +25,7 @@ from judo_isaaclab.put_pot import (
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     apply_static_precontact_jaw_axis_translation,
     apply_precontact_source_frame_correction,
+    apply_contact_frame_preorientation,
     apply_source_demo_approach_corridor,
     apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
@@ -172,6 +173,81 @@ def test_source_demo_approach_corridor_rejects_unbounded_waypoint_change():
             _pose(x=0.5),
             _pose(x=0.6),
             maximum_position_correction_m=0.05,
+        )
+
+
+def test_contact_frame_preorientation_changes_only_early_left_orientations():
+    start = _pose(0.0, 0.0, 0.5)
+    program = PutPotSkillProgram(start, _pose(0.0, 1.0, 0.5))
+    program.bimanual_handle_grasp(
+        _pose(0.2, 0.0, 0.5),
+        _pose(0.2, 1.0, 0.5),
+        _pose(0.3, 0.0, 0.5),
+        _pose(0.3, 1.0, 0.5),
+        approach_steps=30,
+        left_close_steps=10,
+        right_close_steps=5,
+        simultaneous=True,
+    )
+    original = program.build()
+    desired = original.left_poses[original.waypoint_steps["bimanual_pregrasp"]]
+    desired = desired.copy()
+    desired[3:] = [np.cos(0.2), 0.0, 0.0, np.sin(0.2)]
+    corridor, _ = apply_source_demo_approach_corridor(
+        original,
+        start,
+        desired,
+        original.left_poses[original.waypoint_steps["left_handle_grasp"]],
+        maximum_position_correction_m=0.2,
+        maximum_position_step_m=0.1,
+        maximum_orientation_step_rad=0.2,
+    )
+
+    corrected, receipt = apply_contact_frame_preorientation(
+        corridor,
+        start,
+        desired,
+        alignment_complete_step=10,
+        prior_first_force_step=25,
+        maximum_orientation_step_rad=0.2,
+    )
+
+    pregrasp = corridor.waypoint_steps["bimanual_pregrasp"]
+    assert corrected.left_poses[10, 3:] == pytest.approx(desired[3:])
+    assert corrected.left_poses[10 : pregrasp + 1, 3:] == pytest.approx(
+        np.tile(desired[3:], (pregrasp - 9, 1))
+    )
+    assert corrected.left_poses[:, :3] == pytest.approx(corridor.left_poses[:, :3])
+    assert corrected.left_poses[pregrasp:] == pytest.approx(
+        corridor.left_poses[pregrasp:]
+    )
+    assert corrected.right_poses == pytest.approx(corridor.right_poses)
+    assert corrected.grippers == pytest.approx(corridor.grippers)
+    assert receipt["force_free_lead_steps"] == 15
+    assert receipt["left_translations_unchanged"] is True
+
+
+def test_contact_frame_preorientation_rejects_short_force_free_lead():
+    start = _pose()
+    program = PutPotSkillProgram(start, _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(0.1, 1.0),
+        _pose(x=0.2),
+        _pose(0.2, 1.0),
+        approach_steps=30,
+        left_close_steps=5,
+        right_close_steps=5,
+        simultaneous=True,
+    )
+    trajectory = program.build()
+    with pytest.raises(ValueError, match="force-free lead"):
+        apply_contact_frame_preorientation(
+            trajectory,
+            start,
+            trajectory.left_poses[trajectory.waypoint_steps["bimanual_pregrasp"]],
+            alignment_complete_step=20,
+            prior_first_force_step=30,
         )
 
 from run_putpot_skill_program import (

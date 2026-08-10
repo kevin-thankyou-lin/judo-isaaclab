@@ -138,6 +138,22 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-contact-frame-preorientation-complete-step",
+        type=int,
+        help=(
+            "Complete the source-mapped left wrist orientation at this force-free "
+            "acquisition step, without changing any Cartesian translation."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-contact-frame-prior-first-force-step",
+        type=int,
+        help=(
+            "Measured first left force step from the immutable diagnostic that "
+            "bounds contact-frame preorientation."
+        ),
+    )
+    parser.add_argument(
         "--target-source-left-first-acquisition",
         action="store_true",
         help=(
@@ -1515,6 +1531,27 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "source approach corridor requires source-contact calibration inputs"
         )
+    preorientation_requested = any(
+        value is not None
+        for value in (
+            args.target_left_contact_frame_preorientation_complete_step,
+            args.target_left_contact_frame_prior_first_force_step,
+        )
+    )
+    if preorientation_requested and not all(
+        value is not None
+        for value in (
+            args.target_left_contact_frame_preorientation_complete_step,
+            args.target_left_contact_frame_prior_first_force_step,
+        )
+    ):
+        raise ValueError(
+            "contact-frame preorientation requires complete and first-force steps"
+        )
+    if preorientation_requested and not args.target_left_source_approach_corridor:
+        raise ValueError(
+            "contact-frame preorientation requires the source approach corridor"
+        )
     if (
         args.target_source_left_first_acquisition
         and not args.target_left_source_approach_corridor
@@ -1898,6 +1935,7 @@ def main(argv: list[str] | None = None) -> None:
                 transfer_pose as transfer_marker_pose,
             )
             from judo_isaaclab.put_pot import (
+                apply_contact_frame_preorientation,
                 apply_precontact_source_frame_correction,
                 apply_source_demo_approach_corridor,
                 source_contact_frame_grasp_pose,
@@ -2039,11 +2077,31 @@ def main(argv: list[str] | None = None) -> None:
                         maximum_orientation_step_rad=args.max_rotation_step,
                     )
                 )
-                mechanism = (
-                    "source_demo_left_first_acquisition_chronology"
-                    if args.target_source_left_first_acquisition
-                    else "source_demo_pregrasp_contact_corridor"
-                )
+                if preorientation_requested:
+                    trajectory, preorientation_receipt = (
+                        apply_contact_frame_preorientation(
+                            trajectory,
+                            left_reset_pose,
+                            desired_pregrasp,
+                            alignment_complete_step=(
+                                args.target_left_contact_frame_preorientation_complete_step
+                            ),
+                            prior_first_force_step=(
+                                args.target_left_contact_frame_prior_first_force_step
+                            ),
+                            maximum_orientation_step_rad=args.max_rotation_step,
+                        )
+                    )
+                    trajectory_receipt["contact_frame_preorientation"] = (
+                        preorientation_receipt
+                    )
+                    mechanism = "target_contact_frame_preorientation_before_contact"
+                else:
+                    mechanism = (
+                        "source_demo_left_first_acquisition_chronology"
+                        if args.target_source_left_first_acquisition
+                        else "source_demo_pregrasp_contact_corridor"
+                    )
             else:
                 trajectory, trajectory_receipt = (
                     apply_precontact_source_frame_correction(
