@@ -65,6 +65,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repair-epoch-attempt", type=int)
     parser.add_argument("--repair-epoch-attempt-limit", type=int, default=4)
     parser.add_argument("--runtime-receipt-json")
+    parser.add_argument(
+        "--target-left-grasp-orientation-local-wxyz",
+        nargs=4,
+        type=float,
+        metavar=("W", "X", "Y", "Z"),
+        help=(
+            "Calibration-only left grasp orientation in the target pot frame. "
+            "Transport still requires the measured bilateral latch gate."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -800,6 +810,9 @@ def _build_skill(
         right_close_steps=60 if right_first_close else grasp_hold_steps,
         simultaneous=not right_first_close,
         right_first=right_first_close,
+        defer_left_pregrasp=bool(
+            grasp_geometry["left"].get("defer_left_pregrasp", False)
+        ),
         contact_hold_steps=peer_contact_hold_steps,
     )
     transport = program.smooth_bimanual_transport_to_center(
@@ -924,6 +937,7 @@ def _sparse_joint_nominal(source, trajectory, keyframes) -> np.ndarray:
     source_indices = keyframes["semantic_indices"]
     mapping = {
         "bimanual_pregrasp": (source_indices["left_pregrasp"], source_indices["right_pregrasp"]),
+        "left_pregrasp": (source_indices["left_pregrasp"], source_indices["right_handle_grasp"]),
         "left_handle_grasp": (source_indices["left_handle_grasp"], source_indices["right_pregrasp"]),
         "right_handle_grasp": (source_indices["right_handle_grasp"], source_indices["right_handle_grasp"]),
         "bimanual_contact_hold": (source_indices["left_handle_grasp"], source_indices["right_handle_grasp"]),
@@ -1313,7 +1327,12 @@ def main(argv: list[str] | None = None) -> None:
 
             target_pot_name = Path(target_assets["pot"]).name.lower()
             measured_orientation = (
-                MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ.get(
+                np.asarray(
+                    args.target_left_grasp_orientation_local_wxyz,
+                    dtype=np.float64,
+                )
+                if args.target_left_grasp_orientation_local_wxyz is not None
+                else MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ.get(
                     target_pot_name
                 )
             )
@@ -1560,6 +1579,13 @@ def main(argv: list[str] | None = None) -> None:
             total_steps = initialized["total_steps"]
             controller_receipt = controller_client.receipt()
         frame_stats = []
+        acquisition_fail_closed = False
+        acquisition_fail_closed_step = None
+        from judo_isaaclab.put_pot import (
+            ROBUST_BIMANUAL_LATCH_STEPS,
+            robust_bimanual_latch_ready,
+        )
+
         if args.render:
             render_started = time.monotonic()
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
@@ -1595,13 +1621,43 @@ def main(argv: list[str] | None = None) -> None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
             else:
-                base_command = {
-                    "stage": trajectory.stage_names[step],
-                    "left_pose": trajectory.left_poses[step],
-                    "right_pose": trajectory.right_poses[step],
-                    "grippers": trajectory.grippers[step],
-                    "joint_nominal": joint_nominal[step],
-                }
+                if step == grasp_complete_step + 1:
+                    acquisition_fail_closed = not robust_bimanual_latch_ready(
+                        [row["left_grasp"] for row in samples],
+                        [row["right_grasp"] for row in samples],
+                    )
+                    if acquisition_fail_closed:
+                        acquisition_fail_closed_step = step
+                        print(
+                            "PUTPOT_FAIL_CLOSED="
+                            + json.dumps(
+                                {
+                                    "reason": "robust_bimanual_latch_missing",
+                                    "required_consecutive_frames": (
+                                        ROBUST_BIMANUAL_LATCH_STEPS
+                                    ),
+                                    "step": step,
+                                },
+                                sort_keys=True,
+                            ),
+                            flush=True,
+                        )
+                if acquisition_fail_closed:
+                    base_command = {
+                        "stage": "bimanual_handle_grasp_fail_closed",
+                        "left_pose": np.asarray(samples[-1]["left_eef_pose"]),
+                        "right_pose": np.asarray(samples[-1]["right_eef_pose"]),
+                        "grippers": np.zeros(2, dtype=np.float64),
+                        "joint_nominal": joint_nominal[step],
+                    }
+                else:
+                    base_command = {
+                        "stage": trajectory.stage_names[step],
+                        "left_pose": trajectory.left_poses[step],
+                        "right_pose": trajectory.right_poses[step],
+                        "grippers": trajectory.grippers[step],
+                        "joint_nominal": joint_nominal[step],
+                    }
                 command = (
                     None
                     if controller_client is None
@@ -3397,6 +3453,7 @@ def main(argv: list[str] | None = None) -> None:
                     target_left_grasp_orientation_override_local_wxyz
                 ),
                 "contact_hold_latch_step": contact_hold_latch_step,
+                "acquisition_fail_closed_step": acquisition_fail_closed_step,
                 "contact_hold_loaded_residual_world_m": (
                     contact_hold_loaded_residual_world_m
                 ),

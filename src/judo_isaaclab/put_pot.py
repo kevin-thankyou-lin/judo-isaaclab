@@ -134,6 +134,27 @@ MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ = {
     )
 }
 
+ROBUST_BIMANUAL_LATCH_STEPS = 15
+
+
+def robust_bimanual_latch_ready(
+    left_grasps: Any,
+    right_grasps: Any,
+    required_steps: int = ROBUST_BIMANUAL_LATCH_STEPS,
+) -> bool:
+    """Require a sustained bilateral latch before any transport command."""
+
+    left = np.asarray(left_grasps, dtype=bool)
+    right = np.asarray(right_grasps, dtype=bool)
+    if left.ndim != 1 or right.ndim != 1 or left.shape != right.shape:
+        raise ValueError("grasp histories must be matching one-dimensional arrays")
+    if required_steps < 1:
+        raise ValueError("required_steps must be positive")
+    return bool(
+        left.size >= required_steps
+        and np.all(left[-required_steps:] & right[-required_steps:])
+    )
+
 
 def _linear_contact_feedback_poses(
     start: Any,
@@ -1282,9 +1303,20 @@ def apply_object_local_receiving_grasp_orientation(
     if norm <= 1.0e-9:
         raise ValueError("orientation_local_wxyz must be nonzero")
     orientation /= norm
-    pregrasp_end = trajectory.waypoint_steps.get("bimanual_pregrasp")
-    grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
-    if pregrasp_end is None or grasp_end is None or not 0 <= pregrasp_end < grasp_end:
+    pregrasp_end = trajectory.waypoint_steps.get(
+        "left_pregrasp",
+        trajectory.waypoint_steps.get("bimanual_pregrasp"),
+    )
+    grasp_candidates = [
+        trajectory.waypoint_steps.get(name)
+        for name in (
+            "left_handle_grasp",
+            "right_handle_grasp",
+            "bimanual_contact_hold",
+        )
+    ]
+    grasp_end = max(step for step in grasp_candidates if step is not None)
+    if pregrasp_end is None or not 0 <= pregrasp_end < grasp_end:
         raise ValueError("trajectory must contain ordered pregrasp and contact hold")
     target_world = quaternion_multiply(root[3:], orientation)
     target_world /= np.linalg.norm(target_world)
@@ -1318,8 +1350,18 @@ def track_loaded_pad_center_from_observation(
     """
 
     step = int(current_step)
-    grasp_end = trajectory.waypoint_steps.get("bimanual_contact_hold")
-    if grasp_end is None or step < 0 or step >= grasp_end:
+    grasp_candidates = [
+        trajectory.waypoint_steps.get(name)
+        for name in (
+            "left_handle_grasp",
+            "right_handle_grasp",
+            "bimanual_contact_hold",
+        )
+    ]
+    grasp_end = max(
+        candidate for candidate in grasp_candidates if candidate is not None
+    )
+    if step < 0 or step >= grasp_end:
         raise ValueError("loaded pad tracking step is outside contact hold")
     observed = _pose(observed_eef_pose, "observed_eef_pose")
     retained = _pose(retained_orientation_pose, "retained_orientation_pose")
@@ -3391,17 +3433,20 @@ class PutPotSkillProgram:
         closed: float = 0.0,
         simultaneous: bool = False,
         right_first: bool = False,
+        defer_left_pregrasp: bool = False,
         contact_hold_steps: int = 0,
     ) -> None:
         if simultaneous and right_first:
             raise ValueError("simultaneous and right_first are mutually exclusive")
+        if defer_left_pregrasp and not right_first:
+            raise ValueError("defer_left_pregrasp requires right_first")
         if contact_hold_steps < 0:
             raise ValueError("contact_hold_steps must be nonnegative")
         self._append(
             "bimanual_pregrasp",
             "bimanual_handle_grasp",
             approach_steps,
-            left_pose=left_pregrasp,
+            left_pose=(None if defer_left_pregrasp else left_pregrasp),
             right_pose=right_pregrasp,
         )
         if simultaneous:
@@ -3427,6 +3472,13 @@ class PutPotSkillProgram:
                 right_pose=right_grasp,
                 right_gripper=closed,
             )
+            if defer_left_pregrasp:
+                self._append(
+                    "left_pregrasp",
+                    "bimanual_handle_grasp",
+                    approach_steps,
+                    left_pose=left_pregrasp,
+                )
             self._append(
                 "left_handle_grasp",
                 "bimanual_handle_grasp",

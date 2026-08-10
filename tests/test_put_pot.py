@@ -14,6 +14,7 @@ from judo_isaaclab.put_pot import (
     LOADED_JAW_REACH_AVOIDANCE_FRACTION,
     HANDLE_PAD_GEOMETRIC_MARGIN_M,
     MISSING_FINGER_CONTACT_LIMIT_M,
+    ROBUST_BIMANUAL_LATCH_STEPS,
     MEASURED_TARGET_LEFT_GRASP_ORIENTATION_LOCAL_WXYZ,
     SINGLE_FINGER_CONTACT_LATCH_STEPS,
     PutPotSkillProgram,
@@ -40,6 +41,7 @@ from judo_isaaclab.put_pot import (
     geometry_conditioned_peer_contact_hold_steps,
     geometry_conditioned_peer_contact_transfer,
     geometry_conditioned_right_first_close,
+    robust_bimanual_latch_ready,
     geometry_conditioned_target_handle_symmetry,
     geometry_conditioned_transport_steps,
     loaded_pick_height_for_support_clearance,
@@ -965,6 +967,18 @@ def test_only_thin_measured_symmetric_target_handles_share_contact_relation():
     )
 
 
+def test_robust_bimanual_latch_requires_consecutive_terminal_margin():
+    ready = [False, True] + [True] * ROBUST_BIMANUAL_LATCH_STEPS
+    peer = [True] * len(ready)
+    assert robust_bimanual_latch_ready(ready, peer)
+    ready[-2] = False
+    assert not robust_bimanual_latch_ready(ready, peer)
+    assert not robust_bimanual_latch_ready(
+        [True] * (ROBUST_BIMANUAL_LATCH_STEPS - 1),
+        [True] * (ROBUST_BIMANUAL_LATCH_STEPS - 1),
+    )
+
+
 def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():
     right_handle = _pose(x=0.16)
     left_handle = np.asarray([-0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
@@ -1464,6 +1478,36 @@ def test_matching_handles_beyond_jaw_reach_transfer_proven_peer_contact():
     )
     assert geometry_conditioned_peer_contact_hold_steps(left, right, 0.0488) == 240
     assert geometry_conditioned_peer_contact_hold_steps(left, right, 0.0375) == 0
+
+
+def test_deferred_left_pregrasp_stays_clear_until_right_latch():
+    left_start = _pose(y=0.5)
+    left_pregrasp = _pose(0.1, 0.4)
+    program = PutPotSkillProgram(left_start, _pose(y=-0.5))
+    program.bimanual_handle_grasp(
+        left_pregrasp,
+        _pose(0.1, -0.4),
+        _pose(0.2, 0.3),
+        _pose(0.2, -0.3),
+        approach_steps=2,
+        left_close_steps=2,
+        right_close_steps=2,
+        right_first=True,
+        defer_left_pregrasp=True,
+    )
+    trajectory = program.build()
+    right_end = trajectory.waypoint_steps["right_handle_grasp"]
+    left_pregrasp_end = trajectory.waypoint_steps["left_pregrasp"]
+    left_end = trajectory.waypoint_steps["left_handle_grasp"]
+    assert trajectory.left_poses[: right_end + 1] == pytest.approx(
+        np.broadcast_to(left_start, (right_end + 1, 7))
+    )
+    assert trajectory.left_poses[left_pregrasp_end] == pytest.approx(left_pregrasp)
+    assert trajectory.grippers[: right_end + 1, 0] == pytest.approx(
+        np.full(right_end + 1, trajectory.grippers[0, 0])
+    )
+    assert np.all(trajectory.grippers[right_end:, 1] == 0.0)
+    assert left_end > left_pregrasp_end > right_end
 
 
 def test_right_first_peer_grasp_holds_closed_contact_before_transport():
