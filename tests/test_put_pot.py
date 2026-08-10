@@ -103,7 +103,11 @@ from judo_isaaclab.put_pot import (
     _linear_contact_feedback_poses,
 )
 
-from run_putpot_skill_program import _build_center_repair, _sparse_joint_nominal
+from run_putpot_skill_program import (
+    _build_center_repair,
+    _install_procedural_ground,
+    _sparse_joint_nominal,
+)
 
 
 def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
@@ -126,6 +130,63 @@ def test_center_repair_preserves_supported_prefix_and_releases_after_slide():
         np.asarray(sample["cooktop_pose"])[:2] - np.asarray(sample["pot_pose"])[:2],
         atol=1e-9,
     )
+
+
+def test_offline_ground_is_created_when_cluster_scene_omits_slot():
+    class Asset:
+        class InitialStateCfg:
+            def __init__(self, *, pos):
+                self.pos = pos
+
+        def __init__(self, *, prim_path, spawn, init_state):
+            self.prim_path = prim_path
+            self.spawn = spawn
+            self.init_state = init_state
+
+    class Sim:
+        class CollisionPropertiesCfg:
+            pass
+
+        class PreviewSurfaceCfg:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class CuboidCfg:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+    scene = SimpleNamespace(ground=None)
+    mode = _install_procedural_ground(scene, Sim, Asset)
+    assert mode == "created_missing_scene_ground"
+    assert scene.ground.prim_path == "/World/Ground"
+    assert scene.ground.init_state.pos == (0.0, 0.0, -0.05)
+    assert scene.ground.spawn.kwargs["size"] == (100.0, 100.0, 0.1)
+
+
+def test_offline_ground_replaces_existing_slot_without_changing_identity():
+    existing = SimpleNamespace(
+        init_state=SimpleNamespace(pos=(0.0, 0.0, 0.0)),
+        spawn=None,
+    )
+    scene = SimpleNamespace(ground=existing)
+
+    class Sim:
+        class CollisionPropertiesCfg:
+            pass
+
+        class PreviewSurfaceCfg:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class CuboidCfg:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+    mode = _install_procedural_ground(scene, Sim, object)
+    assert mode == "replaced_existing_scene_ground"
+    assert scene.ground is existing
+    assert existing.init_state.pos == (0.0, 0.0, -0.05)
+    assert existing.spawn.kwargs["size"] == (100.0, 100.0, 0.1)
 
 
 from judo_isaaclab.put_marker import (

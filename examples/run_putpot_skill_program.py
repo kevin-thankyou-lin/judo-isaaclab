@@ -174,8 +174,34 @@ def _geometry(asset_path: str, root_pose: np.ndarray):
     return RigidSupportGeometry(root_pose=np.asarray(root_pose), size=_asset_size(asset_path))
 
 
+def _install_procedural_ground(scene, sim_utils, asset_base_cfg) -> str:
+    """Install the offline collider whether the Gear scene has a ground slot."""
+
+    spawn = sim_utils.CuboidCfg(
+        size=(100.0, 100.0, 0.1),
+        collision_props=sim_utils.CollisionPropertiesCfg(),
+        visual_material=sim_utils.PreviewSurfaceCfg(
+            diffuse_color=(0.18, 0.18, 0.18), roughness=0.8
+        ),
+        semantic_tags=[("class", "ground")],
+    )
+    if scene.ground is None:
+        scene.ground = asset_base_cfg(
+            prim_path="/World/Ground",
+            spawn=spawn,
+            init_state=asset_base_cfg.InitialStateCfg(
+                pos=(0.0, 0.0, -0.05)
+            ),
+        )
+        return "created_missing_scene_ground"
+    scene.ground.init_state.pos = (0.0, 0.0, -0.05)
+    scene.ground.spawn = spawn
+    return "replaced_existing_scene_ground"
+
+
 def _configure_offline_ground() -> dict[str, object]:
     import isaaclab.sim as sim_utils
+    from isaaclab.assets import AssetBaseCfg
     from dc_study.envs.tasks.put_pot_on_cooktop_manager_cfg import PutPotOnCooktopManagerEnvCfg
 
     original_init = PutPotOnCooktopManagerEnvCfg.__init__
@@ -186,21 +212,19 @@ def _configure_offline_ground() -> dict[str, object]:
         # do not let ManagerBasedRLEnv auto-reset on the first successful frame.
         # The evidence contract additionally requires a stable terminal window.
         instance.terminations.task_success = None
-        ground = instance.scene.ground
-        ground.init_state.pos = (0.0, 0.0, -0.05)
-        ground.spawn = sim_utils.CuboidCfg(
-            size=(100.0, 100.0, 0.1),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.18, 0.18, 0.18), roughness=0.8
-            ),
-            semantic_tags=[("class", "ground")],
+        instance._putpot_offline_ground_mode = _install_procedural_ground(
+            instance.scene,
+            sim_utils,
+            AssetBaseCfg,
         )
 
     PutPotOnCooktopManagerEnvCfg.__init__ = offline_init
     return {
         "reason": "network-backed Isaac default_environment.usd unavailable",
-        "implementation": "procedural static CuboidCfg",
+        "implementation": (
+            "procedural static CuboidCfg; create AssetBaseCfg when the "
+            "Gear scene deliberately omits its ground slot"
+        ),
         "collision_surface_z_m": 0.0,
         "success_auto_termination": "disabled; coded task predicate unchanged",
     }
