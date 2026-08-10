@@ -1641,6 +1641,7 @@ def main(argv: list[str] | None = None) -> None:
                 )
             with np.load(calibration_path, allow_pickle=False) as calibration:
                 required_arrays = {
+                    "pot_poses",
                     "left_eef_poses",
                     "left_pad_centers_world",
                     "left_pad_axes_world",
@@ -1662,6 +1663,10 @@ def main(argv: list[str] | None = None) -> None:
                     calibration["left_eef_poses"][calibration_step],
                     dtype=np.float64,
                 )
+                calibration_pot_pose = np.asarray(
+                    calibration["pot_poses"][calibration_step],
+                    dtype=np.float64,
+                )
                 calibration_pad_centers = np.asarray(
                     calibration["left_pad_centers_world"][calibration_step],
                     dtype=np.float64,
@@ -1674,7 +1679,7 @@ def main(argv: list[str] | None = None) -> None:
             desired_grasp, frame_receipt = source_contact_frame_grasp_pose(
                 source_left_grasp["left_eef_pose"],
                 source_left_grasp["pot_pose"],
-                target_geometry.root_pose,
+                calibration_pot_pose,
                 handle_grasp_geometry["left"][
                     "source_contact_frame_local"
                 ],
@@ -1719,6 +1724,9 @@ def main(argv: list[str] | None = None) -> None:
                     "sha256": _sha256(calibration_path),
                     "sample_step": calibration_step,
                 },
+                "deterministic_target_pot_pose": (
+                    calibration_pot_pose.tolist()
+                ),
                 "critic": {
                     "path": str(critic_path),
                     "sha256": _sha256(critic_path),
