@@ -1438,6 +1438,8 @@ def main(argv: list[str] | None = None) -> None:
             collision_clearance_m=args.collision_clearance_m,
         )
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode in {"skill", "replay_center"} else None
+        left_reset_pose = _eef_pose(env, "left_arm")
+        right_reset_pose = _eef_pose(env, "right_arm")
         (
             trajectory,
             intended_final_pot,
@@ -1455,8 +1457,8 @@ def main(argv: list[str] | None = None) -> None:
                 target_parts,
                 source_components,
                 target_components,
-                _eef_pose(env, "left_arm"),
-                _eef_pose(env, "right_arm"),
+                left_reset_pose,
+                right_reset_pose,
                 args,
             )
             if args.mode == "skill" else (None, None, None, None, None)
@@ -1757,7 +1759,7 @@ def main(argv: list[str] | None = None) -> None:
                 trajectory, trajectory_receipt = (
                     apply_source_demo_approach_corridor(
                         trajectory,
-                        left_start,
+                        left_reset_pose,
                         desired_pregrasp,
                         desired_grasp,
                         maximum_position_correction_m=position_bound,
