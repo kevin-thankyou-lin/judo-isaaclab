@@ -25,6 +25,7 @@ from judo_isaaclab.put_pot import (
     YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
     apply_static_precontact_jaw_axis_translation,
     apply_precontact_source_frame_correction,
+    apply_source_demo_approach_corridor,
     apply_object_local_receiving_grasp_orientation,
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
@@ -104,6 +105,74 @@ from judo_isaaclab.put_pot import (
     transport_reanchor_position_step_limit_m,
     _linear_contact_feedback_poses,
 )
+
+
+def test_source_demo_approach_corridor_maps_both_left_waypoints_only():
+    start = _pose(0.0, 0.0, 0.5)
+    program = PutPotSkillProgram(start, _pose(0.0, 1.0, 0.5))
+    program.bimanual_handle_grasp(
+        _pose(0.2, 0.0, 0.5),
+        _pose(0.2, 1.0, 0.5),
+        _pose(0.3, 0.0, 0.5),
+        _pose(0.3, 1.0, 0.5),
+        approach_steps=10,
+        left_close_steps=6,
+        right_close_steps=5,
+        simultaneous=True,
+    )
+    original = program.build()
+    desired_pregrasp = np.asarray(
+        [0.18, 0.04, 0.55, np.cos(0.05), 0.0, 0.0, np.sin(0.05)]
+    )
+    desired_grasp = np.asarray(
+        [0.20, 0.02, 0.54, np.cos(0.075), 0.0, 0.0, np.sin(0.075)]
+    )
+
+    corrected, receipt = apply_source_demo_approach_corridor(
+        original,
+        start,
+        desired_pregrasp,
+        desired_grasp,
+        maximum_position_correction_m=0.2,
+        maximum_position_step_m=0.1,
+        maximum_orientation_step_rad=0.1,
+    )
+
+    pregrasp_end = original.waypoint_steps["bimanual_pregrasp"]
+    grasp_anchor = original.waypoint_steps["left_handle_grasp"]
+    grasp_end = original.waypoint_steps["right_handle_grasp"]
+    assert corrected.left_poses[pregrasp_end] == pytest.approx(desired_pregrasp)
+    assert corrected.left_poses[grasp_anchor] == pytest.approx(desired_grasp)
+    assert corrected.left_poses[grasp_end] == pytest.approx(desired_grasp)
+    assert corrected.right_poses == pytest.approx(original.right_poses)
+    assert corrected.grippers == pytest.approx(original.grippers)
+    assert receipt["source_mapped_approach_world_m"] == pytest.approx(
+        desired_grasp[:3] - desired_pregrasp[:3]
+    )
+    assert receipt["maximum_position_step_m"] <= 0.1
+
+
+def test_source_demo_approach_corridor_rejects_unbounded_waypoint_change():
+    start = _pose()
+    program = PutPotSkillProgram(start, _pose(y=1.0))
+    program.bimanual_handle_grasp(
+        _pose(x=0.1),
+        _pose(0.1, 1.0),
+        _pose(x=0.2),
+        _pose(0.2, 1.0),
+        approach_steps=4,
+        left_close_steps=4,
+        right_close_steps=4,
+        simultaneous=True,
+    )
+    with pytest.raises(ValueError, match="position correction"):
+        apply_source_demo_approach_corridor(
+            program.build(),
+            start,
+            _pose(x=0.5),
+            _pose(x=0.6),
+            maximum_position_correction_m=0.05,
+        )
 
 from run_putpot_skill_program import (
     _build_center_repair,

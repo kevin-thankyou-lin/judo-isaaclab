@@ -112,6 +112,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-left-source-contact-critic-json",
         help="Immutable critic receipt that owns the calibration trace.",
     )
+    parser.add_argument(
+        "--target-left-source-approach-corridor",
+        action="store_true",
+        help=(
+            "Map both source left pregrasp and grasp frames through the target "
+            "handle contact frame. Acquisition-only mode only."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1238,6 +1246,10 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "source-contact correction cannot reuse static translation calibration"
         )
+    if args.target_left_source_approach_corridor and not source_contact_requested:
+        raise ValueError(
+            "source approach corridor requires source-contact calibration inputs"
+        )
     if (
         args.support_clearance_m < 0.0
         or args.transport_clearance_m <= 0.0
@@ -1608,6 +1620,7 @@ def main(argv: list[str] | None = None) -> None:
         if source_contact_requested:
             from judo_isaaclab.put_pot import (
                 apply_precontact_source_frame_correction,
+                apply_source_demo_approach_corridor,
                 source_contact_frame_grasp_pose,
             )
 
@@ -1710,15 +1723,52 @@ def main(argv: list[str] | None = None) -> None:
             position_bound = float(
                 np.linalg.norm(target_handle_size) + args.collision_clearance_m
             )
-            trajectory, trajectory_receipt = (
-                apply_precontact_source_frame_correction(
-                    trajectory,
-                    desired_grasp,
-                    maximum_position_correction_m=position_bound,
+            source_left_pregrasp = keyframes["frames"]["left_pregrasp"]
+            if args.target_left_source_approach_corridor:
+                source_pregrasp_contact_world = compose_pose(
+                    source_left_pregrasp["pot_pose"],
+                    handle_grasp_geometry["left"][
+                        "source_contact_frame_local"
+                    ],
                 )
-            )
+                target_contact_world = compose_pose(
+                    calibration_pot_pose,
+                    handle_grasp_geometry["left"][
+                        "target_contact_frame_local"
+                    ],
+                )
+                desired_pregrasp = transfer_pose(
+                    source_left_pregrasp["left_eef_pose"],
+                    source_pregrasp_contact_world,
+                    target_contact_world,
+                )
+                desired_pregrasp[:3] += np.asarray(
+                    frame_receipt["jaw_centering_translation_world_m"],
+                    dtype=np.float64,
+                )
+                trajectory, trajectory_receipt = (
+                    apply_source_demo_approach_corridor(
+                        trajectory,
+                        left_start,
+                        desired_pregrasp,
+                        desired_grasp,
+                        maximum_position_correction_m=position_bound,
+                        maximum_position_step_m=args.max_position_step,
+                        maximum_orientation_step_rad=args.max_rotation_step,
+                    )
+                )
+                mechanism = "source_demo_pregrasp_contact_corridor"
+            else:
+                trajectory, trajectory_receipt = (
+                    apply_precontact_source_frame_correction(
+                        trajectory,
+                        desired_grasp,
+                        maximum_position_correction_m=position_bound,
+                    )
+                )
+                mechanism = "source_local_contact_frame_wrist_correction"
             source_contact_frame_correction = {
-                "mechanism": "source_local_contact_frame_wrist_correction",
+                "mechanism": mechanism,
                 "calibration_trace": {
                     "path": str(calibration_path),
                     "sha256": _sha256(calibration_path),
@@ -1735,6 +1785,16 @@ def main(argv: list[str] | None = None) -> None:
                     "name": "left_handle_grasp",
                     "sample_index": int(source_left_grasp["sample_index"]),
                 },
+                "source_pregrasp_keyframe": (
+                    {
+                        "name": "left_pregrasp",
+                        "sample_index": int(
+                            source_left_pregrasp["sample_index"]
+                        ),
+                    }
+                    if args.target_left_source_approach_corridor
+                    else None
+                ),
                 "right_trajectory_unchanged": True,
                 "frame_measurement": frame_receipt,
                 "trajectory_correction": trajectory_receipt,

@@ -586,6 +586,150 @@ def apply_precontact_source_frame_correction(
     )
 
 
+def apply_source_demo_approach_corridor(
+    trajectory: SkillTrajectory,
+    left_start_pose: Any,
+    desired_left_pregrasp_pose: Any,
+    desired_left_grasp_pose: Any,
+    *,
+    maximum_position_correction_m: float,
+    maximum_orientation_correction_rad: float = 0.5 * np.pi,
+    maximum_position_step_m: float = 0.025,
+    maximum_orientation_step_rad: float = 0.16,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Replace only the left acquisition corridor with source-frame waypoints.
+
+    The source card supplies separate pregrasp and grasp wrist frames.  Mapping
+    both through the same handle contact frame preserves the demonstrated
+    contact approach instead of ramping a grasp-only correction through an
+    unrelated target approach.  Grippers, the right arm, and all later poses
+    remain byte-for-byte unchanged.
+    """
+
+    start = _pose(left_start_pose, "left_start_pose")
+    desired_pregrasp = _pose(
+        desired_left_pregrasp_pose, "desired_left_pregrasp_pose"
+    )
+    desired_grasp = _pose(desired_left_grasp_pose, "desired_left_grasp_pose")
+    limits = np.asarray(
+        [
+            maximum_position_correction_m,
+            maximum_orientation_correction_rad,
+            maximum_position_step_m,
+            maximum_orientation_step_rad,
+        ],
+        dtype=np.float64,
+    )
+    if np.any(~np.isfinite(limits)) or np.any(limits < 0.0):
+        raise ValueError("source approach bounds must be finite and nonnegative")
+
+    steps = trajectory.waypoint_steps
+    pregrasp_end = steps.get("left_pregrasp", steps.get("bimanual_pregrasp"))
+    grasp_anchor = steps.get("left_handle_grasp")
+    grasp_candidates = [
+        steps.get(name)
+        for name in (
+            "left_handle_grasp",
+            "right_handle_grasp",
+            "bimanual_contact_hold",
+        )
+        if steps.get(name) is not None
+    ]
+    if (
+        pregrasp_end is None
+        or grasp_anchor is None
+        or not grasp_candidates
+        or not 0 <= pregrasp_end < grasp_anchor
+    ):
+        raise ValueError("trajectory has no ordered left acquisition corridor")
+    grasp_end = max(grasp_candidates)
+    current_pregrasp = trajectory.left_poses[pregrasp_end].copy()
+    current_grasp = trajectory.left_poses[grasp_anchor].copy()
+
+    def pose_delta(left: np.ndarray, right: np.ndarray) -> tuple[float, float]:
+        position = float(np.linalg.norm(right[:3] - left[:3]))
+        relative = quaternion_multiply(
+            right[3:], left[3:] * np.asarray([1.0, -1.0, -1.0, -1.0])
+        )
+        relative /= np.linalg.norm(relative)
+        orientation = float(
+            2.0 * np.arccos(np.clip(abs(relative[0]), -1.0, 1.0))
+        )
+        return position, orientation
+
+    pregrasp_position, pregrasp_orientation = pose_delta(
+        current_pregrasp, desired_pregrasp
+    )
+    grasp_position, grasp_orientation = pose_delta(current_grasp, desired_grasp)
+    if max(pregrasp_position, grasp_position) > maximum_position_correction_m + 1.0e-12:
+        raise ValueError("source approach position correction exceeds geometry bound")
+    if max(pregrasp_orientation, grasp_orientation) > maximum_orientation_correction_rad + 1.0e-12:
+        raise ValueError("source approach orientation correction exceeds bound")
+
+    left = trajectory.left_poses.copy()
+    left[: pregrasp_end + 1] = interpolate_poses(
+        start, desired_pregrasp, pregrasp_end + 1
+    )
+    left[pregrasp_end + 1 : grasp_anchor + 1] = interpolate_poses(
+        desired_pregrasp, desired_grasp, grasp_anchor - pregrasp_end
+    )
+    left[grasp_anchor + 1 : grasp_end + 1] = desired_grasp
+    relevant = left[: grasp_end + 1]
+    previous = np.concatenate((start[None], relevant[:-1]), axis=0)
+    position_steps = np.linalg.norm(relevant[:, :3] - previous[:, :3], axis=1)
+    dots = np.abs(np.sum(relevant[:, 3:] * previous[:, 3:], axis=1))
+    orientation_steps = 2.0 * np.arccos(np.clip(dots, -1.0, 1.0))
+    maximum_observed_position_step = float(np.max(position_steps))
+    maximum_observed_orientation_step = float(np.max(orientation_steps))
+    if maximum_observed_position_step > maximum_position_step_m + 1.0e-12:
+        raise ValueError("source approach corridor exceeds position step bound")
+    if maximum_observed_orientation_step > maximum_orientation_step_rad + 1.0e-12:
+        raise ValueError("source approach corridor exceeds orientation step bound")
+
+    approach_world = desired_grasp[:3] - desired_pregrasp[:3]
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=trajectory.right_poses.copy(),
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "left_start_pose": start.tolist(),
+            "current_left_pregrasp_pose": current_pregrasp.tolist(),
+            "desired_left_pregrasp_pose": desired_pregrasp.tolist(),
+            "current_left_grasp_pose": current_grasp.tolist(),
+            "desired_left_grasp_pose": desired_grasp.tolist(),
+            "pregrasp_position_correction_m": pregrasp_position,
+            "pregrasp_orientation_correction_deg": float(
+                np.degrees(pregrasp_orientation)
+            ),
+            "grasp_position_correction_m": grasp_position,
+            "grasp_orientation_correction_deg": float(
+                np.degrees(grasp_orientation)
+            ),
+            "source_mapped_approach_world_m": approach_world.tolist(),
+            "source_mapped_approach_distance_m": float(
+                np.linalg.norm(approach_world)
+            ),
+            "maximum_position_correction_m": float(
+                maximum_position_correction_m
+            ),
+            "maximum_orientation_correction_rad": float(
+                maximum_orientation_correction_rad
+            ),
+            "maximum_position_step_m": maximum_observed_position_step,
+            "maximum_orientation_step_rad": maximum_observed_orientation_step,
+            "position_step_bound_m": float(maximum_position_step_m),
+            "orientation_step_bound_rad": float(maximum_orientation_step_rad),
+            "pregrasp_end_step": int(pregrasp_end),
+            "left_grasp_anchor_step": int(grasp_anchor),
+            "grasp_end_step": int(grasp_end),
+        },
+    )
+
+
 def _linear_contact_feedback_poses(
     start: Any,
     target: Any,
