@@ -63,6 +63,18 @@ def _axis_angle_deg(actual: np.ndarray, target: np.ndarray) -> list[float]:
     return (np.degrees(angle) * delta[1:] / vector_norm).tolist()
 
 
+def _local_mpc_active_arm(trace: object, step: int) -> str:
+    """Resolve the active wrist from a new trace, preserving legacy left traces."""
+
+    files = getattr(trace, "files", trace)
+    if "local_mpc_active_arm" not in files:
+        return "left"
+    arm = str(trace["local_mpc_active_arm"][step])
+    if arm not in {"left", "right"}:
+        raise ValueError(f"invalid local-MPC active arm at step {step}: {arm!r}")
+    return arm
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--physical-request-id", required=True)
@@ -74,6 +86,14 @@ def main(argv: list[str] | None = None) -> None:
         "--predicted-rotation-axis-angle-deg", nargs=3, type=float, required=True
     )
     parser.add_argument("--sign-basis", required=True)
+    parser.add_argument(
+        "--measurement-step",
+        type=int,
+        help=(
+            "Trace step for the current earliest-failure frame; defaults to "
+            "the first physical contact for legacy diagnostics."
+        ),
+    )
     parser.add_argument("--output-json", required=True)
     args = parser.parse_args(argv)
 
@@ -117,12 +137,17 @@ def main(argv: list[str] | None = None) -> None:
         protocol = diagnostic_result["protocol"]
         correction = protocol["source_contact_frame_correction"]
         geometry = protocol["parameters"]["geometry_conditioned_handle_grasp"]
-        first_contact = int(
-            protocol["acquisition_latch"]["first_contact_step"]
+        first_contact = int(protocol["acquisition_latch"]["first_contact_step"])
+        measurement_step = (
+            first_contact
+            if args.measurement_step is None
+            else int(args.measurement_step)
         )
-        pot_pose = np.asarray(right["pot_poses"][first_contact], dtype=float)
+        if not 0 <= measurement_step < len(right_actions):
+            raise ValueError("diagnostic measurement step is out of range")
+        pot_pose = np.asarray(right["pot_poses"][measurement_step], dtype=float)
         cooktop_pose = np.asarray(
-            right["cooktop_poses"][first_contact]
+            right["cooktop_poses"][measurement_step]
             if "cooktop_poses" in right.files
             else diagnostic_result["terminal"]["cooktop_pose"],
             dtype=float,
@@ -135,24 +160,24 @@ def main(argv: list[str] | None = None) -> None:
             for arm in ("left", "right")
         }
         actual_wrists = {
-            arm: np.asarray(right[f"{arm}_eef_poses"][first_contact], dtype=float)
+            arm: np.asarray(right[f"{arm}_eef_poses"][measurement_step], dtype=float)
             for arm in ("left", "right")
         }
         target_wrists = {
             arm: np.asarray(
-                right[f"desired_{arm}_eef_poses"][first_contact], dtype=float
+                right[f"desired_{arm}_eef_poses"][measurement_step], dtype=float
             )
             for arm in ("left", "right")
         }
         pads = {
             arm: np.asarray(
-                right[f"{arm}_pad_centers_world"][first_contact], dtype=float
+                right[f"{arm}_pad_centers_world"][measurement_step], dtype=float
             )
             for arm in ("left", "right")
         }
         pad_axes = {
             arm: np.asarray(
-                right[f"{arm}_pad_axes_world"][first_contact], dtype=float
+                right[f"{arm}_pad_axes_world"][measurement_step], dtype=float
             )
             for arm in ("left", "right")
         }
@@ -162,10 +187,11 @@ def main(argv: list[str] | None = None) -> None:
         }
         if (
             "local_mpc_active" in right.files
-            and bool(right["local_mpc_active"][first_contact])
+            and bool(right["local_mpc_active"][measurement_step])
         ):
-            control_vectors["left"] = np.asarray(
-                right["local_mpc_translation_control_world_m"][first_contact],
+            active_arm = _local_mpc_active_arm(right, measurement_step)
+            control_vectors[active_arm] = np.asarray(
+                right["local_mpc_translation_control_world_m"][measurement_step],
                 dtype=float,
             )
     if not exact or maximum_difference != 0.0:
@@ -261,7 +287,8 @@ def main(argv: list[str] | None = None) -> None:
         "overlay": overlay,
         "frame_receipt": frame_receipt,
         "measured_residuals": {
-            "sample_step": first_contact,
+            "sample_step": measurement_step,
+            "first_physical_contact_step": first_contact,
             "signed_translation_residual_world_m": translation.tolist(),
             "translation_norm_m": float(np.linalg.norm(translation)),
             "signed_rotation_residual_axis_angle_deg": rotation,
