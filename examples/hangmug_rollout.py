@@ -9,6 +9,7 @@ from typing import Any, Callable
 import numpy as np
 
 from judo_isaaclab.semantic_execution import SemanticExecutionEvent
+from hangmug_tree_tracking import ObservedTreePathTracker
 
 
 @dataclass
@@ -289,6 +290,7 @@ def execute_hangmug_rollout(
     right_dls_gain = 1.0
     planned_clean_insertion = None
     planning_tree_pose = np.asarray(target_tree.root_pose, dtype=np.float64)
+    tree_tracker = ObservedTreePathTracker(planning_tree_pose)
     milestones_by_step: dict[int, list[str]] = {}
     if trajectory is not None:
         for name, milestone_step in trajectory.waypoint_steps.items():
@@ -331,6 +333,7 @@ def execute_hangmug_rollout(
                 nominal_right_contact = tail.right_contact_in_mug
                 source_branch = tail.source_branch; target_branch = tail.target_branch
                 planning_tree_pose = tail.planning_tree_pose
+                tree_tracker.reset(planning_tree_pose)
                 for name, milestone_step in trajectory.waypoint_steps.items():
                     absolute_step = repair_prefix_steps + int(milestone_step)
                     milestones_by_step.setdefault(absolute_step, []).append(name)
@@ -376,10 +379,7 @@ def execute_hangmug_rollout(
             SemanticExecutionEvent(kind="before_step", step=step, stage=stage)
         )
         observation, _, terminated, truncated, info = env.step(action)
-        if (
-            trajectory is not None
-            and trajectory_step is not None
-        ):
+        if trajectory is not None and trajectory_step is not None:
             update_assist_releases(env, trajectory, trajectory_step)
         sample = sample_environment(env, step, stage, info)
         protocol_recorder.record_step(
@@ -418,7 +418,7 @@ def execute_hangmug_rollout(
         mug_poses.append(sample["mug_pose"]); tree_poses.append(sample["tree_pose"])
         left_eef.append(sample["left_eef_pose"])
         right_eef.append(sample["right_eef_pose"])
-
+        trajectory = tree_tracker.update(trajectory, trajectory_step, sample)
         if trajectory is not None and trajectory_step is not None:
             branch_entry_clearance_m = None
             if target_branch is not None:
