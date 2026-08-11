@@ -233,6 +233,7 @@ def build_replay_hang_tail(
     left_eef_pose: Any,
     right_eef_pose: Any,
     target_branch_policy: str = "source_corresponding",
+    minimum_supported_mug_z: float | None = None,
     unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
     release_steps: int = REPLAY_HANG_RELEASE_STEPS,
     insert_time_scale: int = 1,
@@ -287,8 +288,20 @@ def build_replay_hang_tail(
                 candidate,
                 candidate_mug,
                 candidate_eef,
+                bool(
+                    minimum_supported_mug_z is None
+                    or candidate_mug[2] > minimum_supported_mug_z
+                ),
             ))
-        _, _, target_branch, supported_mug_pose, selected_eef = min(candidates)
+        feasible_candidates = [row for row in candidates if row[5]]
+        if not feasible_candidates:
+            raise ValueError(
+                "no target branch yields a mug support pose above the coded "
+                f"hang-height threshold {minimum_supported_mug_z:.6f} m"
+            )
+        _, _, target_branch, supported_mug_pose, selected_eef, _ = min(
+            feasible_candidates
+        )
         branch_selection = {
             "policy": target_branch_policy,
             "method": "minimum_target_eef_translation_from_observed_handover",
@@ -299,12 +312,23 @@ def build_replay_hang_tail(
             "selected_normalized_height": float(target_branch.normalized_height),
             "selected_target_eef_pose": selected_eef.tolist(),
             "candidate_translation_m": [row[0] for row in candidates],
+            "candidate_supported_mug_z_m": [float(row[3][2]) for row in candidates],
+            "candidate_task_height_feasible": [row[5] for row in candidates],
+            "minimum_supported_mug_z_m": minimum_supported_mug_z,
             "selected_candidate_index": next(
                 row[1] for row in candidates if row[2] is target_branch
             ),
         }
     elif target_branch_policy != "source_corresponding":
         raise ValueError(f"unsupported target branch policy: {target_branch_policy}")
+    elif (
+        minimum_supported_mug_z is not None
+        and supported_mug_pose[2] <= minimum_supported_mug_z
+    ):
+        raise ValueError(
+            "source-corresponding branch yields a mug support pose below the "
+            f"coded hang-height threshold {minimum_supported_mug_z:.6f} m"
+        )
     planned_mug_poses, support_alignment = _source_relationship_mug_path(
         keyframes=keyframes,
         source_parts=source_parts,

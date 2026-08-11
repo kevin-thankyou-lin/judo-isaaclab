@@ -172,6 +172,46 @@ def test_nearest_eef_branch_policy_is_explicit_and_deterministic():
     assert selection["selected_candidate_index"] == 1
 
 
+def test_nearest_eef_rejects_task_height_infeasible_branch():
+    source_branch = _branch(1.0, 1.0, 1.0)
+    feasible = _branch(1.5, 1.5, 1.0)
+    closer_but_too_low = _branch(0.5, 0.5, 1.0)
+    keyframes = {
+        "frames": {
+            "stable_settle": {
+                "mug_pose": _pose(1.0, 0.0, 1.0).tolist(),
+                "tree_pose": _pose().tolist(),
+            }
+        },
+        "clean_insertion_path": {
+            "mug_poses": [
+                _pose(0.8, 0.0, 1.1).tolist(),
+                _pose(1.0, 0.0, 1.0).tolist(),
+            ]
+        },
+    }
+
+    tail = build_replay_hang_tail(
+        keyframes=keyframes,
+        source_parts=_parts(),
+        target_parts=_parts(),
+        source_branches=(source_branch,),
+        target_tree_pose=_pose(),
+        target_branches=(feasible, closer_but_too_low),
+        observed_mug_pose=_pose(),
+        left_eef_pose=_pose(),
+        right_eef_pose=_pose(0.45, 0.0, 0.5),
+        target_branch_policy="nearest_eef",
+        minimum_supported_mug_z=0.8,
+    )
+
+    selection = tail.support_alignment["target_branch_selection"]
+    assert tail.target_branch is feasible
+    assert selection["selected_candidate_index"] == 0
+    assert selection["candidate_task_height_feasible"] == [True, False]
+    assert selection["minimum_supported_mug_z_m"] == pytest.approx(0.8)
+
+
 def test_source_like_tail_releases_immediately_after_clean_insert():
     keyframes = {
         "frames": {

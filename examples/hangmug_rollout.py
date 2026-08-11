@@ -11,6 +11,8 @@ import numpy as np
 from judo_isaaclab.semantic_execution import SemanticExecutionEvent
 from hangmug_tree_tracking import ObservedTreePathTracker
 
+HANG_SUCCESS_HEIGHT_MARGIN_M = 0.005
+
 
 @dataclass
 class HangMugRollout:
@@ -37,7 +39,7 @@ class HangMugRollout:
 def _start_replay_tail(
     *, keyframes, source_parts, target_parts, source_branches,
     target_tree, target_branches, target_assets, sample, source_actions,
-    repair_prefix_steps, args,
+    repair_prefix_steps, minimum_supported_mug_z, args,
 ):
     """Build and fail-closed screen the source-relationship insertion tail."""
 
@@ -67,6 +69,7 @@ def _start_replay_tail(
         left_eef_pose=sample["left_eef_pose"],
         right_eef_pose=sample["right_eef_pose"],
         target_branch_policy=args.replay_target_branch_policy,
+        minimum_supported_mug_z=minimum_supported_mug_z,
         unload_steps=args.replay_hang_unload_steps,
         release_steps=args.replay_hang_release_steps,
         insert_time_scale=args.replay_hang_insert_time_scale,
@@ -339,7 +342,11 @@ def execute_hangmug_rollout(
                     target_tree=target_tree, target_branches=target_branches,
                     target_assets=target_assets, sample=samples[-1],
                     source_actions=source["actions"],
-                    repair_prefix_steps=repair_prefix_steps, args=args,
+                    repair_prefix_steps=repair_prefix_steps,
+                    minimum_supported_mug_z=float(
+                        env.mug_init_z + 0.05 + HANG_SUCCESS_HEIGHT_MARGIN_M
+                    ),
+                    args=args,
                 )
                 trajectory = tail.trajectory
                 intended_final = tail.intended_final_mug_pose
