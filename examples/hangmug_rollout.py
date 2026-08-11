@@ -299,6 +299,7 @@ def execute_hangmug_rollout(
 
                 trajectory, feedback_receipt = repair_compensated_insertion_path(
                     trajectory,
+                    completed_step=trajectory_step,
                     right_contact_in_mug=nominal_right_contact,
                     tree_pose=target_tree.root_pose,
                     mug_body_frame=target_parts.body_frame,

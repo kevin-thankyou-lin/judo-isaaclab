@@ -147,14 +147,22 @@ def test_compensated_insertion_is_rescreened_before_execution(monkeypatch):
         lambda *args, **kwargs: next(receipts),
     )
 
+    correction_args = {}
+
     def correct(path, **kwargs):
+        correction_args.update(kwargs)
         corrected = path.copy()
-        corrected[1, 0] += 0.02
-        return corrected, {"method": "test_correction"}
+        corrected[0, 0] += 0.02
+        return corrected, {
+            "method": "test_correction",
+            "source_collision_steps": [0],
+            "correction_window": [0, 1],
+        }
 
     monkeypatch.setattr(clean_insertion, "apply_branch_radial_clearance", correct)
     corrected, receipt = repair_compensated_insertion_path(
         trajectory,
+        completed_step=0,
         right_contact_in_mug=IDENTITY,
         tree_pose=IDENTITY,
         mug_body_frame=IDENTITY,
@@ -166,5 +174,10 @@ def test_compensated_insertion_is_rescreened_before_execution(monkeypatch):
     assert receipt["passed"] is True
     assert receipt["pre_correction_collision_count"] == 1
     assert receipt["observation_compensated_path"] is True
+    assert receipt["geometry_correction"]["future_start_step"] == 1
+    assert receipt["geometry_correction"]["source_collision_steps"] == [1]
+    assert receipt["geometry_correction"]["correction_window"] == [1, 2]
+    assert correction_args["collision_steps"] == [0]
+    np.testing.assert_allclose(corrected.right_poses[0], trajectory.right_poses[0])
     assert corrected.right_poses[1, 0] == pytest.approx(0.02)
     np.testing.assert_allclose(corrected.right_poses[3], trajectory.right_poses[3])

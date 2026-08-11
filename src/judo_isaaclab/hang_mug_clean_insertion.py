@@ -220,6 +220,7 @@ def apply_branch_radial_clearance(
 def repair_compensated_insertion_path(
     trajectory: SkillTrajectory,
     *,
+    completed_step: int,
     right_contact_in_mug: Any,
     tree_pose: Any,
     mug_body_frame: Any,
@@ -232,6 +233,10 @@ def repair_compensated_insertion_path(
     if "branch_insert" not in trajectory.waypoint_steps:
         raise ValueError("branch trajectory is missing branch_insert")
     insert = int(trajectory.waypoint_steps["branch_insert"])
+    completed = int(completed_step)
+    if not -1 <= completed < insert:
+        raise ValueError("completed_step must precede branch_insert")
+    future_start = completed + 1
     contact = np.asarray(right_contact_in_mug, dtype=np.float64)
     if contact.shape != (7,):
         raise ValueError("right_contact_in_mug must have shape (7,)")
@@ -251,14 +256,28 @@ def repair_compensated_insertion_path(
         receipt["geometry_correction"] = None
         return trajectory, receipt
 
-    corrected, correction = apply_branch_radial_clearance(
-        mug_path,
+    collision_steps = [int(step) for step in initial["collision_steps"]]
+    if any(step < future_start for step in collision_steps):
+        raise RuntimeError(
+            "observation-compensated insertion already collided before repair"
+        )
+
+    corrected_future, correction = apply_branch_radial_clearance(
+        mug_path[future_start:],
         tree_pose=tree_pose,
         mug_body_frame=mug_body_frame,
         mug_body_size=mug_body_size,
         target_branch=target_branch,
-        collision_steps=initial["collision_steps"],
+        collision_steps=[step - future_start for step in collision_steps],
     )
+    corrected = mug_path.copy()
+    corrected[future_start:] = corrected_future
+    correction = dict(correction)
+    correction["future_start_step"] = future_start
+    correction["source_collision_steps"] = collision_steps
+    correction["correction_window"] = [
+        future_start + int(step) for step in correction["correction_window"]
+    ]
     receipt = exact_body_collision_receipt(
         corrected,
         tree_pose=tree_pose,
@@ -274,8 +293,9 @@ def repair_compensated_insertion_path(
         )
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[: insert + 1] = np.asarray(
-        [compose_pose(pose, contact) for pose in corrected], dtype=np.float64
+    right[future_start : insert + 1] = np.asarray(
+        [compose_pose(pose, contact) for pose in corrected[future_start:]],
+        dtype=np.float64,
     )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
