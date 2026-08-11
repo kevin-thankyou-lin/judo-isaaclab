@@ -128,6 +128,7 @@ def apply_branch_radial_clearance(
     mug_body_size: Any,
     target_branch: Any,
     collision_steps: Any,
+    minimum_displacement_m: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Move one colliding path segment outward without routing it downward.
 
@@ -171,7 +172,10 @@ def apply_branch_radial_clearance(
     raw_direction = radial / radial_norm
     direction = raw_direction.copy()
     gravity_safe = bool(direction[2] < 0.0)
-    maximum_displacement = radius
+    minimum_displacement = float(minimum_displacement_m)
+    if minimum_displacement < 0.0:
+        raise ValueError("minimum_displacement_m must be nonnegative")
+    maximum_displacement = max(radius, minimum_displacement)
     if gravity_safe:
         direction[2] = 0.0
         horizontal_norm = float(np.linalg.norm(direction))
@@ -180,7 +184,9 @@ def apply_branch_radial_clearance(
                 "downward radial correction has no horizontal component"
             )
         direction /= horizontal_norm
-        maximum_displacement = max(radius, 0.5 * float(np.max(body_size[:2])))
+        maximum_displacement = max(
+            maximum_displacement, 0.5 * float(np.max(body_size[:2]))
+        )
 
     span = steps[-1] - steps[0] + 1
     taper_steps = max(12, 3 * span)
@@ -210,6 +216,7 @@ def apply_branch_radial_clearance(
         "raw_direction_world": raw_direction.tolist(),
         "direction_world": direction.tolist(),
         "gravity_safe_horizontal_projection": gravity_safe,
+        "minimum_displacement_m": minimum_displacement,
         "maximum_displacement_m": maximum_displacement,
         "preserves_final_pose": bool(
             np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
@@ -328,7 +335,41 @@ def repair_compensated_insertion_path(
     receipt["pre_correction_collision_steps"] = initial["collision_steps"]
     receipt["geometry_correction"] = correction
     if not receipt["passed"]:
-        raise RuntimeError("observation-compensated insertion remains collision-unsafe")
+        clearance = 0.5 * float(np.max(np.asarray(mug_body_size)[:2]))
+        corrected_future, expanded = apply_branch_radial_clearance(
+            mug_path[future_start:],
+            tree_pose=tree_pose,
+            mug_body_frame=mug_body_frame,
+            mug_body_size=mug_body_size,
+            target_branch=target_branch,
+            collision_steps=[step - future_start for step in collision_steps],
+            minimum_displacement_m=clearance,
+        )
+        corrected[future_start:] = corrected_future
+        expanded = dict(expanded)
+        expanded["future_start_step"] = future_start
+        expanded["source_collision_steps"] = collision_steps
+        expanded["correction_window"] = [
+            future_start + int(step) for step in expanded["correction_window"]
+        ]
+        receipt = exact_body_collision_receipt(
+            corrected,
+            tree_pose=tree_pose,
+            target_assets=target_assets,
+            start_step=future_start,
+            release_step=audit_end + 1,
+        )
+        receipt["observation_compensated_path"] = True
+        receipt["audit_end_step"] = audit_end
+        receipt["executed_prefix"] = executed_receipt
+        receipt["pre_correction_collision_count"] = initial["collision_count"]
+        receipt["pre_correction_collision_steps"] = initial["collision_steps"]
+        expanded["fallback_after_branch_radius_failed"] = True
+        receipt["geometry_correction"] = expanded
+        if not receipt["passed"]:
+            raise RuntimeError(
+                "geometry-sized observation correction remains collision-unsafe"
+            )
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     right[future_start : audit_end + 1] = np.asarray(

@@ -266,3 +266,57 @@ def test_held_suffix_rejects_observed_collision_before_future_repair(monkeypatch
             target_assets={"mug": "mug", "mug_tree": "tree"},
             executed_mug_poses=np.repeat(IDENTITY[None], 4, axis=0),
         )
+
+
+def test_held_suffix_expands_to_geometry_clearance_after_radius_is_insufficient(
+    monkeypatch,
+):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        grippers=np.zeros((6, 2)),
+        stage_names=("insert",) * 6,
+        waypoint_steps={"branch_insert": 2, "branch_unload": 5},
+    )
+    receipts = iter(
+        (
+            {"passed": True, "collision_count": 0, "collision_steps": []},
+            {"passed": False, "collision_count": 1, "collision_steps": [4]},
+            {"passed": False, "collision_count": 1, "collision_steps": [4]},
+            {"passed": True, "collision_count": 0, "collision_steps": []},
+        )
+    )
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+    requested_clearances = []
+
+    def correct(path, **kwargs):
+        requested_clearances.append(kwargs.get("minimum_displacement_m", 0.0))
+        corrected = path.copy()
+        corrected[0, 0] += 0.02
+        return corrected, {
+            "method": "test_correction",
+            "source_collision_steps": [0],
+            "correction_window": [0, 1],
+        }
+
+    monkeypatch.setattr(clean_insertion, "apply_branch_radial_clearance", correct)
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        completed_step=3,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.06, 0.08, 0.10],
+        target_branch=object(),
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        executed_mug_poses=np.repeat(IDENTITY[None], 4, axis=0),
+    )
+
+    assert requested_clearances == [0.0, pytest.approx(0.04)]
+    assert receipt["passed"] is True
+    assert receipt["geometry_correction"]["fallback_after_branch_radius_failed"]
+    np.testing.assert_allclose(corrected.right_poses[:4], trajectory.right_poses[:4])
