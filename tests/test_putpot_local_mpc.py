@@ -173,9 +173,26 @@ def test_depth_guard_centers_transverse_contact_frame_before_inward_motion():
             observed_handle_contact_frame=_pose(x=0.005, z=-0.030),
         ),
         depth_guarded_transverse_intercept=True,
+        depth_guard_alignment_streak=2,
     )
     assert not centered.frame_receipt["contact_frame_guard"]["active"]
+    assert centered.frame_receipt["contact_frame_guard"]["released"]
     assert centered.frame_receipt["executed_control"]["translation_world_m"][2] < 0.0
+
+    departed_after_release = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=21,
+            observed_handle_contact_frame=_pose(x=0.020, z=-0.030),
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_released=centered.depth_guard_released,
+    )
+    departed_guard = departed_after_release.frame_receipt["contact_frame_guard"]
+    assert not departed_guard["active"]
+    assert departed_guard["released"]
+    assert departed_after_release.frame_receipt["executed_control"][
+        "translation_world_m"
+    ][2] < 0.0
 
 
 def test_depth_guard_is_opt_in_and_preserves_default_controller_output():

@@ -2905,6 +2905,8 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_contact_window_step = 0
         local_mpc_robust_streak = 0
         local_mpc_latch_ready = False
+        local_mpc_left_depth_guard_alignment_streak = 0
+        local_mpc_left_depth_guard_released = False
         local_mpc_right_contact_window_step = 0
         local_mpc_right_robust_streak = 0
         local_mpc_right_latch_ready = False
@@ -3423,6 +3425,16 @@ def main(argv: list[str] | None = None) -> None:
                                     active_arm == "left"
                                     and args.target_handle_local_depth_guarded_intercept
                                 ),
+                                depth_guard_alignment_streak=(
+                                    local_mpc_left_depth_guard_alignment_streak
+                                    if active_arm == "left"
+                                    else 0
+                                ),
+                                depth_guard_released=(
+                                    local_mpc_left_depth_guard_released
+                                    if active_arm == "left"
+                                    else False
+                                ),
                                 config=local_mpc_config,
                             )
                             local_mpc_frame_receipts.append(
@@ -3451,6 +3463,12 @@ def main(argv: list[str] | None = None) -> None:
                                 stage = "right_handle_local_mpc_bootstrap"
                             else:
                                 local_mpc_contact_window_step += 1
+                                local_mpc_left_depth_guard_alignment_streak = (
+                                    local_command.depth_guard_alignment_streak
+                                )
+                                local_mpc_left_depth_guard_released = (
+                                    local_command.depth_guard_released
+                                )
                                 local_mpc_robust_streak = (
                                     local_command.robust_streak
                                 )

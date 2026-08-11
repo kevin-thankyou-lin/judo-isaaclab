@@ -33,6 +33,7 @@ class HandleLocalMpcConfig:
     closure_rotation_tolerance_rad: float = 0.20
     physical_contact_threshold_n: float = 0.1
     depth_guard_transverse_tolerance_m: float = 0.010
+    depth_guard_release_steps: int = 3
 
     def __post_init__(self) -> None:
         if not 10 <= self.horizon_steps <= 20:
@@ -52,8 +53,14 @@ class HandleLocalMpcConfig:
             raise ValueError("handle-local MPC positive bounds must be finite")
         if not 0.0 <= self.minimum_pad_fraction_margin <= 0.5:
             raise ValueError("pad-fraction margin must be in [0, 0.5]")
-        if self.robust_latch_steps < 1 or self.source_prior_decay_steps < 1:
-            raise ValueError("latch and source-prior decay steps must be positive")
+        if (
+            self.robust_latch_steps < 1
+            or self.source_prior_decay_steps < 1
+            or self.depth_guard_release_steps < 1
+        ):
+            raise ValueError(
+                "latch, source-prior decay, and depth-guard release steps must be positive"
+            )
         if not 0.0 <= self.source_prior_initial_weight < 1.0:
             raise ValueError("source prior must be a bounded warm-start weight")
 
@@ -64,6 +71,8 @@ class HandleLocalMpcCommand:
     jaw_command: float
     robust_streak: int
     robust_latch_ready: bool
+    depth_guard_alignment_streak: int
+    depth_guard_released: bool
     fail_closed: bool
     fail_reason: str | None
     frame_receipt: dict[str, Any]
@@ -288,6 +297,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "transverse_residual_norm_m",
             "signed_depth_residual_m",
             "suppressed_depth_control_world_m",
+            "transverse_aligned",
+            "alignment_consecutive_frames",
+            "release_required_consecutive_frames",
+            "released",
         }
         and set(latch)
         == {
@@ -326,12 +339,16 @@ def handle_local_mpc_step(
     robust_streak: int,
     require_peer_latch: bool = True,
     depth_guarded_transverse_intercept: bool = False,
+    depth_guard_alignment_streak: int = 0,
+    depth_guard_released: bool = False,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
 ) -> HandleLocalMpcCommand:
     """Plan and return the first bounded active-wrist and jaw control increment."""
 
-    if contact_window_step < 0 or robust_streak < 0:
-        raise ValueError("contact-window step and robust streak must be nonnegative")
+    if min(contact_window_step, robust_streak, depth_guard_alignment_streak) < 0:
+        raise ValueError(
+            "contact-window, robust, and depth-guard streaks must be nonnegative"
+        )
     pot = _pose(observed_pot_pose, "observed_pot_pose")
     handle = _pose(observed_handle_contact_frame, "observed_handle_contact_frame")
     wrist = _pose(active_wrist_pose, "active_wrist_pose")
@@ -396,11 +413,31 @@ def handle_local_mpc_step(
     physical_contact_observed = bool(
         np.any(forces >= config.physical_contact_threshold_n)
     )
+    transverse_residual_norm = float(np.linalg.norm(transverse_residual))
+    transverse_aligned = bool(
+        transverse_residual_norm <= config.depth_guard_transverse_tolerance_m
+    )
+    next_depth_guard_streak = (
+        depth_guard_alignment_streak + 1
+        if (
+            depth_guarded_transverse_intercept
+            and not depth_guard_released
+            and not physical_contact_observed
+            and transverse_aligned
+        )
+        else 0
+    )
+    next_depth_guard_released = bool(
+        depth_guard_released
+        or (
+            depth_guarded_transverse_intercept
+            and next_depth_guard_streak >= config.depth_guard_release_steps
+        )
+    )
     depth_guard_active = bool(
         depth_guarded_transverse_intercept
         and not physical_contact_observed
-        and np.linalg.norm(transverse_residual)
-        > config.depth_guard_transverse_tolerance_m
+        and not next_depth_guard_released
     )
     suppressed_depth_control = np.zeros(3, dtype=np.float64)
     if depth_guard_active:
@@ -547,6 +584,10 @@ def handle_local_mpc_step(
             "suppressed_depth_control_world_m": (
                 suppressed_depth_control.tolist()
             ),
+            "transverse_aligned": transverse_aligned,
+            "alignment_consecutive_frames": next_depth_guard_streak,
+            "release_required_consecutive_frames": config.depth_guard_release_steps,
+            "released": next_depth_guard_released,
         },
         "latch": {
             "active_force_and_margin": active_robust,
@@ -568,6 +609,8 @@ def handle_local_mpc_step(
         jaw_command=jaw_command,
         robust_streak=next_streak,
         robust_latch_ready=next_streak >= config.robust_latch_steps,
+        depth_guard_alignment_streak=next_depth_guard_streak,
+        depth_guard_released=next_depth_guard_released,
         fail_closed=fail_closed,
         fail_reason=fail_reason,
         frame_receipt=receipt,
