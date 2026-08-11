@@ -4,6 +4,7 @@ from judo_isaaclab.semantic_parts import (
     bimanual_handle_sides,
     closest_branch,
     corresponding_branch,
+    infer_mug_handle_component_indices,
     infer_mug_parts,
     infer_open_drawer_cavity,
     infer_pot_handle_contact_frame,
@@ -157,6 +158,7 @@ def test_infer_mug_parts_separates_body_footprint_and_handle_hole():
     ]
     parts = infer_mug_parts(components)
 
+    assert infer_mug_handle_component_indices(components) == (2, 3, 4)
     assert parts.handle_axis == 0
     assert parts.handle_sign == 1
     np.testing.assert_allclose(parts.body_frame[:2], [-0.0125, 0.0], atol=1.0e-8)

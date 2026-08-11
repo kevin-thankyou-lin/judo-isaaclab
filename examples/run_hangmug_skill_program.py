@@ -72,6 +72,11 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
     parser.add_argument("--insert-clearance-m", type=float, default=0.08)
     parser.add_argument(
+        "--require-clean-insertion",
+        action="store_true",
+        help="Require zero exact cup-body/tree collisions before release.",
+    )
+    parser.add_argument(
         "--handover-contact-settle-steps",
         type=int,
         default=0,
@@ -484,6 +489,14 @@ def _extract_keyframes(samples, source_dataset, source_assets):
         },
         "semantic_indices": indices,
         "frames": frames,
+        "clean_insertion_path": {
+            "start_sample_index": tree_approach,
+            "end_sample_index": inserted,
+            "mug_poses": [
+                samples[index]["mug_pose"]
+                for index in range(tree_approach, inserted + 1)
+            ],
+        },
     }
 
 
@@ -507,6 +520,9 @@ def _load_keyframes(path: str, source_dataset: str):
     }
     if value.get("schema_version") != 1 or set(value.get("frames", {})) != required:
         raise ValueError("source keyframe artifact is incomplete")
+    clean_path = value.get("clean_insertion_path", {}).get("mug_poses", [])
+    if len(clean_path) < 2:
+        raise ValueError("source keyframes lack a clean insertion path")
     if value.get("source_dataset_sha256") != _sha256(source_dataset):
         raise ValueError("source keyframes do not match source dataset")
     return value
@@ -821,7 +837,7 @@ def main() -> None:
         target_branches = tree_branches(target_assets["mug_tree"])
         keyframes = (
             _load_keyframes(args.source_keyframes, args.source_dataset)
-            if args.mode in {"replay_hang", "skill"}
+            if args.source_keyframes
             else None
         )
         trajectory, intended_final, nominal_handover_mug, nominal_right_contact, source_branch, target_branch = (
@@ -854,7 +870,7 @@ def main() -> None:
             )
 
             repair_prefix_steps = replay_prefix_steps(keyframes)
-            total_steps = repair_prefix_steps + replay_tail_steps()
+            total_steps = repair_prefix_steps + replay_tail_steps(keyframes)
         else:
             total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
@@ -872,7 +888,8 @@ def main() -> None:
             env=env, source=source, keyframes=keyframes,
             source_parts=source_parts, target_parts=target_parts,
             source_branches=source_branches, target_tree=target_tree,
-            target_branches=target_branches, trajectory=trajectory,
+            target_branches=target_branches, target_assets=target_assets,
+            trajectory=trajectory,
             joint_nominal=joint_nominal, intended_final=intended_final,
             nominal_handover_mug=nominal_handover_mug,
             nominal_right_contact=nominal_right_contact,
@@ -895,6 +912,7 @@ def main() -> None:
         nominal_right_contact = rollout.nominal_right_contact
         source_branch = rollout.source_branch; target_branch = rollout.target_branch
         frame_stats = rollout.frame_stats
+        planned_clean_insertion = rollout.planned_clean_insertion
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -919,6 +937,43 @@ def main() -> None:
                 Path(args.write_keyframes).parent.mkdir(parents=True, exist_ok=True)
                 with open(args.write_keyframes, "w", encoding="utf-8") as stream:
                     json.dump(extracted, stream, indent=2, sort_keys=True)
+        clean_insertion = None
+        if args.require_clean_insertion:
+            audit_keyframes = keyframes or extracted
+            if audit_keyframes is None:
+                raise RuntimeError(
+                    "clean insertion audit requires simulator-derived source keyframes"
+                )
+            if args.mode == "replay_hang":
+                clean_start = int(repair_prefix_steps)
+                clean_release = int(
+                    repair_prefix_steps
+                    + trajectory.waypoint_steps["branch_unload"]
+                    + 1
+                )
+            else:
+                clean_start = int(
+                    audit_keyframes["frames"]["tree_approach"]["action_index"]
+                )
+                clean_release = int(
+                    audit_keyframes["frames"]["release"]["action_index"]
+                )
+            from judo_isaaclab.hang_mug_clean_insertion import (
+                exact_body_collision_receipt,
+            )
+
+            clean_insertion = exact_body_collision_receipt(
+                mug_poses,
+                tree_pose=final["tree_pose"],
+                target_assets=target_assets,
+                start_step=clean_start,
+                release_step=clean_release,
+            )
+            print(
+                "HANGMUG_CLEAN_INSERTION="
+                + json.dumps(clean_insertion, sort_keys=True),
+                flush=True,
+            )
         video = _probe(args.video) if args.render else None
         desired_error = [
             max(
@@ -984,6 +1039,14 @@ def main() -> None:
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
+        if args.require_clean_insertion:
+            checks["clean_insertion_exact_mesh_audited"] = bool(
+                clean_insertion and clean_insertion["method"]
+                == "python-fcl exact mesh intersection"
+            )
+            checks["clean_insertion_body_collision_free"] = bool(
+                clean_insertion and clean_insertion["passed"]
+            )
         if args.require_cpu_physics:
             checks["physics_device_cpu"] = bool(
                 physics_device["passed"] and physics_device["actual"] == "cpu"
@@ -1006,9 +1069,28 @@ def main() -> None:
             acceptance = _schema_aware_success_acceptance(
                 checks, coded_skill=args.mode == "skill"
             )
+            if args.require_clean_insertion:
+                acceptance = dict(acceptance)
+                acceptance["clean_insertion_exact_mesh_audited"] = checks[
+                    "clean_insertion_exact_mesh_audited"
+                ]
+                acceptance["clean_insertion_body_collision_free"] = checks[
+                    "clean_insertion_body_collision_free"
+                ]
             if direct_replay is not None and _sha256(args.source_dataset) != _sha256(args.target_dataset):
                 acceptance = dict(acceptance)
-                acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                direct_checks = direct_replay.get("checks", {})
+                acceptance["direct_source_action_replay_failed"] = bool(
+                    direct_replay.get("status") == "passed"
+                    and (
+                        not direct_replay.get("terminal", {}).get(
+                            "task_success", True
+                        )
+                        or direct_checks.get(
+                            "clean_insertion_body_collision_free"
+                        ) is False
+                    )
+                )
                 acceptance["direct_replay_grasp_assistance_matched"] = (
                     direct_replay.get("protocol", {}).get("grasp_assistance")
                     == grasp_assistance
@@ -1018,7 +1100,7 @@ def main() -> None:
                     == str(env.device)
                 )
         controller = (
-            "source_action_prefix_with_semantic_hang_tail"
+            "source_handover_prefix_with_clean_relationship_insertion"
             if args.mode == "replay_hang"
             else "direct_source_action_replay"
             if args.mode == "replay"
@@ -1045,7 +1127,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": controller, "candidate_sampling": False, "scene_resets": protocol_receipt["environment_resets"], "initial_state_restores": protocol_receipt["initial_state_restores"], "inter_stage_resets": protocol_receipt["inter_stage_resets"], "teleports_after_reset": protocol_receipt["teleports_after_rollout_start"], "execution_instrumentation": protocol_receipt, "semantic_execution_hooks": {"enabled": execution_hooks.enabled, "policy": "optional_observation_only"}, "dataset_object_aliases": object_aliases, "dataset_alias_policy": "load_time_keys_only_source_bytes_unchanged", "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "source_action_prefix_steps": repair_prefix_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "protocol": {"controller": controller, "candidate_sampling": False, "scene_resets": protocol_receipt["environment_resets"], "initial_state_restores": protocol_receipt["initial_state_restores"], "inter_stage_resets": protocol_receipt["inter_stage_resets"], "teleports_after_reset": protocol_receipt["teleports_after_rollout_start"], "execution_instrumentation": protocol_receipt, "semantic_execution_hooks": {"enabled": execution_hooks.enabled, "policy": "optional_observation_only"}, "dataset_object_aliases": object_aliases, "dataset_alias_policy": "load_time_keys_only_source_bytes_unchanged", "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "planned_clean_insertion": planned_clean_insertion, "clean_insertion": clean_insertion, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "source_action_prefix_steps": repair_prefix_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None and args.mode != "replay_hang", "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "dataset_object_aliases": object_aliases, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),

@@ -42,8 +42,8 @@ def _branch(x, z, length):
 
 
 def test_replay_prefix_ends_before_source_release_and_requires_live_handover():
-    keyframes = {"frames": {"inserted_held": {"action_index": 541}}}
-    assert replay_prefix_steps(keyframes) == 542
+    keyframes = {"frames": {"handover": {"action_index": 358}}}
+    assert replay_prefix_steps(keyframes) == 359
     assert replay_tail_ready(
         {"stage2": True, "right_grasp": True, "left_grasp": False}
     )
@@ -75,7 +75,14 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
                 "mug_pose": _pose(1.0, 0.02, 1.03).tolist(),
                 "tree_pose": _pose().tolist(),
             }
-        }
+        },
+        "clean_insertion_path": {
+            "mug_poses": [
+                _pose(0.6, -0.08, 1.1).tolist(),
+                _pose(0.8, -0.02, 1.05).tolist(),
+                _pose(1.0, 0.02, 1.03).tolist(),
+            ]
+        },
     }
 
     tail = build_replay_hang_tail(
@@ -88,22 +95,15 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
         observed_mug_pose=observed_mug,
         left_eef_pose=_pose(0.3, 0.2, 1.1),
         right_eef_pose=observed_right,
-        insert_clearance_m=0.08,
     )
 
-    assert tail.trajectory.steps == replay_tail_steps()
+    assert tail.trajectory.steps == replay_tail_steps(keyframes)
     reconstructed_right = compose_pose(observed_mug, tail.right_contact_in_mug)
     assert reconstructed_right == pytest.approx(observed_right)
-    final_handle = compose_pose(
-        tail.intended_final_mug_pose, target_parts.handle_hole_frame
+    assert tail.intended_final_mug_pose == pytest.approx(
+        tail.planned_mug_poses[-1]
     )
-    target_support = target_branch.frame.copy()
-    target_support[:3] = 0.5 * (
-        target_branch.inner_point + target_branch.tip_point
-    )
-    target_support_world = compose_pose(_pose(2.0, 3.0, 0.0), target_support)
-    assert final_handle[:3] == pytest.approx(target_support_world[:3])
-    assert tail.trajectory.stage_names[0] == "handle_to_branch_insertion"
+    assert tail.trajectory.stage_names[0] == "source_relationship_transport"
     assert tail.trajectory.stage_names[-1] == "stable_settle"
     assert tail.trajectory.grippers[0] == pytest.approx([-0.0475, 0.0])
     branch_unload = tail.trajectory.waypoint_steps["branch_unload"]

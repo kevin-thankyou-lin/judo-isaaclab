@@ -26,7 +26,11 @@
       "runner": "examples/run_hangmug_skill_program.py",
       "needs_keyframes": true,
       "repair_mode": "replay_hang",
-      "repair_method": "source_action_prefix_with_semantic_hang_tail",
+      "repair_method": "source_relationship_path_with_exact_body_collision_gate",
+      "required_result_checks": {
+        "clean_insertion_exact_mesh_audited": true,
+        "clean_insertion_body_collision_free": true
+      },
       "repair_requires_checks": {
         "left_pick_observed": true,
         "right_handover_observed": true
@@ -38,7 +42,8 @@
         "cpu",
         "--require-cpu-physics",
         "--grasp-assist-mechanism",
-        "task_config"
+        "task_config",
+        "--require-clean-insertion"
       ]
     }
   ]

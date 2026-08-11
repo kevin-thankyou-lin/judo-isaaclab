@@ -28,6 +28,59 @@ class HangMugRollout:
     source_branch: Any
     target_branch: Any
     frame_stats: list[tuple[float, float]]
+    planned_clean_insertion: dict[str, Any] | None
+
+
+def _start_replay_tail(
+    *, keyframes, source_parts, target_parts, source_branches,
+    target_tree, target_branches, target_assets, sample, source_actions,
+    repair_prefix_steps, args,
+):
+    """Build and fail-closed screen the source-relationship insertion tail."""
+
+    from judo_isaaclab.hang_mug_clean_insertion import (
+        exact_body_collision_receipt,
+    )
+    from judo_isaaclab.hang_mug_replay_tail import (
+        build_replay_hang_tail,
+        repeated_joint_nominal,
+        replay_tail_ready,
+    )
+
+    if not replay_tail_ready(sample):
+        raise RuntimeError(
+            "replay hang tail requires an observed right-only handover "
+            f"at prefix step {repair_prefix_steps - 1}: {sample}"
+        )
+    tail = build_replay_hang_tail(
+        keyframes=keyframes, source_parts=source_parts,
+        target_parts=target_parts, source_branches=source_branches,
+        target_tree_pose=target_tree.root_pose,
+        target_branches=target_branches, observed_mug_pose=sample["mug_pose"],
+        left_eef_pose=sample["left_eef_pose"],
+        right_eef_pose=sample["right_eef_pose"],
+    )
+    receipt = None
+    if args.require_clean_insertion:
+        receipt = exact_body_collision_receipt(
+            tail.planned_mug_poses, tree_pose=target_tree.root_pose,
+            target_assets=target_assets,
+        )
+        print(
+            "HANGMUG_PLANNED_CLEAN_INSERTION="
+            + json.dumps(receipt, sort_keys=True), flush=True,
+        )
+        if not receipt["passed"]:
+            raise RuntimeError(
+                "planned source-relationship insertion intersects the target "
+                "cup body with the tree"
+            )
+    joint_nominal = repeated_joint_nominal(
+        source_actions.detach().cpu().numpy(),
+        repair_prefix_steps,
+        tail.trajectory.steps,
+    )
+    return tail, joint_nominal, receipt
 
 
 def execute_hangmug_rollout(
@@ -40,6 +93,7 @@ def execute_hangmug_rollout(
     source_branches: Any,
     target_tree: Any,
     target_branches: Any,
+    target_assets: dict[str, str],
     trajectory: Any,
     joint_nominal: Any,
     intended_final: Any,
@@ -71,6 +125,7 @@ def execute_hangmug_rollout(
     desired_right = []
     desired_steps = []
     frame_stats = []
+    planned_clean_insertion = None
     milestones_by_step: dict[int, list[str]] = {}
     if trajectory is not None:
         for name, milestone_step in trajectory.waypoint_steps.items():
@@ -100,39 +155,19 @@ def execute_hangmug_rollout(
         elif repair_prefix_steps is not None:
             trajectory_step = step - repair_prefix_steps
             if trajectory is None:
-                from judo_isaaclab.hang_mug_replay_tail import (
-                    build_replay_hang_tail,
-                    repeated_joint_nominal,
-                    replay_tail_ready,
-                )
-
-                if not replay_tail_ready(samples[-1]):
-                    raise RuntimeError(
-                        "replay hang tail requires an observed right-only handover "
-                        f"at prefix step {repair_prefix_steps - 1}: {samples[-1]}"
-                    )
-                tail = build_replay_hang_tail(
-                    keyframes=keyframes,
-                    source_parts=source_parts,
-                    target_parts=target_parts,
-                    source_branches=source_branches,
-                    target_tree_pose=target_tree.root_pose,
-                    target_branches=target_branches,
-                    observed_mug_pose=samples[-1]["mug_pose"],
-                    left_eef_pose=samples[-1]["left_eef_pose"],
-                    right_eef_pose=samples[-1]["right_eef_pose"],
-                    insert_clearance_m=args.insert_clearance_m,
+                tail, joint_nominal, planned_clean_insertion = _start_replay_tail(
+                    keyframes=keyframes, source_parts=source_parts,
+                    target_parts=target_parts, source_branches=source_branches,
+                    target_tree=target_tree, target_branches=target_branches,
+                    target_assets=target_assets, sample=samples[-1],
+                    source_actions=source["actions"],
+                    repair_prefix_steps=repair_prefix_steps, args=args,
                 )
                 trajectory = tail.trajectory
                 intended_final = tail.intended_final_mug_pose
                 nominal_right_contact = tail.right_contact_in_mug
                 source_branch = tail.source_branch
                 target_branch = tail.target_branch
-                joint_nominal = repeated_joint_nominal(
-                    source["actions"].detach().cpu().numpy(),
-                    repair_prefix_steps,
-                    trajectory.steps,
-                )
                 for name, milestone_step in trajectory.waypoint_steps.items():
                     absolute_step = repair_prefix_steps + int(milestone_step)
                     milestones_by_step.setdefault(absolute_step, []).append(name)
@@ -174,7 +209,11 @@ def execute_hangmug_rollout(
             SemanticExecutionEvent(kind="before_step", step=step, stage=stage)
         )
         observation, _, terminated, truncated, info = env.step(action)
-        if trajectory is not None and trajectory_step is not None:
+        if (
+            trajectory is not None
+            and trajectory_step is not None
+            and args.mode != "replay_hang"
+        ):
             update_assist_releases(env, trajectory, trajectory_step)
         sample = sample_environment(env, step, stage, info)
         protocol_recorder.record_step(
@@ -263,7 +302,7 @@ def execute_hangmug_rollout(
         joint_nominal=joint_nominal, intended_final=intended_final,
         nominal_right_contact=nominal_right_contact,
         source_branch=source_branch, target_branch=target_branch,
-        frame_stats=frame_stats,
+        frame_stats=frame_stats, planned_clean_insertion=planned_clean_insertion,
     )
 
 

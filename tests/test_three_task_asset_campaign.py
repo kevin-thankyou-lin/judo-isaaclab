@@ -8,6 +8,7 @@ import pytest
 from run_three_task_asset_campaign import (
     _command,
     _repair_eligible,
+    _required_result_checks_pass,
     _reusable_classification,
     dataset_exclusion_receipts,
     enumerate_pairs,
@@ -107,6 +108,41 @@ def test_campaign_command_passes_dataset_aliases_to_runner(tmp_path):
     assert aliases == ["obj_0=mug", "obj_1=mug_tree"]
 
 
+def test_campaign_command_writes_only_source_keyframes(tmp_path):
+    task = {
+        "runner": "examples/run_hangmug_skill_program.py",
+        "source_dataset": str(tmp_path / "source.hdf5"),
+        "objects_root": str(tmp_path / "objects"),
+        "runner_args": [],
+    }
+    keyframes = tmp_path / "source_keyframes.json"
+    source = _command(
+        task,
+        python="python",
+        gear_repo="gear",
+        target=task["source_dataset"],
+        mode="replay",
+        output=tmp_path,
+        source_keyframes=keyframes,
+        direct_replay_result=None,
+        write_keyframes=True,
+    )
+    target = _command(
+        task,
+        python="python",
+        gear_repo="gear",
+        target="target.hdf5",
+        mode="replay",
+        output=tmp_path,
+        source_keyframes=keyframes,
+        direct_replay_result=None,
+    )
+    assert "--write-keyframes" in source
+    assert "--source-keyframes" not in source
+    assert "--source-keyframes" in target
+    assert "--write-keyframes" not in target
+
+
 def test_repair_eligibility_can_require_observed_handover_instead_of_success():
     task = {
         "repair_requires_checks": {
@@ -129,6 +165,25 @@ def test_repair_eligibility_can_require_observed_handover_instead_of_success():
 def test_repair_eligibility_keeps_putpot_success_default():
     assert _repair_eligible({}, {"checks": {"coded_task_success": True}})
     assert not _repair_eligible({}, {"checks": {"coded_task_success": False}})
+
+
+def test_required_result_checks_reject_rough_task_success():
+    task = {
+        "required_result_checks": {
+            "clean_insertion_exact_mesh_audited": True,
+            "clean_insertion_body_collision_free": True,
+        }
+    }
+    result = {
+        "checks": {
+            "coded_task_success": True,
+            "clean_insertion_exact_mesh_audited": True,
+            "clean_insertion_body_collision_free": False,
+        }
+    }
+    assert not _required_result_checks_pass(task, result)
+    result["checks"]["clean_insertion_body_collision_free"] = True
+    assert _required_result_checks_pass(task, result)
 
 
 def test_asset_inventory_fails_before_simulator_startup(tmp_path):

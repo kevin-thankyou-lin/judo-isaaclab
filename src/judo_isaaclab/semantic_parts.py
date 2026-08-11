@@ -314,10 +314,11 @@ def bimanual_handle_sides(
     return (-1, 1) if direct <= crossed else (1, -1)
 
 
-def infer_mug_parts(values: Iterable[object]) -> MugParts:
-    """Infer a mug body frame and the center of its handle opening."""
+def _mug_handle_component_indices(
+    components: tuple[np.ndarray, ...],
+) -> tuple[int, ...]:
+    """Return authored collision components belonging to the mug handle."""
 
-    components = _components(values)
     all_points = np.concatenate(components)
     global_min, global_max = _bounds(all_points)
     body_min, body_max = _footprint(components)
@@ -333,8 +334,8 @@ def infer_mug_parts(values: Iterable[object]) -> MugParts:
     if overhang < 0.006:
         raise ValueError("mug collision geometry has no measurable handle overhang")
     transverse = 1 - axis
-    selected = []
-    for points in components:
+    selected_indices = []
+    for index, points in enumerate(components):
         minimum, maximum = _bounds(points)
         reach = (
             body_min[axis] - minimum[axis]
@@ -344,9 +345,36 @@ def infer_mug_parts(values: Iterable[object]) -> MugParts:
         transverse_span = maximum[transverse] - minimum[transverse]
         body_span = body_max[transverse] - body_min[transverse]
         if reach > 0.05 * overhang and transverse_span < 0.55 * body_span:
-            selected.append(points)
-    if not selected:
+            selected_indices.append(index)
+    if not selected_indices:
         raise ValueError("mug handle collision components could not be isolated")
+    return tuple(selected_indices)
+
+
+def infer_mug_handle_component_indices(values: Iterable[object]) -> tuple[int, ...]:
+    """Identify handle collision components without relying on asset names."""
+
+    return _mug_handle_component_indices(_components(values))
+
+
+def infer_mug_parts(values: Iterable[object]) -> MugParts:
+    """Infer a mug body frame and the center of its handle opening."""
+
+    components = _components(values)
+    all_points = np.concatenate(components)
+    global_min, global_max = _bounds(all_points)
+    body_min, body_max = _footprint(components)
+    handle_indices = _mug_handle_component_indices(components)
+    selected = [components[index] for index in handle_indices]
+    overhangs = []
+    for axis in (0, 1):
+        overhangs.extend(
+            [
+                (body_min[axis] - global_min[axis], axis, -1),
+                (global_max[axis] - body_max[axis], axis, 1),
+            ]
+        )
+    _, axis, sign = max(overhangs)
     handle_points = np.concatenate(selected)
     handle_min, handle_max = _bounds(handle_points)
     outward = np.zeros(3, dtype=np.float64)

@@ -191,6 +191,19 @@ def _task_success(result: dict[str, Any]) -> bool:
     )
 
 
+def _required_result_checks_pass(
+    task: dict[str, Any], result: dict[str, Any]
+) -> bool:
+    required = task.get("required_result_checks", {})
+    if not isinstance(required, dict):
+        raise ValueError("required_result_checks must be a mapping")
+    checks = result.get("checks", {})
+    return all(
+        bool(checks.get(name)) is bool(expected)
+        for name, expected in required.items()
+    )
+
+
 def _repair_eligible(task: dict[str, Any], replay_result: dict[str, Any]) -> bool:
     """Apply a configured repair only after its observed replay prerequisites."""
 
@@ -263,6 +276,7 @@ def _command(
     output: Path,
     source_keyframes: Path | None,
     direct_replay_result: Path | None,
+    write_keyframes: bool = False,
 ) -> list[str]:
     command = [
         python,
@@ -284,7 +298,8 @@ def _command(
     if mode == "replay":
         command.append("--classification-run")
         if source_keyframes is not None:
-            command.extend(["--write-keyframes", str(source_keyframes)])
+            option = "--write-keyframes" if write_keyframes else "--source-keyframes"
+            command.extend([option, str(source_keyframes)])
     else:
         if source_keyframes is not None:
             command.extend(["--source-keyframes", str(source_keyframes)])
@@ -334,6 +349,9 @@ def run_task(
         if existing.get("status") == "accepted":
             try:
                 validate_demo(existing["demonstration"]["path"], pair["assets"])
+                existing_result = _load(existing["result"])
+                if not _required_result_checks_pass(task, existing_result):
+                    raise RuntimeError("accepted result lacks required quality checks")
                 print(f"CAMPAIGN_RESUME_ACCEPTED={task['name']}:{pair_id}", flush=True)
                 continue
             except Exception as error:
@@ -343,10 +361,17 @@ def run_task(
         write_keyframes = keyframes if pair["dataset"] == os.path.realpath(_expand(task["source_dataset"])) else None
         replay_result_path = pair_root / "replay_result.json"
         prior_replay = _load(replay_result_path) if replay_result_path.is_file() else {}
-        if not dry_run and _reusable_classification(prior_replay, pair["dataset"]):
+        if (
+            not dry_run
+            and _reusable_classification(prior_replay, pair["dataset"])
+            and _required_result_checks_pass(task, prior_replay)
+        ):
             replay_rc = 0
             print(f"CAMPAIGN_REUSE_CLASSIFICATION={task['name']}:{pair_id}", flush=True)
         else:
+            replay_keyframes = write_keyframes or (
+                keyframes if keyframes is not None and keyframes.is_file() else None
+            )
             replay = _command(
                 task,
                 python=python,
@@ -354,14 +379,20 @@ def run_task(
                 target=pair["dataset"],
                 mode="replay",
                 output=pair_root,
-                source_keyframes=write_keyframes,
+                source_keyframes=replay_keyframes,
                 direct_replay_result=None,
+                write_keyframes=write_keyframes is not None,
             )
             replay_rc = _run(replay, pair_root / "replay.log", dry_run=dry_run)
         if dry_run:
             continue
         replay_result = _load(replay_result_path) if replay_result_path.is_file() else {}
-        replay_success = replay_rc == 0 and replay_result.get("status") == "passed" and _task_success(replay_result)
+        replay_success = (
+            replay_rc == 0
+            and replay_result.get("status") == "passed"
+            and _task_success(replay_result)
+            and _required_result_checks_pass(task, replay_result)
+        )
         if replay_success:
             demo = validate_demo(pair_root / "replay_demo.hdf5", pair["assets"])
             record = {
