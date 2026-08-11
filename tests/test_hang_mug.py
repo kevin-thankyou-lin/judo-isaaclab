@@ -152,6 +152,40 @@ def test_held_convergence_applies_second_smooth_insert_feedback(capsys):
     assert "HANGMUG_HELD_CONVERGENCE_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_collision_unsafe_feedback_retains_previous_suffix(monkeypatch):
+    previous = SimpleNamespace(name="previous")
+    unsafe = SimpleNamespace(name="unsafe")
+    safe_receipt = {"passed": True, "collision_count": 0}
+    calls = []
+
+    def screen(trajectory, **kwargs):
+        calls.append((trajectory, kwargs))
+        if trajectory is unsafe:
+            raise RuntimeError(
+                "geometry-sized observation correction remains collision-unsafe"
+            )
+        return trajectory, safe_receipt
+
+    monkeypatch.setattr(
+        "judo_isaaclab.hang_mug_clean_insertion.repair_compensated_insertion_path",
+        screen,
+    )
+    retained, receipt, gain = hangmug_rollout._screen_or_reject_observation_feedback(
+        unsafe,
+        previous,
+        repair_kwargs={"completed_step": 4},
+        previous_repair_kwargs={"completed_step": 3},
+    )
+
+    assert [call[0] for call in calls] == [unsafe, previous]
+    assert retained is previous
+    assert receipt["passed"] is True
+    assert receipt["rejected_observation_feedback"] is True
+    assert receipt["right_dls_gain"] == pytest.approx(2.0)
+    assert gain == pytest.approx(2.0)
+    assert calls[1][1]["completed_step"] == 3
+
+
 def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(

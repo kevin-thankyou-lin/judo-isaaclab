@@ -128,6 +128,33 @@ def _record_feedback_collision_receipt(
     print(label + json.dumps(receipt, sort_keys=True), flush=True)
 
 
+def _screen_or_reject_observation_feedback(
+    trajectory, previous_trajectory, *, repair_kwargs, previous_repair_kwargs,
+):
+    """Keep the last exact-screened suffix when pose feedback is unsafe."""
+
+    from judo_isaaclab.hang_mug_clean_insertion import (
+        repair_compensated_insertion_path,
+    )
+
+    try:
+        corrected, receipt = repair_compensated_insertion_path(
+            trajectory, **repair_kwargs,
+        )
+        return corrected, receipt, 1.0
+    except RuntimeError as error:
+        if "collision-unsafe" not in str(error):
+            raise
+        retained, receipt = repair_compensated_insertion_path(
+            previous_trajectory, **previous_repair_kwargs,
+        )
+        receipt = dict(receipt)
+        receipt["rejected_observation_feedback"] = True
+        receipt["rejected_reason"] = str(error)
+        receipt["right_dls_gain"] = 2.0
+        return retained, receipt, 2.0
+
+
 def execute_hangmug_rollout(
     *,
     env: Any,
@@ -170,6 +197,7 @@ def execute_hangmug_rollout(
     desired_right = []
     desired_steps = []
     frame_stats = []
+    right_dls_gain = 1.0
     planned_clean_insertion = None
     milestones_by_step: dict[int, list[str]] = {}
     if trajectory is not None:
@@ -224,6 +252,7 @@ def execute_hangmug_rollout(
                 trajectory.grippers[trajectory_step],
                 joint_nominal[trajectory_step],
                 args,
+                right_dls_gain=right_dls_gain,
                 integrate_left_ik=True,
                 integrate_right_ik=True,
             )
@@ -244,6 +273,7 @@ def execute_hangmug_rollout(
                 trajectory.grippers[step],
                 joint_nominal[step],
                 args,
+                right_dls_gain=right_dls_gain,
                 integrate_left_ik=integrate,
                 integrate_right_ik=integrate,
             )
@@ -304,6 +334,8 @@ def execute_hangmug_rollout(
                     0.5 * float(target_parts.handle_outer_size[2])
                     + float(target_branch.radius_m)
                 )
+            previous_trajectory = trajectory
+            previous_right_contact = nominal_right_contact
             trajectory, nominal_right_contact, feedback_compensated = _reanchor_full_skill(
                 trajectory,
                 trajectory_step,
@@ -315,23 +347,33 @@ def execute_hangmug_rollout(
                 branch_entry_clearance_m,
             )
             if feedback_compensated and args.require_clean_insertion:
-                from judo_isaaclab.hang_mug_clean_insertion import (
-                    repair_compensated_insertion_path,
-                )
-
-                trajectory, feedback_receipt = repair_compensated_insertion_path(
-                    trajectory,
-                    completed_step=trajectory_step,
-                    right_contact_in_mug=nominal_right_contact,
-                    tree_pose=target_tree.root_pose,
-                    mug_body_frame=target_parts.body_frame,
-                    mug_body_size=target_parts.body_size,
-                    target_branch=target_branch,
-                    target_assets=target_assets,
-                    executed_mug_poses=mug_poses[
+                repair_kwargs = {
+                    "completed_step": trajectory_step,
+                    "right_contact_in_mug": nominal_right_contact,
+                    "tree_pose": target_tree.root_pose,
+                    "mug_body_frame": target_parts.body_frame,
+                    "mug_body_size": target_parts.body_size,
+                    "target_branch": target_branch,
+                    "target_assets": target_assets,
+                    "executed_mug_poses": mug_poses[
                         0 if repair_prefix_steps is None else repair_prefix_steps :
                     ],
+                }
+                previous_repair_kwargs = dict(repair_kwargs)
+                previous_repair_kwargs["right_contact_in_mug"] = (
+                    previous_right_contact
                 )
+                trajectory, feedback_receipt, gain = (
+                    _screen_or_reject_observation_feedback(
+                        trajectory,
+                        previous_trajectory,
+                        repair_kwargs=repair_kwargs,
+                        previous_repair_kwargs=previous_repair_kwargs,
+                    )
+                )
+                if gain > 1.0:
+                    nominal_right_contact = previous_right_contact
+                right_dls_gain = max(right_dls_gain, gain)
                 _record_feedback_collision_receipt(
                     feedback_receipt, planned=planned_clean_insertion,
                     trajectory=trajectory, trajectory_step=trajectory_step,
@@ -523,6 +565,9 @@ def _reanchor_full_skill(
                     trajectory,
                     intended_final,
                     sample["mug_pose"],
+                )
+                feedback_compensated = feedback_compensated or not np.allclose(
+                    trajectory.right_poses, before
                 )
                 correction = trajectory.right_poses[-1, :3] - before[-1, :3]
                 quaternion_dot = abs(float(np.dot(
