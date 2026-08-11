@@ -277,6 +277,7 @@ def _command(
     source_keyframes: Path | None,
     direct_replay_result: Path | None,
     write_keyframes: bool = False,
+    repair_runner_args: tuple[str, ...] = (),
 ) -> list[str]:
     command = [
         python,
@@ -301,6 +302,7 @@ def _command(
             option = "--write-keyframes" if write_keyframes else "--source-keyframes"
             command.extend([option, str(source_keyframes)])
     else:
+        command.extend(repair_runner_args)
         if source_keyframes is not None:
             command.extend(["--source-keyframes", str(source_keyframes)])
         if direct_replay_result is not None:
@@ -316,6 +318,7 @@ def run_task(
     output_root: Path,
     dry_run: bool,
     max_pairs: int | None,
+    repair_runner_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     pairs = enumerate_pairs(task)
     if max_pairs is not None:
@@ -431,6 +434,7 @@ def run_task(
                         output=pair_root,
                         source_keyframes=keyframes,
                         direct_replay_result=replay_result_path,
+                        repair_runner_args=repair_runner_args,
                     )
                     repair_rc = _run(repair, pair_root / f"{repair_mode}.log", dry_run=False)
                     repair_result_path = pair_root / f"{repair_mode}_result.json"
@@ -535,6 +539,12 @@ def main() -> None:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--task", action="append")
     parser.add_argument("--max-pairs", type=int)
+    parser.add_argument(
+        "--repair-runner-arg",
+        action="append",
+        default=[],
+        help="Append one explicit argument only to repair-runner invocations.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -551,6 +561,7 @@ def main() -> None:
             output_root=Path(args.output_root),
             dry_run=args.dry_run,
             max_pairs=args.max_pairs,
+            repair_runner_args=tuple(args.repair_runner_arg),
         )
         for task in tasks
     ]

@@ -131,3 +131,42 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
     assert replaced.trajectory.steps == tail.trajectory.steps
     assert replaced.intended_final_mug_pose == pytest.approx(corrected[-1])
     assert replaced.planned_mug_poses == pytest.approx(corrected)
+
+
+def test_nearest_eef_branch_policy_is_explicit_and_deterministic():
+    source_branch = _branch(1.0, 1.0, 1.0)
+    corresponding = _branch(1.5, 1.5, 1.0)
+    closer = _branch(0.5, 0.5, 1.0)
+    keyframes = {
+        "frames": {
+            "stable_settle": {
+                "mug_pose": _pose(1.0, 0.0, 1.0).tolist(),
+                "tree_pose": _pose().tolist(),
+            }
+        },
+        "clean_insertion_path": {
+            "mug_poses": [
+                _pose(0.8, 0.0, 1.1).tolist(),
+                _pose(1.0, 0.0, 1.0).tolist(),
+            ]
+        },
+    }
+
+    tail = build_replay_hang_tail(
+        keyframes=keyframes,
+        source_parts=_parts(),
+        target_parts=_parts(),
+        source_branches=(source_branch,),
+        target_tree_pose=_pose(),
+        target_branches=(corresponding, closer),
+        observed_mug_pose=_pose(),
+        left_eef_pose=_pose(),
+        right_eef_pose=_pose(0.45, 0.0, 0.5),
+        target_branch_policy="nearest_eef",
+    )
+
+    selection = tail.support_alignment["target_branch_selection"]
+    assert tail.target_branch is closer
+    assert selection["policy"] == "nearest_eef"
+    assert selection["changed_from_source_correspondence"] is True
+    assert selection["selected_candidate_index"] == 1

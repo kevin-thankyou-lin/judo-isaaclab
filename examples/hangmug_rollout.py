@@ -61,6 +61,7 @@ def _start_replay_tail(
         target_branches=target_branches, observed_mug_pose=sample["mug_pose"],
         left_eef_pose=sample["left_eef_pose"],
         right_eef_pose=sample["right_eef_pose"],
+        target_branch_policy=args.replay_target_branch_policy,
     )
     receipt = None
     if args.require_clean_insertion:
@@ -153,6 +154,23 @@ def _screen_or_reject_observation_feedback(
         receipt["rejected_reason"] = str(error)
         receipt["right_dls_gain"] = 2.0
         return retained, receipt, 2.0
+
+
+def _print_progress(step: int, sample: dict[str, Any]) -> None:
+    """Emit the compact, machine-readable rollout progress receipt."""
+
+    if (step + 1) % 50 != 0 and not sample["task_success"]:
+        return
+    keys = (
+        "step", "program_stage", "stage1", "stage2", "stage3",
+        "task_success", "left_grasp", "right_grasp",
+        "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m",
+    )
+    print(
+        "HANGMUG_PROGRESS="
+        + json.dumps({key: sample[key] for key in keys}, sort_keys=True),
+        flush=True,
+    )
 
 
 def execute_hangmug_rollout(
@@ -382,17 +400,7 @@ def execute_hangmug_rollout(
             frame = render_frame(env, sample)
             encoder.write(frame)
             frame_stats.append((float(frame.mean()), float(frame.std())))
-        if (step + 1) % 50 == 0 or sample["task_success"]:
-            keys = (
-                "step", "program_stage", "stage1", "stage2", "stage3",
-                "task_success", "left_grasp", "right_grasp",
-                "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m",
-            )
-            print(
-                "HANGMUG_PROGRESS="
-                + json.dumps({key: sample[key] for key in keys}, sort_keys=True),
-                flush=True,
-            )
+        _print_progress(step, sample)
     protocol_recorder.finish_rollout()
     execution_hooks.emit(
         SemanticExecutionEvent(

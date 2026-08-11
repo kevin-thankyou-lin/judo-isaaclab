@@ -143,6 +143,43 @@ def test_campaign_command_writes_only_source_keyframes(tmp_path):
     assert "--write-keyframes" not in target
 
 
+def test_campaign_command_scopes_extra_arguments_to_repairs(tmp_path):
+    task = {
+        "runner": "examples/run_hangmug_skill_program.py",
+        "source_dataset": str(tmp_path / "source.hdf5"),
+        "objects_root": str(tmp_path / "objects"),
+        "runner_args": [],
+    }
+    extra = ("--replay-target-branch-policy", "nearest_eef")
+    replay = _command(
+        task,
+        python="python",
+        gear_repo="gear",
+        target="target.hdf5",
+        mode="replay",
+        output=tmp_path,
+        source_keyframes=None,
+        direct_replay_result=None,
+        repair_runner_args=extra,
+    )
+    repair = _command(
+        task,
+        python="python",
+        gear_repo="gear",
+        target="target.hdf5",
+        mode="replay_hang",
+        output=tmp_path,
+        source_keyframes=tmp_path / "source_keyframes.json",
+        direct_replay_result=tmp_path / "replay_result.json",
+        repair_runner_args=extra,
+    )
+
+    assert "--replay-target-branch-policy" not in replay
+    assert repair.index("--replay-target-branch-policy") < repair.index(
+        "--source-keyframes"
+    )
+
+
 def test_repair_eligibility_can_require_observed_handover_instead_of_success():
     task = {
         "repair_requires_checks": {

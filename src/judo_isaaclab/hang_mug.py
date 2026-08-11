@@ -58,6 +58,8 @@ def geometry_conditioned_hang_pose(
     source_branches: Any,
     target_tree_pose: Any,
     target_branches: Any,
+    *,
+    target_branch_override: Any | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
     """Map a verified handle-on-branch relationship through measured parts."""
 
@@ -70,7 +72,11 @@ def geometry_conditioned_hang_pose(
         inverse_pose(source_tree_pose), source_handle_world
     )
     source_branch = closest_branch(source_branches, source_handle_tree_local[:3])
-    target_branch = corresponding_branch(source_branch, target_branches)
+    target_branch = (
+        corresponding_branch(source_branch, target_branches)
+        if target_branch_override is None
+        else target_branch_override
+    )
     source_branch_world = compose_pose(source_tree_pose, source_branch.frame)
     target_branch_world = compose_pose(target_tree_pose, target_branch.frame)
     target_handle_world = transfer_pose(

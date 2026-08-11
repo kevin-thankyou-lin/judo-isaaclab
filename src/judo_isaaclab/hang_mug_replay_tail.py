@@ -201,6 +201,7 @@ def build_replay_hang_tail(
     observed_mug_pose: Any,
     left_eef_pose: Any,
     right_eef_pose: Any,
+    target_branch_policy: str = "source_corresponding",
 ) -> ReplayHangTail:
     """Build only transport, insertion, and release from observed contact.
 
@@ -214,6 +215,8 @@ def build_replay_hang_tail(
     right_start = np.asarray(right_eef_pose, dtype=np.float64)
     if any(pose.shape != (7,) for pose in (observed_mug, left_start, right_start)):
         raise ValueError("observed mug and EEF poses must each have shape (7,)")
+    source_branches = tuple(source_branches)
+    target_branches = tuple(target_branches)
     frames = keyframes["frames"]
     supported_mug_pose, source_branch, target_branch = geometry_conditioned_hang_pose(
         frames["stable_settle"]["mug_pose"],
@@ -225,6 +228,49 @@ def build_replay_hang_tail(
         target_branches,
     )
     right_contact = compose_pose(inverse_pose(observed_mug), right_start)
+    branch_selection = {
+        "policy": target_branch_policy,
+        "changed_from_source_correspondence": False,
+    }
+    if target_branch_policy == "nearest_eef":
+        candidates = []
+        corresponding = target_branch
+        for index, candidate in enumerate(target_branches):
+            candidate_mug, _, _ = geometry_conditioned_hang_pose(
+                frames["stable_settle"]["mug_pose"],
+                frames["stable_settle"]["tree_pose"],
+                source_parts,
+                target_parts,
+                source_branches,
+                target_tree_pose,
+                target_branches,
+                target_branch_override=candidate,
+            )
+            candidate_eef = compose_pose(candidate_mug, right_contact)
+            candidates.append((
+                float(np.linalg.norm(candidate_eef[:3] - right_start[:3])),
+                index,
+                candidate,
+                candidate_mug,
+                candidate_eef,
+            ))
+        _, _, target_branch, supported_mug_pose, selected_eef = min(candidates)
+        branch_selection = {
+            "policy": target_branch_policy,
+            "method": "minimum_target_eef_translation_from_observed_handover",
+            "changed_from_source_correspondence": target_branch is not corresponding,
+            "corresponding_normalized_height": float(
+                corresponding.normalized_height
+            ),
+            "selected_normalized_height": float(target_branch.normalized_height),
+            "selected_target_eef_pose": selected_eef.tolist(),
+            "candidate_translation_m": [row[0] for row in candidates],
+            "selected_candidate_index": next(
+                row[1] for row in candidates if row[2] is target_branch
+            ),
+        }
+    elif target_branch_policy != "source_corresponding":
+        raise ValueError(f"unsupported target branch policy: {target_branch_policy}")
     planned_mug_poses, support_alignment = _source_relationship_mug_path(
         keyframes=keyframes,
         source_parts=source_parts,
@@ -235,6 +281,7 @@ def build_replay_hang_tail(
         observed_mug=observed_mug,
         supported_mug_pose=supported_mug_pose,
     )
+    support_alignment["target_branch_selection"] = branch_selection
     trajectory = _trajectory_from_mug_path(
         planned_mug_poses,
         left_pose=left_start,
