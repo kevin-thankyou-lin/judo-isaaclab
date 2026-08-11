@@ -2936,17 +2936,23 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_left_contact_prior = (
             None if left_handle_contact is None else left_handle_contact.copy()
         )
-        local_mpc_left_handle_tangent_extent_m = 0.0
+        local_mpc_left_pad_fraction_axis_extent_m = 0.0
         if args.target_handle_local_contact_fraction_recenter:
-            left_handle_size = (
-                target_parts.negative_handle_size
-                if int(handle_grasp_geometry["left"]["handle_side"]) < 0
-                else target_parts.positive_handle_size
-            )
-            local_mpc_left_handle_tangent_extent_m = max(
-                float(left_handle_size[axis])
-                for axis in range(3)
-                if axis != target_parts.handle_axis
+            left_finger_axis_lengths = [
+                float(finger._tip_base_axis(env.device)[2].item())
+                for finger in env.robot.arms["left"].end_effector.fingers
+            ]
+            if not np.allclose(
+                left_finger_axis_lengths,
+                left_finger_axis_lengths[0],
+                atol=1.0e-9,
+                rtol=0.0,
+            ):
+                raise RuntimeError(
+                    "left pad-fraction axes must have identical metric extents"
+                )
+            local_mpc_left_pad_fraction_axis_extent_m = (
+                left_finger_axis_lengths[0]
             )
         if args.target_handle_local_mpc_acquisition:
             from judo_isaaclab.putpot_local_mpc import HandleLocalMpcConfig
@@ -3467,8 +3473,8 @@ def main(argv: list[str] | None = None) -> None:
                                     active_arm == "left"
                                     and args.target_handle_local_contact_fraction_recenter
                                 ),
-                                active_handle_tangent_extent_m=(
-                                    local_mpc_left_handle_tangent_extent_m
+                                active_pad_fraction_axis_extent_m=(
+                                    local_mpc_left_pad_fraction_axis_extent_m
                                     if active_arm == "left"
                                     else 0.0
                                 ),

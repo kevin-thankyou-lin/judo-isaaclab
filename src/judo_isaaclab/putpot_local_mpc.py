@@ -313,8 +313,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         == {
             "enabled",
             "active",
-            "handle_tangent_world",
-            "handle_tangent_extent_m",
+            "finger_tip_to_base_axis_world",
+            "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
             "requested_translation_m",
             "executed_translation_m",
@@ -362,7 +362,7 @@ def handle_local_mpc_step(
     depth_guard_alignment_streak: int = 0,
     depth_guard_released: bool = False,
     contact_fraction_recenter: bool = False,
-    active_handle_tangent_extent_m: float = 0.0,
+    active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
 ) -> HandleLocalMpcCommand:
@@ -411,11 +411,11 @@ def handle_local_mpc_step(
     )
     if not np.all(np.isfinite(scalars)):
         raise ValueError("pot displacement and jaw command must be finite")
-    if not np.isfinite(active_handle_tangent_extent_m) or (
-        contact_fraction_recenter and active_handle_tangent_extent_m <= 0.0
+    if not np.isfinite(active_pad_fraction_axis_extent_m) or (
+        contact_fraction_recenter and active_pad_fraction_axis_extent_m <= 0.0
     ):
         raise ValueError(
-            "contact recentering requires a positive finite handle tangent extent"
+            "contact recentering requires a positive finite pad-fraction axis extent"
         )
 
     jaw_midpoint = np.mean(centers, axis=0)
@@ -508,10 +508,12 @@ def handle_local_mpc_step(
         and (not require_peer_latch or (peer_grasp and peer_robust))
     )
     next_streak = robust_streak + 1 if robust_frame else 0
-    handle_tangent_world = _unit(
-        np.cross(desired_pad_axis, desired_jaw_axis), "handle tangent"
-    )
     contacting = forces >= config.physical_contact_threshold_n
+    contact_fraction_axis_world = (
+        _unit(np.mean(axes[contacting], axis=0), "contacting pad tip-to-base axis")
+        if np.any(contacting)
+        else mean_pad_axis
+    )
     contact_fraction_delta = 0.0
     if np.any(contacting) and np.all(np.isfinite(fractions[contacting])):
         fraction_corrections = []
@@ -531,7 +533,7 @@ def handle_local_mpc_step(
                     max(fraction_corrections, key=abs)
                 )
     requested_recenter_translation_m = float(
-        contact_fraction_delta * active_handle_tangent_extent_m
+        contact_fraction_delta * active_pad_fraction_axis_extent_m
     )
     remaining_recenter_m = max(
         0.0,
@@ -571,8 +573,12 @@ def handle_local_mpc_step(
     fail_closed = fail_reason is not None
 
     if contact_recenter_active:
+        # contact_pad_fraction is measured from finger tip (0) toward finger
+        # base (1).  Translating the finger opposite its tip->base axis moves a
+        # fixed world contact baseward in the finger frame, increasing a low
+        # fraction; the sign reverses naturally for a high fraction.
         translation_increment = (
-            executed_recenter_translation_m * handle_tangent_world
+            -executed_recenter_translation_m * contact_fraction_axis_world
         )
         rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
@@ -686,8 +692,10 @@ def handle_local_mpc_step(
         "contact_fraction_recenter": {
             "enabled": bool(contact_fraction_recenter),
             "active": contact_recenter_active,
-            "handle_tangent_world": handle_tangent_world.tolist(),
-            "handle_tangent_extent_m": float(active_handle_tangent_extent_m),
+            "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),
+            "pad_fraction_axis_extent_m": float(
+                active_pad_fraction_axis_extent_m
+            ),
             "contact_fraction_delta": contact_fraction_delta,
             "requested_translation_m": requested_recenter_translation_m,
             "executed_translation_m": (

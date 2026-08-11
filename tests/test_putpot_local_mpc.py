@@ -96,20 +96,29 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
             contact_window_step=20,
             active_finger_forces_n=[0.0, 2.0],
             active_pad_fractions=[np.nan, -0.046],
+            active_pad_axes_world=[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
         ),
         contact_fraction_recenter=True,
-        active_handle_tangent_extent_m=0.064,
+        active_pad_fraction_axis_extent_m=0.068,
     )
     recenter = command.frame_receipt["contact_fraction_recenter"]
     assert not command.fail_closed
     assert recenter["active"]
     assert recenter["contact_fraction_delta"] == pytest.approx(0.146)
-    assert recenter["requested_translation_m"] == pytest.approx(0.009344)
+    assert recenter["requested_translation_m"] == pytest.approx(0.009928)
     assert recenter["executed_translation_m"] == pytest.approx(0.001)
     assert command.contact_recenter_total_m == pytest.approx(0.001)
     assert np.linalg.norm(
         command.frame_receipt["executed_control"]["translation_world_m"]
     ) == pytest.approx(0.001)
+    contact_pad_axis = np.asarray(
+        recenter["finger_tip_to_base_axis_world"]
+    )
+    translation = np.asarray(
+        command.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    np.testing.assert_allclose(contact_pad_axis, [0.0, 0.0, 1.0])
+    assert np.dot(translation, contact_pad_axis) == pytest.approx(-0.001)
 
     exhausted = handle_local_mpc_step(
         **_inputs(
@@ -118,7 +127,7 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
             active_pad_fractions=[np.nan, -0.046],
         ),
         contact_fraction_recenter=True,
-        active_handle_tangent_extent_m=0.064,
+        active_pad_fraction_axis_extent_m=0.068,
         contact_recenter_total_m=0.012,
     )
     assert exhausted.fail_closed
