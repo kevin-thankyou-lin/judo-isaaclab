@@ -55,6 +55,7 @@ def _start_replay_tail(
         exact_body_collision_receipt,
     )
     from judo_isaaclab.hang_mug_replay_tail import (
+        apply_branch_tip_support_clearance,
         build_replay_hang_tail,
         repeated_joint_nominal,
         replace_replay_hang_tail_path,
@@ -104,6 +105,28 @@ def _start_replay_tail(
             "HANGMUG_PLANNED_CLEAN_INSERTION="
             + json.dumps(receipt, sort_keys=True), flush=True,
         )
+        support_clearance = None
+        terminal_step = len(tail.planned_mug_poses) - 1
+        if terminal_step in receipt["collision_steps"]:
+            corrected, support_clearance = apply_branch_tip_support_clearance(
+                tail.planned_mug_poses,
+                tree_pose=observed_tree_pose,
+                target_branch=tail.target_branch,
+                handle_axis_span_m=target_parts.handle_outer_size[1],
+                approach_step=tail.trajectory.waypoint_steps["branch_approach"],
+            )
+            tail = replace_replay_hang_tail_path(tail, corrected)
+            receipt = exact_body_collision_receipt(
+                tail.planned_mug_poses, tree_pose=observed_tree_pose,
+                target_assets=target_assets,
+            )
+            receipt["support_alignment"] = tail.support_alignment
+            receipt["support_clearance"] = support_clearance
+            receipt["release_timing"] = release_timing
+            print(
+                "HANGMUG_BRANCH_TIP_SUPPORT_CLEARANCE="
+                + json.dumps(receipt, sort_keys=True), flush=True,
+            )
         if not receipt["passed"]:
             corrected, correction = apply_branch_radial_clearance(
                 tail.planned_mug_poses,
@@ -125,6 +148,8 @@ def _start_replay_tail(
             )
             receipt["support_alignment"] = tail.support_alignment
             receipt["geometry_correction"] = correction
+            if support_clearance is not None:
+                receipt["support_clearance"] = support_clearance
             receipt["release_timing"] = release_timing
             print(
                 "HANGMUG_PLANNED_CLEAN_INSERTION_CORRECTED="

@@ -11,7 +11,13 @@ from .hang_mug import (
     SkillTrajectory,
     geometry_conditioned_hang_pose,
 )
-from .put_marker import compose_pose, interpolate_poses, inverse_pose, transfer_pose
+from .put_marker import (
+    compose_pose,
+    interpolate_poses,
+    inverse_pose,
+    quaternion_rotate,
+    transfer_pose,
+)
 
 
 REPLAY_HANG_UNLOAD_STEPS = 80
@@ -393,6 +399,59 @@ def replace_replay_hang_tail_path(
         unload_steps=tail.unload_steps,
         release_steps=tail.release_steps,
     )
+
+
+def apply_branch_tip_support_clearance(
+    mug_poses: Any,
+    *,
+    tree_pose: Any,
+    target_branch: Any,
+    handle_axis_span_m: float,
+    approach_step: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Shift terminal support toward the branch tip without losing engagement.
+
+    Midpoint seating can put a wide mug body into the tree even when the handle
+    opening itself is valid.  Move the support relationship outward by the
+    geometry-derived free axial span while leaving one branch radius beyond the
+    handle.  A quintic ramp keeps the incoming insertion path continuous.
+    """
+
+    poses = np.asarray(mug_poses, dtype=np.float64)
+    tree = np.asarray(tree_pose, dtype=np.float64)
+    if poses.ndim != 2 or poses.shape[1] != 7 or len(poses) < 2:
+        raise ValueError("mug_poses must have shape (steps, 7) with two poses")
+    if tree.shape != (7,):
+        raise ValueError("tree_pose must have shape (7,)")
+    start = int(approach_step)
+    if not 0 <= start < len(poses) - 1:
+        raise ValueError("approach_step must precede the terminal pose")
+    handle_span = float(handle_axis_span_m)
+    if handle_span <= 0.0:
+        raise ValueError("handle_axis_span_m must be positive")
+    remaining_half_span = 0.5 * (float(target_branch.length_m) - handle_span)
+    displacement = remaining_half_span - float(target_branch.radius_m)
+    if displacement <= 0.0:
+        raise ValueError(
+            "branch is too short to shift support while retaining engagement"
+        )
+    direction = quaternion_rotate(tree[3:], target_branch.tangent)
+    direction /= np.linalg.norm(direction)
+    fraction = np.linspace(0.0, 1.0, len(poses) - start)
+    weights = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    corrected = poses.copy()
+    corrected[start:, :3] += displacement * weights[:, None] * direction[None, :]
+    return corrected, {
+        "method": "geometry_bounded_branch_tip_support_clearance",
+        "approach_step": start,
+        "terminal_step": len(poses) - 1,
+        "direction_world": direction.tolist(),
+        "displacement_m": displacement,
+        "branch_tip_engagement_margin_m": float(target_branch.radius_m),
+        "terminal_pose_changed": bool(
+            not np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
+        ),
+    }
 
 
 def repeated_joint_nominal(

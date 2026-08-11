@@ -3,6 +3,7 @@ import pytest
 
 from judo_isaaclab.hang_mug_replay_tail import (
     REPLAY_HANG_UNLOAD_STEPS,
+    apply_branch_tip_support_clearance,
     build_replay_hang_tail,
     repeated_joint_nominal,
     replay_prefix_steps,
@@ -65,6 +66,26 @@ def test_joint_nominal_holds_last_byte_identical_prefix_action():
     nominal = repeated_joint_nominal(actions, prefix_steps=2, tail_steps=4)
     assert nominal.shape == (4, 14)
     assert np.array_equal(nominal, np.repeat(actions[1:2], 4, axis=0))
+
+
+def test_branch_tip_support_clearance_retains_radius_beyond_handle():
+    poses = np.repeat(_pose()[None], 11, axis=0)
+    branch = _branch(1.0, 1.0, 0.08)
+
+    corrected, receipt = apply_branch_tip_support_clearance(
+        poses,
+        tree_pose=_pose(),
+        target_branch=branch,
+        handle_axis_span_m=0.04,
+        approach_step=5,
+    )
+
+    assert receipt["method"] == "geometry_bounded_branch_tip_support_clearance"
+    assert receipt["displacement_m"] == pytest.approx(0.01)
+    assert receipt["branch_tip_engagement_margin_m"] == pytest.approx(0.01)
+    np.testing.assert_allclose(corrected[:6], poses[:6])
+    assert corrected[-1, 0] == pytest.approx(0.01)
+    assert receipt["terminal_pose_changed"] is True
 
 
 def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
