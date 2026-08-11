@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "policy": "provenance-preserving legacy-label HangMug adaptation; one heavy Isaac process; stop and diagnose the first failed pair",
+  "tasks": [
+    {
+      "name": "hangmug_robocasa40_0424",
+      "expected_pairs": 40,
+      "expected_runnable_pairs": 39,
+      "source_dataset": "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_001.hdf5",
+      "dataset_globs": [
+        "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_*.hdf5"
+      ],
+      "dataset_object_aliases": {
+        "obj_0": "mug",
+        "obj_1": "mug_tree"
+      },
+      "dataset_exclusions": [
+        {
+          "dataset": "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_003.hdf5",
+          "sha256": "5d326e08d1d18c88a8c5cc1d0029d10e32152ec9722665d7d0333e3df4ef2de3",
+          "reason": "original canonical source file is a 96-byte truncated HDF5; no asset-matched recovery copy was found",
+          "require_invalid_hdf5": true
+        }
+      ],
+      "objects_root": "${HANGMUG_ROBOCASA40_ROOT}/train_assets/train_assets_rescaled",
+      "runner": "examples/run_hangmug_skill_program.py",
+      "needs_keyframes": true,
+      "runner_args": [
+        "--device",
+        "cpu",
+        "--require-cpu-physics",
+        "--grasp-assist-mechanism",
+        "friction"
+      ]
+    }
+  ]
+}

@@ -12,8 +12,10 @@ import subprocess
 import sys
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from judo_isaaclab.dataset_aliases import canonicalize_named_mapping
 
 
 def _expand(value: str) -> str:
@@ -56,20 +58,80 @@ def _pair_id(assets: dict[str, str]) -> str:
     return "__".join(Path(assets[name]).name.lower() for name in sorted(assets))
 
 
-def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, str]]:
+def _dataset_files(task: dict[str, Any]) -> list[str]:
     files: list[str] = []
     for pattern in task["dataset_globs"]:
         files.extend(glob.glob(_expand(pattern)))
-    files = sorted({os.path.realpath(path) for path in files})
+    return sorted({os.path.realpath(path) for path in files})
+
+
+def dataset_exclusion_receipts(
+    task: dict[str, Any], files: list[str] | None = None
+) -> list[dict[str, Any]]:
+    available = set(files or _dataset_files(task))
+    receipts = []
+    for configured in task.get("dataset_exclusions", []):
+        path = os.path.realpath(_expand(configured["dataset"]))
+        if path not in available:
+            raise RuntimeError(f"{task['name']}: excluded dataset is not in the input set: {path}")
+        actual_sha256 = _sha256(path)
+        if actual_sha256 != configured["sha256"]:
+            raise RuntimeError(
+                f"{task['name']}: excluded dataset hash changed: {path}; "
+                f"expected {configured['sha256']}, got {actual_sha256}"
+            )
+        if configured.get("require_invalid_hdf5", False):
+            try:
+                _assets(path)
+            except Exception as error:
+                observed_error = f"{type(error).__name__}: {error}"
+            else:
+                raise RuntimeError(
+                    f"{task['name']}: exclusion is no longer invalid HDF5: {path}"
+                )
+        else:
+            observed_error = None
+        receipts.append(
+            {
+                "dataset": path,
+                "sha256": actual_sha256,
+                "size_bytes": os.path.getsize(path),
+                "reason": configured["reason"],
+                "observed_error": observed_error,
+            }
+        )
+    return receipts
+
+
+def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, Any]]:
+    files = _dataset_files(task)
     expected = int(task.get("expected_pairs", 40))
     if len(files) != expected:
         raise RuntimeError(
             f"{task['name']}: expected {expected} dataset files, found {len(files)}"
         )
-    pairs = [
-        {"dataset": path, "pair_id": _pair_id(_assets(path)), "assets": _assets(path)}
-        for path in files
-    ]
+    exclusions = dataset_exclusion_receipts(task, files)
+    excluded_paths = {receipt["dataset"] for receipt in exclusions}
+    runnable_files = [path for path in files if path not in excluded_paths]
+    expected_runnable = int(task.get("expected_runnable_pairs", expected - len(exclusions)))
+    if len(runnable_files) != expected_runnable:
+        raise RuntimeError(
+            f"{task['name']}: expected {expected_runnable} runnable datasets, "
+            f"found {len(runnable_files)}"
+        )
+    aliases = task.get("dataset_object_aliases", {})
+    pairs = []
+    for path in runnable_files:
+        raw_assets = _assets(path)
+        assets = canonicalize_named_mapping(raw_assets, aliases)
+        pairs.append(
+            {
+                "dataset": path,
+                "pair_id": _pair_id(assets),
+                "assets": assets,
+                "dataset_assets_raw": raw_assets,
+            }
+        )
     ids = [pair["pair_id"] for pair in pairs]
     if len(ids) != len(set(ids)):
         duplicates = sorted({value for value in ids if ids.count(value) > 1})
@@ -205,6 +267,8 @@ def _command(
         "--demo-hdf5", str(output / f"{mode}_demo.hdf5"),
     ]
     command.extend(_expand(str(value)) for value in task.get("runner_args", []))
+    for source, target_name in sorted(task.get("dataset_object_aliases", {}).items()):
+        command.extend(["--dataset-object-alias", f"{source}={target_name}"])
     if mode == "replay":
         command.append("--classification-run")
         if source_keyframes is not None:
@@ -230,6 +294,7 @@ def run_task(
     if max_pairs is not None:
         pairs = pairs[:max_pairs]
     inventory = validate_asset_inventory(task, pairs)
+    input_blockers = dataset_exclusion_receipts(task)
     print(
         "CAMPAIGN_ASSET_PREFLIGHT="
         + json.dumps({"task": task["name"], **inventory}, sort_keys=True),
@@ -243,6 +308,7 @@ def run_task(
         "expected_pairs": int(task.get("expected_pairs", 40)),
         "pairs": {},
     }
+    ledger["input_blockers"] = input_blockers
     keyframes = task_root / "source_keyframes.json" if task.get("needs_keyframes") else None
 
     for pair in pairs:

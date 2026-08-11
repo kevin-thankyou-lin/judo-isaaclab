@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import h5py
@@ -5,7 +6,9 @@ import numpy as np
 import pytest
 
 from run_three_task_asset_campaign import (
+    _command,
     _reusable_classification,
+    dataset_exclusion_receipts,
     enumerate_pairs,
     validate_asset_inventory,
     validate_demo,
@@ -43,6 +46,64 @@ def test_enumeration_fails_closed_on_wrong_count(tmp_path):
             "source_dataset": str(tmp_path / "task_0.hdf5"),
             "dataset_globs": [str(tmp_path / "*.hdf5")],
         })
+
+
+def test_enumeration_canonicalizes_legacy_labels_and_receipts_corrupt_input(tmp_path):
+    source = tmp_path / "mug_001.hdf5"
+    blocked = tmp_path / "mug_003.hdf5"
+    _dataset(source, {"obj_0": "Mugs/mug_001", "obj_1": "Trees/tree_003"})
+    blocked.write_bytes(b"truncated")
+    task = {
+        "name": "hangmug",
+        "expected_pairs": 2,
+        "expected_runnable_pairs": 1,
+        "source_dataset": str(source),
+        "dataset_globs": [str(tmp_path / "mug_*.hdf5")],
+        "dataset_object_aliases": {"obj_0": "mug", "obj_1": "mug_tree"},
+        "dataset_exclusions": [
+            {
+                "dataset": str(blocked),
+                "sha256": hashlib.sha256(blocked.read_bytes()).hexdigest(),
+                "reason": "fixture is intentionally truncated",
+                "require_invalid_hdf5": True,
+            }
+        ],
+    }
+    pairs = enumerate_pairs(task)
+    assert pairs[0]["assets"] == {"mug": "Mugs/mug_001", "mug_tree": "Trees/tree_003"}
+    assert pairs[0]["dataset_assets_raw"] == {
+        "obj_0": "Mugs/mug_001",
+        "obj_1": "Trees/tree_003",
+    }
+    receipt = dataset_exclusion_receipts(task)[0]
+    assert receipt["size_bytes"] == len(b"truncated")
+    assert receipt["observed_error"].startswith("OSError:")
+
+
+def test_campaign_command_passes_dataset_aliases_to_runner(tmp_path):
+    task = {
+        "runner": "examples/run_hangmug_skill_program.py",
+        "source_dataset": str(tmp_path / "source.hdf5"),
+        "objects_root": str(tmp_path / "objects"),
+        "runner_args": [],
+        "dataset_object_aliases": {"obj_1": "mug_tree", "obj_0": "mug"},
+    }
+    command = _command(
+        task,
+        python="python",
+        gear_repo="gear",
+        target="target.hdf5",
+        mode="replay",
+        output=tmp_path,
+        source_keyframes=None,
+        direct_replay_result=None,
+    )
+    aliases = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--dataset-object-alias"
+    ]
+    assert aliases == ["obj_0=mug", "obj_1=mug_tree"]
 
 
 def test_asset_inventory_fails_before_simulator_startup(tmp_path):
