@@ -125,14 +125,17 @@ def apply_branch_radial_clearance(
     *,
     tree_pose: Any,
     mug_body_frame: Any,
+    mug_body_size: Any,
     target_branch: Any,
     collision_steps: Any,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Move one colliding path segment outward by one measured branch radius.
+    """Move one colliding path segment outward without routing it downward.
 
     This is a deterministic geometry correction, not candidate search.  The
     direction is the cup-body radial vector away from the selected branch axis
-    at the collision-window midpoint.  Smooth tapers preserve the incoming path
+    at the collision-window midpoint.  A downward radial vector is projected
+    into the world-horizontal plane and given clearance equal to the measured
+    mug-body horizontal half-width.  Smooth tapers preserve the incoming path
     and the original final support relationship.
     """
 
@@ -145,6 +148,9 @@ def apply_branch_radial_clearance(
     tree = np.asarray(tree_pose, dtype=np.float64)
     if tree.shape != (7,):
         raise ValueError("tree_pose must have shape (7,)")
+    body_size = np.asarray(mug_body_size, dtype=np.float64)
+    if body_size.shape != (3,) or np.any(body_size <= 0.0):
+        raise ValueError("mug_body_size must have three positive values")
 
     inner = tree[:3] + quaternion_rotate(tree[3:], target_branch.inner_point)
     tip = tree[:3] + quaternion_rotate(tree[3:], target_branch.tip_point)
@@ -162,7 +168,19 @@ def apply_branch_radial_clearance(
     radial_norm = float(np.linalg.norm(radial))
     if radial_norm <= 1.0e-8:
         raise ValueError("cup body lies on branch axis; radial correction is undefined")
-    direction = radial / radial_norm
+    raw_direction = radial / radial_norm
+    direction = raw_direction.copy()
+    gravity_safe = bool(direction[2] < 0.0)
+    maximum_displacement = radius
+    if gravity_safe:
+        direction[2] = 0.0
+        horizontal_norm = float(np.linalg.norm(direction))
+        if horizontal_norm <= 1.0e-8:
+            raise ValueError(
+                "downward radial correction has no horizontal component"
+            )
+        direction /= horizontal_norm
+        maximum_displacement = max(radius, 0.5 * float(np.max(body_size[:2])))
 
     span = steps[-1] - steps[0] + 1
     taper_steps = max(12, 3 * span)
@@ -182,13 +200,17 @@ def apply_branch_radial_clearance(
         weights[index] = smooth(float(fraction))
 
     corrected = poses.copy()
-    corrected[:, :3] += radius * weights[:, None] * direction[None, :]
+    corrected[:, :3] += (
+        maximum_displacement * weights[:, None] * direction[None, :]
+    )
     return corrected, {
         "method": "single_pass_branch_radial_clearance",
         "source_collision_steps": steps,
         "correction_window": [start, end],
+        "raw_direction_world": raw_direction.tolist(),
         "direction_world": direction.tolist(),
-        "maximum_displacement_m": radius,
+        "gravity_safe_horizontal_projection": gravity_safe,
+        "maximum_displacement_m": maximum_displacement,
         "preserves_final_pose": bool(
             np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
         ),

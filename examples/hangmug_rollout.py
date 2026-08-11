@@ -78,6 +78,7 @@ def _start_replay_tail(
                 tail.planned_mug_poses,
                 tree_pose=target_tree.root_pose,
                 mug_body_frame=target_parts.body_frame,
+                mug_body_size=target_parts.body_size,
                 target_branch=tail.target_branch,
                 collision_steps=receipt["collision_steps"],
             )
