@@ -14,6 +14,11 @@ from .hang_mug import (
 from .put_marker import compose_pose, interpolate_poses, inverse_pose, transfer_pose
 
 
+REPLAY_HANG_UNLOAD_STEPS = 80
+REPLAY_HANG_RELEASE_STEPS = 40
+REPLAY_HANG_SETTLE_STEPS = 60
+
+
 @dataclass(frozen=True)
 class ReplayHangTail:
     """A hang-only trajectory derived from the live post-handover state."""
@@ -62,7 +67,14 @@ def replay_tail_steps(keyframes: dict[str, Any]) -> int:
         raise ValueError("source keyframes lack a clean insertion path") from error
     if path_steps < 2:
         raise ValueError("clean insertion path must contain at least two poses")
-    return 100 + path_steps - 1 + 40 + 40 + 60
+    return (
+        100
+        + path_steps
+        - 1
+        + REPLAY_HANG_UNLOAD_STEPS
+        + REPLAY_HANG_RELEASE_STEPS
+        + REPLAY_HANG_SETTLE_STEPS
+    )
 
 
 def _source_relationship_mug_path(
@@ -139,7 +151,9 @@ def _trajectory_from_mug_path(
     right_insert = np.asarray(
         [compose_pose(pose, right_contact) for pose in mug_path], dtype=np.float64
     )
-    unload_steps, release_steps, settle_steps = 40, 40, 60
+    unload_steps = REPLAY_HANG_UNLOAD_STEPS
+    release_steps = REPLAY_HANG_RELEASE_STEPS
+    settle_steps = REPLAY_HANG_SETTLE_STEPS
     hold = np.repeat(right_insert[-1:], unload_steps + release_steps + settle_steps, axis=0)
     right = np.concatenate((right_insert, hold), axis=0)
     left = np.repeat(left_pose[None], len(right), axis=0)

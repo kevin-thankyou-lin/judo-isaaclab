@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from judo_isaaclab.hang_mug_replay_tail import (
+    REPLAY_HANG_UNLOAD_STEPS,
     build_replay_hang_tail,
     repeated_joint_nominal,
     replay_prefix_steps,
@@ -118,6 +119,10 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
     assert tail.trajectory.stage_names[-1] == "stable_settle"
     assert tail.trajectory.grippers[0] == pytest.approx([-0.0475, 0.0])
     branch_unload = tail.trajectory.waypoint_steps["branch_unload"]
+    assert (
+        branch_unload - tail.trajectory.waypoint_steps["branch_insert"]
+        == REPLAY_HANG_UNLOAD_STEPS
+    )
     assert np.all(tail.trajectory.grippers[: branch_unload + 1, 1] == 0.0)
 
     corrected = tail.planned_mug_poses.copy()
