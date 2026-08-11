@@ -257,6 +257,45 @@ def test_insert_compensation_receipt_accepts_list_observations(capsys):
     assert "HANGMUG_INSERT_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_zero_unload_interval_skips_insert_and_held_feedback():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
+    )
+    original = program.build()
+    waypoints = dict(original.waypoint_steps)
+    waypoints["branch_unload"] = waypoints["branch_insert"]
+    trajectory = SkillTrajectory(
+        left_poses=original.left_poses,
+        right_poses=original.right_poses,
+        grippers=original.grippers,
+        stage_names=original.stage_names,
+        waypoint_steps=waypoints,
+    )
+    insert = waypoints["branch_insert"]
+
+    _, _, feedback_compensated = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        insert,
+        {
+            "mug_pose": _pose(z=0.01).tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": _pose().tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        _pose(z=0.04),
+        False,
+    )
+    assert feedback_compensated is False
+
+
 def test_approach_compensation_uses_geometry_clearance(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(

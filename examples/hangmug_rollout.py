@@ -65,6 +65,17 @@ def _start_replay_tail(
         unload_steps=args.replay_hang_unload_steps,
         release_steps=args.replay_hang_release_steps,
     )
+    release_timing = {
+        "unload_steps": tail.unload_steps,
+        "release_steps": tail.release_steps,
+        "branch_insert": tail.trajectory.waypoint_steps["branch_insert"],
+        "branch_unload": tail.trajectory.waypoint_steps["branch_unload"],
+        "right_release": tail.trajectory.waypoint_steps["right_release"],
+    }
+    print(
+        "HANGMUG_REPLAY_RELEASE_TIMING="
+        + json.dumps(release_timing, sort_keys=True), flush=True,
+    )
     receipt = None
     if args.require_clean_insertion:
         receipt = exact_body_collision_receipt(
@@ -72,6 +83,7 @@ def _start_replay_tail(
             target_assets=target_assets,
         )
         receipt["support_alignment"] = tail.support_alignment
+        receipt["release_timing"] = release_timing
         print(
             "HANGMUG_PLANNED_CLEAN_INSERTION="
             + json.dumps(receipt, sort_keys=True), flush=True,
@@ -97,6 +109,7 @@ def _start_replay_tail(
             )
             receipt["support_alignment"] = tail.support_alignment
             receipt["geometry_correction"] = correction
+            receipt["release_timing"] = release_timing
             print(
                 "HANGMUG_PLANNED_CLEAN_INSERTION_CORRECTED="
                 + json.dumps(receipt, sort_keys=True), flush=True,
@@ -437,6 +450,8 @@ def _apply_held_convergence_feedback(
 
     insert = trajectory.waypoint_steps.get("branch_insert")
     unload = trajectory.waypoint_steps.get("branch_unload")
+    if insert is not None and unload is not None and unload <= insert:
+        return trajectory, False
     convergence_step = (
         (insert + unload) // 2
         if insert is not None and unload is not None
@@ -573,7 +588,12 @@ def _reanchor_full_skill(
                     ),
                     "intended_support_z_m": float(intended_final[2]),
                 }, sort_keys=True))
-            if completed == "branch_insert" and intended_final is not None:
+            if (
+                completed == "branch_insert"
+                and intended_final is not None
+                and trajectory.waypoint_steps["branch_unload"]
+                > trajectory.waypoint_steps["branch_insert"]
+            ):
                 from judo_isaaclab.hang_mug import compensate_low_branch_insert
 
                 before = trajectory.right_poses.copy()
