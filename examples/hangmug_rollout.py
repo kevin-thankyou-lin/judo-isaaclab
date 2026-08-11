@@ -437,6 +437,7 @@ def execute_hangmug_rollout(
                 intended_final,
                 observed_handover_reanchor,
                 branch_entry_clearance_m,
+                planning_tree_pose,
             )
             if feedback_compensated and args.require_clean_insertion:
                 repair_kwargs = {
@@ -544,6 +545,19 @@ def _apply_held_convergence_feedback(
     return trajectory, compensated
 
 
+def _support_pose_in_observed_tree_frame(
+    intended_final, planning_tree_pose, observed_tree_pose,
+):
+    """Move a planned support pose with the currently observed tree pose."""
+
+    if intended_final is None or planning_tree_pose is None or observed_tree_pose is None:
+        return intended_final
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    tree_local_support = compose_pose(inverse_pose(planning_tree_pose), intended_final)
+    return compose_pose(observed_tree_pose, tree_local_support)
+
+
 def _reanchor_full_skill(
     trajectory,
     step,
@@ -553,6 +567,7 @@ def _reanchor_full_skill(
     intended_final,
     observed_handover_reanchor,
     branch_entry_clearance_m=None,
+    planning_tree_pose=None,
 ):
     """Apply deterministic observed-contact feedback to a full semantic skill."""
 
@@ -564,6 +579,9 @@ def _reanchor_full_skill(
     from judo_isaaclab.put_marker import compose_pose, inverse_pose
 
     feedback_compensated = False
+    observed_support_pose = _support_pose_in_observed_tree_frame(
+        intended_final, planning_tree_pose, sample.get("tree_pose")
+    )
 
     if (
         observed_handover_reanchor
@@ -615,7 +633,7 @@ def _reanchor_full_skill(
                 before = trajectory.right_poses.copy()
                 trajectory = compensate_low_branch_approach(
                     trajectory,
-                    intended_final,
+                    observed_support_pose,
                     sample["mug_pose"],
                     support_clearance_m=(
                         0.01
@@ -640,7 +658,7 @@ def _reanchor_full_skill(
                         if branch_entry_clearance_m is None
                         else branch_entry_clearance_m
                     ),
-                    "intended_support_z_m": float(intended_final[2]),
+                    "intended_support_z_m": float(observed_support_pose[2]),
                 }, sort_keys=True))
             if (
                 completed == "branch_insert"
@@ -653,7 +671,7 @@ def _reanchor_full_skill(
                 before = trajectory.right_poses.copy()
                 trajectory = compensate_low_branch_insert(
                     trajectory,
-                    intended_final,
+                    observed_support_pose,
                     sample["mug_pose"],
                 )
                 feedback_compensated = feedback_compensated or not np.allclose(
@@ -669,10 +687,11 @@ def _reanchor_full_skill(
                         2.0 * np.arccos(np.clip(quaternion_dot, -1.0, 1.0))
                     ),
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
-                    "intended_support_position_m": intended_final[:3].tolist(),
+                    "intended_support_position_m": observed_support_pose[:3].tolist(),
+                    "tree_relative_support_reanchored": planning_tree_pose is not None,
                 }, sort_keys=True))
     trajectory, held_compensated = _apply_held_convergence_feedback(
-        trajectory, step=step, sample=sample, intended_final=intended_final,
+        trajectory, step=step, sample=sample, intended_final=observed_support_pose,
     )
     feedback_compensated = feedback_compensated or held_compensated
     return trajectory, nominal_right_contact, feedback_compensated

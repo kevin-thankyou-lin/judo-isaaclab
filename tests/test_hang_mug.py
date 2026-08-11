@@ -152,6 +152,53 @@ def test_held_convergence_applies_second_smooth_insert_feedback(capsys):
     assert "HANGMUG_HELD_CONVERGENCE_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_held_convergence_moves_support_with_observed_tree():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    step = (insert + unload) // 2
+    corrected, _, feedback_compensated = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        step,
+        {
+            "mug_pose": _pose(0.29, 0.02, 0.01).tolist(),
+            "tree_pose": _pose(0.05, 0.0, 0.0).tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": _pose().tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        _pose(0.31, 0.0, 0.04),
+        False,
+        planning_tree_pose=_pose(),
+    )
+    assert feedback_compensated is True
+    assert corrected.right_poses[unload, :3] == pytest.approx(
+        trajectory.right_poses[unload, :3] + [0.07, -0.02, 0.03]
+    )
+
+
+def test_observed_tree_support_reanchor_preserves_full_se3_relationship():
+    yaw_90 = np.asarray([
+        2.0, 3.0, 0.0, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)
+    ])
+    reanchored = hangmug_rollout._support_pose_in_observed_tree_frame(
+        _pose(1.0, 0.0, 0.0), _pose(), yaw_90
+    )
+    assert reanchored[:3] == pytest.approx([2.0, 4.0, 0.0])
+    assert abs(float(np.dot(reanchored[3:], yaw_90[3:]))) == pytest.approx(1.0)
+
+
 def test_collision_unsafe_feedback_retains_previous_suffix(monkeypatch):
     previous = SimpleNamespace(name="previous")
     unsafe = SimpleNamespace(name="unsafe")
