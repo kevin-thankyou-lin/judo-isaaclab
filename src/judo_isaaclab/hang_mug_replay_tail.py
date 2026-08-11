@@ -24,6 +24,7 @@ class ReplayHangTail:
     source_branch: Any
     target_branch: Any
     planned_mug_poses: np.ndarray
+    support_alignment: dict[str, Any]
 
 
 def replay_prefix_steps(
@@ -73,7 +74,8 @@ def _source_relationship_mug_path(
     target_branch: Any,
     target_tree_pose: np.ndarray,
     observed_mug: np.ndarray,
-) -> np.ndarray:
+    supported_mug_pose: np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Transfer the verified source insertion curve into the target branch frame."""
 
     frames = keyframes["frames"]
@@ -99,8 +101,31 @@ def _source_relationship_mug_path(
         mapped.append(
             compose_pose(target_handle, inverse_pose(target_parts.handle_hole_frame))
         )
+    mapped = np.asarray(mapped, dtype=np.float64)
+    supported = np.asarray(supported_mug_pose, dtype=np.float64)
+    original_terminal = mapped[-1].copy()
+    world_delta = compose_pose(supported, inverse_pose(original_terminal))
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    corrections = interpolate_poses(identity, world_delta, len(mapped))
+    mapped = np.asarray(
+        [compose_pose(correction, pose) for correction, pose in zip(corrections, mapped)]
+    )
     bridge = interpolate_poses(observed_mug, mapped[0], 100)
-    return np.concatenate((bridge, np.asarray(mapped[1:])), axis=0)
+    quaternion_dot = abs(float(np.dot(original_terminal[3:], supported[3:])))
+    receipt = {
+        "method": "quintic_world_pose_alignment_to_branch_midpoint",
+        "source_relationship_steps": len(mapped),
+        "original_terminal_pose": original_terminal.tolist(),
+        "supported_terminal_pose": supported.tolist(),
+        "terminal_translation_m": float(
+            np.linalg.norm(supported[:3] - original_terminal[:3])
+        ),
+        "terminal_rotation_rad": float(
+            2.0 * np.arccos(np.clip(quaternion_dot, -1.0, 1.0))
+        ),
+        "terminal_pose_exact": bool(np.allclose(mapped[-1], supported, atol=1.0e-12)),
+    }
+    return np.concatenate((bridge, mapped[1:]), axis=0), receipt
 
 
 def _trajectory_from_mug_path(
@@ -176,7 +201,7 @@ def build_replay_hang_tail(
     if any(pose.shape != (7,) for pose in (observed_mug, left_start, right_start)):
         raise ValueError("observed mug and EEF poses must each have shape (7,)")
     frames = keyframes["frames"]
-    _, source_branch, target_branch = geometry_conditioned_hang_pose(
+    supported_mug_pose, source_branch, target_branch = geometry_conditioned_hang_pose(
         frames["stable_settle"]["mug_pose"],
         frames["stable_settle"]["tree_pose"],
         source_parts,
@@ -186,7 +211,7 @@ def build_replay_hang_tail(
         target_branches,
     )
     right_contact = compose_pose(inverse_pose(observed_mug), right_start)
-    planned_mug_poses = _source_relationship_mug_path(
+    planned_mug_poses, support_alignment = _source_relationship_mug_path(
         keyframes=keyframes,
         source_parts=source_parts,
         target_parts=target_parts,
@@ -194,6 +219,7 @@ def build_replay_hang_tail(
         target_branch=target_branch,
         target_tree_pose=np.asarray(target_tree_pose, dtype=np.float64),
         observed_mug=observed_mug,
+        supported_mug_pose=supported_mug_pose,
     )
     trajectory = _trajectory_from_mug_path(
         planned_mug_poses,
@@ -209,6 +235,7 @@ def build_replay_hang_tail(
         source_branch=source_branch,
         target_branch=target_branch,
         planned_mug_poses=planned_mug_poses,
+        support_alignment=support_alignment,
     )
 
 
@@ -232,6 +259,7 @@ def replace_replay_hang_tail_path(
         source_branch=tail.source_branch,
         target_branch=tail.target_branch,
         planned_mug_poses=path,
+        support_alignment=tail.support_alignment,
     )
 
 

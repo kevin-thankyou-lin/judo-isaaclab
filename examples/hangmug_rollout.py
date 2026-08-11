@@ -68,6 +68,7 @@ def _start_replay_tail(
             tail.planned_mug_poses, tree_pose=target_tree.root_pose,
             target_assets=target_assets,
         )
+        receipt["support_alignment"] = tail.support_alignment
         print(
             "HANGMUG_PLANNED_CLEAN_INSERTION="
             + json.dumps(receipt, sort_keys=True), flush=True,
@@ -85,6 +86,7 @@ def _start_replay_tail(
                 tail.planned_mug_poses, tree_pose=target_tree.root_pose,
                 target_assets=target_assets,
             )
+            receipt["support_alignment"] = tail.support_alignment
             receipt["geometry_correction"] = correction
             print(
                 "HANGMUG_PLANNED_CLEAN_INSERTION_CORRECTED="

@@ -107,6 +107,13 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
     assert tail.intended_final_mug_pose == pytest.approx(
         tail.planned_mug_poses[-1]
     )
+    assert tail.support_alignment["terminal_pose_exact"] is True
+    target_handle = compose_pose(
+        tail.intended_final_mug_pose, target_parts.handle_hole_frame
+    )
+    target_midpoint = 0.5 * (target_branch.inner_point + target_branch.tip_point)
+    target_support = compose_pose(_pose(2.0, 3.0, 0.0), _pose(*target_midpoint))
+    assert target_handle[:3] == pytest.approx(target_support[:3])
     assert tail.trajectory.stage_names[0] == "source_relationship_transport"
     assert tail.trajectory.stage_names[-1] == "stable_settle"
     assert tail.trajectory.grippers[0] == pytest.approx([-0.0475, 0.0])
