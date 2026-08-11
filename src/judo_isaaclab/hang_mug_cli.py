@@ -29,6 +29,15 @@ def add_replay_repair_arguments(parser: Any) -> None:
         default=40,
         help="Open the right hand over this many steps after insertion.",
     )
+    parser.add_argument(
+        "--replay-hang-insert-dls-gain",
+        type=float,
+        default=1.0,
+        help=(
+            "Scale only the receiving arm's incremental IK correction from "
+            "branch approach through insertion; defaults to unchanged control."
+        ),
+    )
 
 
 def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
@@ -40,3 +49,5 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-unload-steps must be nonnegative")
     if args.replay_hang_release_steps <= 0:
         parser.error("--replay-hang-release-steps must be positive")
+    if not 0.0 < args.replay_hang_insert_dls_gain <= 4.0:
+        parser.error("--replay-hang-insert-dls-gain must be in (0, 4]")

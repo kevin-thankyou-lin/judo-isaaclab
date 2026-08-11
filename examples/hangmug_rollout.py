@@ -176,6 +176,33 @@ def _screen_or_reject_observation_feedback(
         return retained, receipt, 2.0
 
 
+def _insertion_tracking_gain(
+    trajectory, trajectory_step: int, args, *, base_gain: float,
+) -> float:
+    """Apply and receipt an optional gain only along the screened insert."""
+
+    approach = int(trajectory.waypoint_steps["branch_approach"])
+    insert = int(trajectory.waypoint_steps["branch_insert"])
+    insert_gain = float(getattr(args, "replay_hang_insert_dls_gain", 1.0))
+    if approach < trajectory_step <= insert:
+        gain = max(float(base_gain), insert_gain)
+        if trajectory_step == approach + 1:
+            print(
+                "HANGMUG_INSERT_TRACKING_GAIN="
+                + json.dumps(
+                    {
+                        "branch_approach": approach,
+                        "branch_insert": insert,
+                        "right_dls_gain": gain,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+        return gain
+    return float(base_gain)
+
+
 def _print_progress(step: int, sample: dict[str, Any]) -> None:
     """Emit the compact, machine-readable rollout progress receipt."""
 
@@ -283,6 +310,7 @@ def execute_hangmug_rollout(
                     absolute_step = repair_prefix_steps + int(milestone_step)
                     milestones_by_step.setdefault(absolute_step, []).append(name)
             stage = trajectory.stage_names[trajectory_step]
+            step_right_dls_gain = _insertion_tracking_gain(trajectory, trajectory_step, args, base_gain=right_dls_gain)
             action = ik_action(
                 env,
                 trajectory.left_poses[trajectory_step],
@@ -290,7 +318,7 @@ def execute_hangmug_rollout(
                 trajectory.grippers[trajectory_step],
                 joint_nominal[trajectory_step],
                 args,
-                right_dls_gain=right_dls_gain,
+                right_dls_gain=step_right_dls_gain,
                 integrate_left_ik=True,
                 integrate_right_ik=True,
             )
@@ -304,6 +332,7 @@ def execute_hangmug_rollout(
             trajectory_step = step
             stage = trajectory.stage_names[step]
             integrate = step > trajectory.waypoint_steps["left_grasp"]
+            step_right_dls_gain = _insertion_tracking_gain(trajectory, trajectory_step, args, base_gain=right_dls_gain)
             action = ik_action(
                 env,
                 trajectory.left_poses[step],
@@ -311,7 +340,7 @@ def execute_hangmug_rollout(
                 trajectory.grippers[step],
                 joint_nominal[step],
                 args,
-                right_dls_gain=right_dls_gain,
+                right_dls_gain=step_right_dls_gain,
                 integrate_left_ik=integrate,
                 integrate_right_ik=integrate,
             )
