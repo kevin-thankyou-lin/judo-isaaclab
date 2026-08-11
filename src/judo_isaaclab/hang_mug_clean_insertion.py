@@ -217,6 +217,34 @@ def apply_branch_radial_clearance(
     }
 
 
+def _executed_prefix_receipt(
+    poses: Any | None,
+    *,
+    completed_step: int,
+    tree_pose: Any,
+    target_assets: dict[str, str],
+) -> dict[str, Any] | None:
+    """Fail closed on observed collisions before editing future commands."""
+
+    if poses is None:
+        return None
+    executed = np.asarray(poses, dtype=np.float64)
+    if executed.ndim != 2 or executed.shape[1] != 7:
+        raise ValueError("executed_mug_poses must have shape (steps, 7)")
+    if len(executed) != completed_step + 1:
+        raise ValueError("executed_mug_poses must end at completed_step")
+    receipt = exact_body_collision_receipt(
+        executed,
+        tree_pose=tree_pose,
+        target_assets=target_assets,
+    )
+    if not receipt["passed"]:
+        raise RuntimeError(
+            "observation-compensated insertion already collided in execution"
+        )
+    return receipt
+
+
 def repair_compensated_insertion_path(
     trajectory: SkillTrajectory,
     *,
@@ -227,6 +255,7 @@ def repair_compensated_insertion_path(
     mug_body_size: Any,
     target_branch: Any,
     target_assets: dict[str, str],
+    executed_mug_poses: Any | None = None,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Exact-screen and repair an observation-compensated insertion suffix."""
 
@@ -243,31 +272,32 @@ def repair_compensated_insertion_path(
     if contact.shape != (7,):
         raise ValueError("right_contact_in_mug must have shape (7,)")
     contact_inverse = inverse_pose(contact)
-    mug_path = np.asarray(
-        [
-            compose_pose(pose, contact_inverse)
-            for pose in trajectory.right_poses[: audit_end + 1]
-        ],
-        dtype=np.float64,
+    mug_path = np.asarray([
+        compose_pose(pose, contact_inverse)
+        for pose in trajectory.right_poses[: audit_end + 1]
+    ], dtype=np.float64)
+    executed_receipt = _executed_prefix_receipt(
+        executed_mug_poses,
+        completed_step=completed,
+        tree_pose=tree_pose,
+        target_assets=target_assets,
     )
     initial = exact_body_collision_receipt(
         mug_path,
         tree_pose=tree_pose,
         target_assets=target_assets,
+        start_step=future_start,
+        release_step=audit_end + 1,
     )
     receipt = dict(initial)
     receipt["observation_compensated_path"] = True
     receipt["audit_end_step"] = audit_end
+    receipt["executed_prefix"] = executed_receipt
     if initial["passed"]:
         receipt["geometry_correction"] = None
         return trajectory, receipt
 
     collision_steps = [int(step) for step in initial["collision_steps"]]
-    if any(step < future_start for step in collision_steps):
-        raise RuntimeError(
-            "observation-compensated insertion already collided before repair"
-        )
-
     corrected_future, correction = apply_branch_radial_clearance(
         mug_path[future_start:],
         tree_pose=tree_pose,
@@ -288,16 +318,17 @@ def repair_compensated_insertion_path(
         corrected,
         tree_pose=tree_pose,
         target_assets=target_assets,
+        start_step=future_start,
+        release_step=audit_end + 1,
     )
     receipt["observation_compensated_path"] = True
     receipt["audit_end_step"] = audit_end
+    receipt["executed_prefix"] = executed_receipt
     receipt["pre_correction_collision_count"] = initial["collision_count"]
     receipt["pre_correction_collision_steps"] = initial["collision_steps"]
     receipt["geometry_correction"] = correction
     if not receipt["passed"]:
-        raise RuntimeError(
-            "observation-compensated insertion remains collision-unsafe"
-        )
+        raise RuntimeError("observation-compensated insertion remains collision-unsafe")
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     right[future_start : audit_end + 1] = np.asarray(

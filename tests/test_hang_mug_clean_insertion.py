@@ -193,6 +193,7 @@ def test_held_suffix_is_rescreened_without_rewriting_completed_steps(monkeypatch
     )
     receipts = iter(
         (
+            {"passed": True, "collision_count": 0, "collision_steps": []},
             {"passed": False, "collision_count": 1, "collision_steps": [4]},
             {"passed": True, "collision_count": 0, "collision_steps": []},
         )
@@ -222,13 +223,46 @@ def test_held_suffix_is_rescreened_without_rewriting_completed_steps(monkeypatch
         mug_body_size=[0.08, 0.08, 0.10],
         target_branch=object(),
         target_assets={"mug": "mug", "mug_tree": "tree"},
+        executed_mug_poses=np.repeat(IDENTITY[None], 4, axis=0),
     )
 
     assert receipt["passed"] is True
     assert receipt["audit_end_step"] == 5
+    assert receipt["executed_prefix"]["passed"] is True
     assert receipt["geometry_correction"]["future_start_step"] == 4
     np.testing.assert_allclose(
         corrected.right_poses[:4], trajectory.right_poses[:4]
     )
     assert corrected.right_poses[4, 0] == pytest.approx(0.02)
     np.testing.assert_allclose(corrected.right_poses[5], trajectory.right_poses[5])
+
+
+def test_held_suffix_rejects_observed_collision_before_future_repair(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        grippers=np.zeros((6, 2)),
+        stage_names=("insert",) * 6,
+        waypoint_steps={"branch_insert": 2, "branch_unload": 5},
+    )
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: {
+            "passed": False,
+            "collision_count": 1,
+            "collision_steps": [2],
+        },
+    )
+    with pytest.raises(RuntimeError, match="collided in execution"):
+        repair_compensated_insertion_path(
+            trajectory,
+            completed_step=3,
+            right_contact_in_mug=IDENTITY,
+            tree_pose=IDENTITY,
+            mug_body_frame=IDENTITY,
+            mug_body_size=[0.08, 0.08, 0.10],
+            target_branch=object(),
+            target_assets={"mug": "mug", "mug_tree": "tree"},
+            executed_mug_poses=np.repeat(IDENTITY[None], 4, axis=0),
+        )

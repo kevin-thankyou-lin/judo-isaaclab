@@ -328,6 +328,9 @@ def execute_hangmug_rollout(
                     mug_body_size=target_parts.body_size,
                     target_branch=target_branch,
                     target_assets=target_assets,
+                    executed_mug_poses=mug_poses[
+                        0 if repair_prefix_steps is None else repair_prefix_steps :
+                    ],
                 )
                 _record_feedback_collision_receipt(
                     feedback_receipt, planned=planned_clean_insertion,
