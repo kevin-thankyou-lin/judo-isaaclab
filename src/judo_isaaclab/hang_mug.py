@@ -293,6 +293,53 @@ def reanchor_branch_transport_contact(
     )
 
 
+def compensate_low_branch_insert(
+    trajectory: SkillTrajectory,
+    intended_mug_pose: Any,
+    observed_mug_pose: Any,
+    *,
+    minimum_vertical_error_m: float = 0.005,
+) -> SkillTrajectory:
+    """Compensate a measured below-support insertion bias before release.
+
+    Cartesian tracking and contact can leave a held mug below the geometric
+    handle-hole target even after the nominal insert waypoint is reached.  If
+    that vertical residual is material, smoothly add the observed translation
+    error through the unload hold.  Mugs already at or above the support pose
+    are left unchanged.
+    """
+
+    required = ("branch_insert", "branch_unload")
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"branch trajectory is missing waypoints: {missing}")
+    if minimum_vertical_error_m < 0.0:
+        raise ValueError("minimum_vertical_error_m must be nonnegative")
+    intended = _pose(intended_mug_pose, "intended_mug_pose")
+    observed = _pose(observed_mug_pose, "observed_mug_pose")
+    correction = intended[:3] - observed[:3]
+    if correction[2] <= minimum_vertical_error_m:
+        return trajectory
+
+    start = trajectory.waypoint_steps["branch_insert"] + 1
+    end = trajectory.waypoint_steps["branch_unload"]
+    steps = end - start + 1
+    if steps <= 0:
+        raise ValueError("branch_unload must follow branch_insert")
+    fraction = np.linspace(1.0 / steps, 1.0, steps)
+    smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[start : end + 1, :3] += smooth[:, None] * correction[None]
+    right[end + 1 :, :3] += correction
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 

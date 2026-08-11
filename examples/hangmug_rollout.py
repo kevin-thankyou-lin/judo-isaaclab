@@ -221,6 +221,7 @@ def execute_hangmug_rollout(
                 sample,
                 nominal_handover_mug,
                 nominal_right_contact,
+                intended_final,
                 observed_handover_reanchor,
             )
         if encoder is not None:
@@ -265,6 +266,7 @@ def _reanchor_full_skill(
     sample,
     nominal_handover_mug,
     nominal_right_contact,
+    intended_final,
     observed_handover_reanchor,
 ):
     """Apply deterministic observed-contact feedback to a full semantic skill."""
@@ -319,4 +321,12 @@ def _reanchor_full_skill(
         nominal_right_contact = compose_pose(
             inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
         )
+        if completed == "branch_insert" and intended_final is not None:
+            from judo_isaaclab.hang_mug import compensate_low_branch_insert
+
+            trajectory = compensate_low_branch_insert(
+                trajectory,
+                intended_final,
+                sample["mug_pose"],
+            )
     return trajectory, nominal_right_contact

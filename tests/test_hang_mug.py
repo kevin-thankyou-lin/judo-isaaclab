@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    compensate_low_branch_insert,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
@@ -42,6 +43,33 @@ def test_asset_geometry_scales_object_relative_semantic_frame():
     target = RigidAssetGeometry(_pose(4.0, 5.0, 6.0), [0.4, 0.15, 0.24])
     transferred = target.transfer_pose_from(source, _pose(1.05, 2.04, 3.1))
     assert transferred[:3] == pytest.approx([4.1, 5.06, 6.08])
+
+
+def test_low_branch_insert_compensation_only_corrects_below_support_bias():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=2,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=4, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    corrected = compensate_low_branch_insert(
+        trajectory, _pose(0.3, -0.02, 0.04), _pose(0.3, 0.0, 0.01)
+    )
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    assert corrected.right_poses[insert] == pytest.approx(
+        trajectory.right_poses[insert]
+    )
+    assert corrected.right_poses[unload, :3] == pytest.approx(
+        trajectory.right_poses[unload, :3] + [0.0, -0.02, 0.03]
+    )
+    unchanged = compensate_low_branch_insert(
+        trajectory, _pose(0.3, 0.0, 0.0), _pose(0.3, 0.0, 0.01)
+    )
+    assert unchanged is trajectory
 
 
 def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
