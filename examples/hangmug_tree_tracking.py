@@ -18,7 +18,16 @@ def _rotation_distance(left: np.ndarray, right: np.ndarray) -> float:
 
 @dataclass
 class ObservedTreePathTracker:
-    """Co-move unexecuted right-arm poses with incremental tree motion."""
+    """Co-move the held support suffix with observed tree motion.
+
+    The insertion path itself is deliberately left unchanged.  Tracking a
+    contact-induced tree displacement during approach creates a positive
+    feedback loop: the wrist chases the displaced branch and can push the mug
+    body into the tree.  Once ``branch_insert`` has completed, the handle is in
+    the branch and the remaining held-support poses should follow the tree.
+    The first support update applies all motion accumulated since planning;
+    later updates remain incremental.
+    """
 
     planning_pose: np.ndarray
     observed_pose: np.ndarray | None = None
@@ -70,14 +79,14 @@ class ObservedTreePathTracker:
         sample: dict[str, Any],
     ) -> SkillTrajectory | None:
         current = np.asarray(sample["tree_pose"], dtype=np.float64)
-        previous = np.asarray(self.observed_pose, dtype=np.float64)
-        self.observed_pose = current.copy()
         if trajectory is None or trajectory_step is None or not sample["right_grasp"]:
             return trajectory
-        approach = int(trajectory.waypoint_steps["branch_approach"])
+        insert = int(trajectory.waypoint_steps["branch_insert"])
         unload = int(trajectory.waypoint_steps["branch_unload"])
-        if not approach <= trajectory_step < unload:
+        if not insert <= trajectory_step < unload:
             return trajectory
+        previous = np.asarray(self.observed_pose, dtype=np.float64)
+        self.observed_pose = current.copy()
         translation = float(np.linalg.norm(current[:3] - previous[:3]))
         rotation = _rotation_distance(current, previous)
         if translation <= 1.0e-6 and rotation <= 1.0e-5:

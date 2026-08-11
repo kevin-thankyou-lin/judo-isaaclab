@@ -250,7 +250,8 @@ def _executed_prefix_receipt(
     )
     if not receipt["passed"]:
         raise RuntimeError(
-            "observation-compensated insertion already collided in execution"
+            "observation-compensated insertion already collided in execution: "
+            f"steps={receipt['collision_steps']}"
         )
     return receipt
 

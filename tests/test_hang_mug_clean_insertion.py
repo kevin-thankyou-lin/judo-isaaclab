@@ -293,7 +293,7 @@ def test_held_suffix_rejects_observed_collision_before_future_repair(monkeypatch
             "collision_steps": [2],
         },
     )
-    with pytest.raises(RuntimeError, match="collided in execution"):
+    with pytest.raises(RuntimeError, match=r"collided in execution: steps=\[2\]"):
         repair_compensated_insertion_path(
             trajectory,
             completed_step=3,
