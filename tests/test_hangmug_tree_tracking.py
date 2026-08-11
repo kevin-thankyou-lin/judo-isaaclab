@@ -60,7 +60,7 @@ def test_tracker_does_not_move_path_without_right_grasp():
     assert tracker.updates == 0
 
 
-def test_tracker_preserves_clean_insertion_then_applies_accumulated_support_delta():
+def test_tracker_preserves_clean_insertion_and_snapshots_support_baseline(capsys):
     tracker = ObservedTreePathTracker(_pose())
     original = _trajectory()
 
@@ -71,15 +71,26 @@ def test_tracker_preserves_clean_insertion_then_applies_accumulated_support_delt
     )
     assert before_insert is original
     assert tracker.updates == 0
-    np.testing.assert_allclose(tracker.observed_pose, _pose())
+    np.testing.assert_allclose(tracker.observed_pose, _pose(0.1))
+    assert "HANGMUG_TREE_TRACKING_BASELINE=" in capsys.readouterr().out
 
     at_insert = tracker.update(
         before_insert,
         3,
         {"tree_pose": _pose(0.1).tolist(), "right_grasp": True},
     )
-    np.testing.assert_allclose(at_insert.right_poses[:4], original.right_poses[:4])
-    assert at_insert.right_poses[4, 0] == pytest.approx(1.1)
+    np.testing.assert_allclose(at_insert.right_poses, original.right_poses)
+    assert tracker.updates == 0
+
+    after_insert = tracker.update(
+        at_insert,
+        3,
+        {"tree_pose": _pose(0.11).tolist(), "right_grasp": True},
+    )
+    np.testing.assert_allclose(
+        after_insert.right_poses[:4], original.right_poses[:4]
+    )
+    assert after_insert.right_poses[4, 0] == pytest.approx(1.01)
     assert tracker.updates == 1
 
 

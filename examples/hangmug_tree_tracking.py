@@ -28,10 +28,10 @@ class ObservedTreePathTracker:
     The insertion path itself is deliberately left unchanged.  Tracking a
     contact-induced tree displacement during approach creates a positive
     feedback loop: the wrist chases the displaced branch and can push the mug
-    body into the tree.  Once ``branch_insert`` has completed, the handle is in
-    the branch and the remaining held-support poses should follow the tree.
-    The first support update applies all motion accumulated since planning;
-    later updates remain incremental.
+    body into the tree.  Observations before ``branch_insert`` therefore update
+    only the tracking baseline.  Once insertion completes, the handle is in the
+    branch and the remaining held-support poses follow only subsequent,
+    incremental tree motion.
     """
 
     planning_pose: np.ndarray
@@ -88,6 +88,29 @@ class ObservedTreePathTracker:
             return trajectory
         insert = int(trajectory.waypoint_steps["branch_insert"])
         unload = int(trajectory.waypoint_steps["branch_unload"])
+        if trajectory_step < insert:
+            self.observed_pose = current.copy()
+            if trajectory_step == insert - 1:
+                print(
+                    "HANGMUG_TREE_TRACKING_BASELINE="
+                    + json.dumps(
+                        {
+                            "cumulative_rotation_rad": _rotation_distance(
+                                current, self.planning_pose
+                            ),
+                            "cumulative_translation_m": float(
+                                np.linalg.norm(
+                                    current[:3] - self.planning_pose[:3]
+                                )
+                            ),
+                            "trajectory_step": int(trajectory_step),
+                            "support_tracking_starts_at": insert,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            return trajectory
         if not insert <= trajectory_step < unload:
             return trajectory
         previous = np.asarray(self.observed_pose, dtype=np.float64)
