@@ -133,6 +133,39 @@ def test_insert_compensation_receipt_accepts_list_observations(capsys):
     assert "HANGMUG_INSERT_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_approach_compensation_uses_geometry_clearance(capsys):
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=2,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    step = trajectory.waypoint_steps["branch_approach"]
+    corrected, _ = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        step,
+        {
+            "mug_pose": _pose(z=0.04).tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": _pose().tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        _pose(z=0.1),
+        False,
+        0.04,
+    )
+    assert corrected is not trajectory
+    receipt = capsys.readouterr().out
+    assert '"applied_vertical_m": 0.06' in receipt
+    assert '"support_clearance_m": 0.04' in receipt
+
+
 def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     source_parts = MugParts(
         body_frame=_pose(),

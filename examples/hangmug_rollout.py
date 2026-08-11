@@ -215,6 +215,12 @@ def execute_hangmug_rollout(
         right_eef.append(sample["right_eef_pose"])
 
         if trajectory is not None and trajectory_step is not None:
+            branch_entry_clearance_m = None
+            if target_branch is not None:
+                branch_entry_clearance_m = (
+                    0.5 * float(target_parts.handle_outer_size[2])
+                    + float(target_branch.radius_m)
+                )
             trajectory, nominal_right_contact = _reanchor_full_skill(
                 trajectory,
                 trajectory_step,
@@ -223,6 +229,7 @@ def execute_hangmug_rollout(
                 nominal_right_contact,
                 intended_final,
                 observed_handover_reanchor,
+                branch_entry_clearance_m,
             )
         if encoder is not None:
             frame = render_frame(env, sample)
@@ -268,6 +275,7 @@ def _reanchor_full_skill(
     nominal_right_contact,
     intended_final,
     observed_handover_reanchor,
+    branch_entry_clearance_m=None,
 ):
     """Apply deterministic observed-contact feedback to a full semantic skill."""
 
@@ -329,6 +337,16 @@ def _reanchor_full_skill(
                 trajectory,
                 intended_final,
                 sample["mug_pose"],
+                support_clearance_m=(
+                    0.01
+                    if branch_entry_clearance_m is None
+                    else branch_entry_clearance_m
+                ),
+                maximum_vertical_correction_m=(
+                    0.03
+                    if branch_entry_clearance_m is None
+                    else max(0.03, 1.5 * branch_entry_clearance_m)
+                ),
             )
             correction_z = float(
                 trajectory.right_poses[-1, 2] - before[-1, 2]
@@ -336,7 +354,11 @@ def _reanchor_full_skill(
             print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
                 "applied_vertical_m": correction_z,
                 "observed_mug_z_m": float(sample["mug_pose"][2]),
-                "support_clearance_m": 0.01,
+                "support_clearance_m": (
+                    0.01
+                    if branch_entry_clearance_m is None
+                    else branch_entry_clearance_m
+                ),
                 "intended_support_z_m": float(intended_final[2]),
             }, sort_keys=True))
         if completed == "branch_insert" and intended_final is not None:
