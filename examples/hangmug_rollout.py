@@ -39,11 +39,13 @@ def _start_replay_tail(
     """Build and fail-closed screen the source-relationship insertion tail."""
 
     from judo_isaaclab.hang_mug_clean_insertion import (
+        apply_branch_radial_clearance,
         exact_body_collision_receipt,
     )
     from judo_isaaclab.hang_mug_replay_tail import (
         build_replay_hang_tail,
         repeated_joint_nominal,
+        replace_replay_hang_tail_path,
         replay_tail_ready,
     )
 
@@ -71,10 +73,28 @@ def _start_replay_tail(
             + json.dumps(receipt, sort_keys=True), flush=True,
         )
         if not receipt["passed"]:
-            raise RuntimeError(
-                "planned source-relationship insertion intersects the target "
-                "cup body with the tree"
+            corrected, correction = apply_branch_radial_clearance(
+                tail.planned_mug_poses,
+                tree_pose=target_tree.root_pose,
+                mug_body_frame=target_parts.body_frame,
+                target_branch=tail.target_branch,
+                collision_steps=receipt["collision_steps"],
             )
+            tail = replace_replay_hang_tail_path(tail, corrected)
+            receipt = exact_body_collision_receipt(
+                tail.planned_mug_poses, tree_pose=target_tree.root_pose,
+                target_assets=target_assets,
+            )
+            receipt["geometry_correction"] = correction
+            print(
+                "HANGMUG_PLANNED_CLEAN_INSERTION_CORRECTED="
+                + json.dumps(receipt, sort_keys=True), flush=True,
+            )
+            if not receipt["passed"]:
+                raise RuntimeError(
+                    "single-pass branch-radial correction did not clear the "
+                    "target cup body from the tree"
+                )
     joint_nominal = repeated_joint_nominal(
         source_actions.detach().cpu().numpy(),
         repair_prefix_steps,

@@ -5,6 +5,7 @@ from judo_isaaclab.hang_mug_replay_tail import (
     build_replay_hang_tail,
     repeated_joint_nominal,
     replay_prefix_steps,
+    replace_replay_hang_tail_path,
     replay_tail_ready,
     replay_tail_steps,
 )
@@ -111,3 +112,10 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
     assert tail.trajectory.grippers[0] == pytest.approx([-0.0475, 0.0])
     branch_unload = tail.trajectory.waypoint_steps["branch_unload"]
     assert np.all(tail.trajectory.grippers[: branch_unload + 1, 1] == 0.0)
+
+    corrected = tail.planned_mug_poses.copy()
+    corrected[1, 2] += 0.01
+    replaced = replace_replay_hang_tail_path(tail, corrected)
+    assert replaced.trajectory.steps == tail.trajectory.steps
+    assert replaced.intended_final_mug_pose == pytest.approx(corrected[-1])
+    assert replaced.planned_mug_poses == pytest.approx(corrected)

@@ -212,6 +212,29 @@ def build_replay_hang_tail(
     )
 
 
+def replace_replay_hang_tail_path(
+    tail: ReplayHangTail, mug_poses: Any
+) -> ReplayHangTail:
+    """Rebuild a replay tail around a geometry-corrected mug path."""
+
+    path = np.asarray(mug_poses, dtype=np.float64)
+    if path.shape != tail.planned_mug_poses.shape:
+        raise ValueError("replacement mug path must preserve the replay-tail horizon")
+    trajectory = _trajectory_from_mug_path(
+        path,
+        left_pose=tail.trajectory.left_poses[0],
+        right_contact=tail.right_contact_in_mug,
+    )
+    return ReplayHangTail(
+        trajectory=trajectory,
+        intended_final_mug_pose=path[-1],
+        right_contact_in_mug=tail.right_contact_in_mug,
+        source_branch=tail.source_branch,
+        target_branch=tail.target_branch,
+        planned_mug_poses=path,
+    )
+
+
 def repeated_joint_nominal(
     source_actions: Any, prefix_steps: int, tail_steps: int
 ) -> np.ndarray:
