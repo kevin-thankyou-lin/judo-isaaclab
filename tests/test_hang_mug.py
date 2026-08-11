@@ -414,6 +414,47 @@ def test_insert_compensation_receipt_accepts_list_observations(capsys):
     assert "HANGMUG_INSERT_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_insert_contact_reanchor_requires_exact_suffix_screen(capsys):
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+
+    corrected, _, feedback_compensated = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        insert,
+        {
+            "mug_pose": _pose(0.29).tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": _pose(0.31).tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        None,
+        False,
+    )
+
+    assert feedback_compensated is True
+    assert corrected.right_poses[: insert + 1] == pytest.approx(
+        trajectory.right_poses[: insert + 1]
+    )
+    assert corrected.right_poses[insert + 1 : unload + 1] != pytest.approx(
+        trajectory.right_poses[insert + 1 : unload + 1]
+    )
+    receipt = capsys.readouterr().out
+    assert '"completed_waypoint": "branch_insert"' in receipt
+    assert '"exact_screen_required": true' in receipt
+
+
 def test_zero_unload_interval_skips_insert_and_held_feedback():
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
@@ -544,7 +585,9 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
     )
 
     insert = trajectory.waypoint_steps["branch_insert"]
-    assert baseline_compensated is False
+    # The colocated tree-transport contact reanchor now also requests an exact
+    # suffix screen, independently of the approach-height compensation.
+    assert baseline_compensated is True
     assert approach_compensated is True
     correction = (
         corrected.right_poses[step + 1 : insert + 1, 2]

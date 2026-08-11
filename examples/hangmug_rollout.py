@@ -702,6 +702,7 @@ def _reanchor_full_skill(
     )
     if completed_names and sample["right_grasp"]:
         for completed in completed_names:
+            before_reanchor = trajectory
             trajectory = reanchor_branch_transport_contact(
                 trajectory,
                 nominal_right_contact,
@@ -709,6 +710,28 @@ def _reanchor_full_skill(
                 sample["right_eef_pose"],
                 completed_waypoint=completed,
             )
+            audited_end = int(
+                trajectory.waypoint_steps.get(
+                    "branch_unload", trajectory.waypoint_steps["branch_insert"]
+                )
+            )
+            future_start = int(step) + 1
+            reanchor_changed_audited_suffix = (
+                future_start <= audited_end
+                and not np.allclose(
+                    trajectory.right_poses[future_start : audited_end + 1],
+                    before_reanchor.right_poses[future_start : audited_end + 1],
+                )
+            )
+            feedback_compensated = (
+                feedback_compensated or reanchor_changed_audited_suffix
+            )
+            print("HANGMUG_CONTACT_REANCHOR=" + json.dumps({
+                "completed_waypoint": completed,
+                "exact_screen_required": reanchor_changed_audited_suffix,
+                "future_start_step": future_start,
+                "audited_end_step": audited_end,
+            }, sort_keys=True), flush=True)
             nominal_right_contact = compose_pose(
                 inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
             )
