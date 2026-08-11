@@ -376,65 +376,66 @@ def _reanchor_full_skill(
             "branch_insert", "branch_unload",
         ) if name in trajectory.waypoint_steps
     )
-    completed = next(
-        (name for name in names if step == trajectory.waypoint_steps[name]), None
+    completed_names = tuple(
+        name for name in names if step == trajectory.waypoint_steps[name]
     )
-    if completed is not None and sample["right_grasp"]:
-        trajectory = reanchor_branch_transport_contact(
-            trajectory,
-            nominal_right_contact,
-            sample["mug_pose"],
-            sample["right_eef_pose"],
-            completed_waypoint=completed,
-        )
-        nominal_right_contact = compose_pose(
-            inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
-        )
-        if completed == "branch_approach" and intended_final is not None:
-            from judo_isaaclab.hang_mug import compensate_low_branch_approach
-
-            before = trajectory.right_poses.copy()
-            trajectory = compensate_low_branch_approach(
+    if completed_names and sample["right_grasp"]:
+        for completed in completed_names:
+            trajectory = reanchor_branch_transport_contact(
                 trajectory,
-                intended_final,
+                nominal_right_contact,
                 sample["mug_pose"],
-                support_clearance_m=(
-                    0.01
-                    if branch_entry_clearance_m is None
-                    else branch_entry_clearance_m
-                ),
-                maximum_vertical_correction_m=(
-                    0.03
-                    if branch_entry_clearance_m is None
-                    else max(0.03, 1.5 * branch_entry_clearance_m)
-                ),
+                sample["right_eef_pose"],
+                completed_waypoint=completed,
             )
-            correction_z = float(
-                trajectory.right_poses[-1, 2] - before[-1, 2]
+            nominal_right_contact = compose_pose(
+                inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
             )
-            print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
-                "applied_vertical_m": correction_z,
-                "observed_mug_z_m": float(sample["mug_pose"][2]),
-                "support_clearance_m": (
-                    0.01
-                    if branch_entry_clearance_m is None
-                    else branch_entry_clearance_m
-                ),
-                "intended_support_z_m": float(intended_final[2]),
-            }, sort_keys=True))
-        if completed == "branch_insert" and intended_final is not None:
-            from judo_isaaclab.hang_mug import compensate_low_branch_insert
+            if completed == "branch_approach" and intended_final is not None:
+                from judo_isaaclab.hang_mug import compensate_low_branch_approach
 
-            before = trajectory.right_poses.copy()
-            trajectory = compensate_low_branch_insert(
-                trajectory,
-                intended_final,
-                sample["mug_pose"],
-            )
-            correction = trajectory.right_poses[-1, :3] - before[-1, :3]
-            print("HANGMUG_INSERT_COMPENSATION=" + json.dumps({
-                "applied_translation_m": correction.tolist(),
-                "observed_mug_position_m": list(sample["mug_pose"][:3]),
-                "intended_support_position_m": intended_final[:3].tolist(),
-            }, sort_keys=True))
+                before = trajectory.right_poses.copy()
+                trajectory = compensate_low_branch_approach(
+                    trajectory,
+                    intended_final,
+                    sample["mug_pose"],
+                    support_clearance_m=(
+                        0.01
+                        if branch_entry_clearance_m is None
+                        else branch_entry_clearance_m
+                    ),
+                    maximum_vertical_correction_m=(
+                        0.03
+                        if branch_entry_clearance_m is None
+                        else max(0.03, 1.5 * branch_entry_clearance_m)
+                    ),
+                )
+                correction_z = float(
+                    trajectory.right_poses[-1, 2] - before[-1, 2]
+                )
+                print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
+                    "applied_vertical_m": correction_z,
+                    "observed_mug_z_m": float(sample["mug_pose"][2]),
+                    "support_clearance_m": (
+                        0.01
+                        if branch_entry_clearance_m is None
+                        else branch_entry_clearance_m
+                    ),
+                    "intended_support_z_m": float(intended_final[2]),
+                }, sort_keys=True))
+            if completed == "branch_insert" and intended_final is not None:
+                from judo_isaaclab.hang_mug import compensate_low_branch_insert
+
+                before = trajectory.right_poses.copy()
+                trajectory = compensate_low_branch_insert(
+                    trajectory,
+                    intended_final,
+                    sample["mug_pose"],
+                )
+                correction = trajectory.right_poses[-1, :3] - before[-1, :3]
+                print("HANGMUG_INSERT_COMPENSATION=" + json.dumps({
+                    "applied_translation_m": correction.tolist(),
+                    "observed_mug_position_m": list(sample["mug_pose"][:3]),
+                    "intended_support_position_m": intended_final[:3].tolist(),
+                }, sort_keys=True))
     return trajectory, nominal_right_contact
