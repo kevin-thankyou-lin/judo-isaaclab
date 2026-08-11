@@ -21,6 +21,12 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from judo_isaaclab.semantic_execution import (
+    SemanticExecutionEvent,
+    SemanticExecutionHooks,
+    SemanticProtocolRecorder,
+)
+
 
 SEMANTIC_INDICES = {
     "marker_pregrasp": 70,
@@ -1034,6 +1040,8 @@ def _target_drawer_grasp_index(target: dict[str, object]) -> int:
 
 def main() -> None:
     args = _parser()
+    protocol_recorder = SemanticProtocolRecorder()
+    execution_hooks = SemanticExecutionHooks()
     if args.render and not args.video:
         raise ValueError("--render requires --video")
     if not 0.0 <= args.handle_pull_dls_gain <= 1.0:
@@ -1085,6 +1093,9 @@ def main() -> None:
             enable_grasp_ray_viz=False,
         )
         env.reset(warm_up=False, seed=args.seed)
+        protocol_recorder.record_environment_reset(
+            reason="task_environment_reset"
+        )
         source = _load_dataset(args.source_dataset, args.episode, env.device)
         target = _load_dataset(args.target_dataset, args.episode, env.device)
         source["assets"] = source_assets
@@ -1140,6 +1151,10 @@ def main() -> None:
                 target_assets["obj_1"], np.asarray(target["cabinet_pose"])[0]
             )
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
+        protocol_recorder.record_state_restore(
+            initial=True,
+            reason="target_dataset_initial_state",
+        )
         env.sim.forward()
         env.reset_success_check(env_ids)
         handle_displacement_m = float(
@@ -1260,6 +1275,24 @@ def main() -> None:
         demo_recorder = DemonstrationRecorder()
         demo_recorder.start(env.scene.get_state(is_relative=False))
         samples.append(_sample(env, -1, "reset"))
+        milestones_by_step: dict[int, list[str]] = {}
+        if trajectory is not None:
+            for name, milestone_step in trajectory.waypoint_steps.items():
+                milestones_by_step.setdefault(int(milestone_step), []).append(name)
+        protocol_recorder.start_rollout()
+        execution_hooks.emit(
+            SemanticExecutionEvent(
+                kind="rollout_start",
+                step=0,
+                stage=(
+                    "direct_action_replay"
+                    if trajectory is None
+                    else trajectory.stage_names[0]
+                ),
+                observation=samples[-1],
+                metadata={"mode": args.mode},
+            )
+        )
         for step in range(total_steps):
             if trajectory is None:
                 action = replay_data["actions"][step : step + 1]
@@ -1291,6 +1324,13 @@ def main() -> None:
                 )
                 desired_left_trace.append(desired_left)
                 desired_right_trace.append(desired_right)
+            execution_hooks.emit(
+                SemanticExecutionEvent(
+                    kind="before_step",
+                    step=step,
+                    stage=stage,
+                )
+            )
             if right_handle_assist is not None:
                 engage = torch.tensor(
                     [SEMANTIC_INDICES["handle_grasp"] <= step < SEMANTIC_INDICES["drawer_closed"]],
@@ -1302,6 +1342,42 @@ def main() -> None:
                 right_handle_assist_ever |= bool(right_handle_assist.engaged[0].item())
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
+            protocol_recorder.record_step(
+                step=step,
+                stage=stage,
+                terminated=terminated,
+                truncated=truncated,
+            )
+            protocol_recorder.record_contact_observation(
+                "left_marker_grasp",
+                step=step,
+                active=sample["left_grasp"],
+                source="env.robot.is_grasping",
+            )
+            protocol_recorder.record_contact_observation(
+                "right_drawer_handle_grasp",
+                step=step,
+                active=sample["right_handle_grasp"],
+                source="env.robot.is_grasping",
+            )
+            execution_hooks.emit(
+                SemanticExecutionEvent(
+                    kind="after_step",
+                    step=step,
+                    stage=stage,
+                    observation=sample,
+                )
+            )
+            for milestone in milestones_by_step.get(step, ()):
+                execution_hooks.emit(
+                    SemanticExecutionEvent(
+                        kind="milestone",
+                        step=step,
+                        stage=stage,
+                        milestone=milestone,
+                        observation=sample,
+                    )
+                )
             if trajectory is not None and step == trajectory.waypoint_steps["drawer_open"]:
                 from judo_isaaclab.put_marker import (
                     reanchor_marker_placement,
@@ -1373,6 +1449,15 @@ def main() -> None:
             if bool(terminated[0].item()) and not sample["task_success"]:
                 raise RuntimeError(f"unexpected failure termination at step {step}")
 
+        protocol_recorder.finish_rollout()
+        execution_hooks.emit(
+            SemanticExecutionEvent(
+                kind="rollout_end",
+                step=total_steps - 1,
+                stage=samples[-1]["program_stage"],
+                observation=samples[-1],
+            )
+        )
         if encoder is not None:
             encoder.close()
             encoder = None
@@ -1398,9 +1483,17 @@ def main() -> None:
         if args.direct_replay_result:
             with open(args.direct_replay_result, encoding="utf-8") as stream:
                 direct_replay_result = json.load(stream)
+        protocol_receipt = protocol_recorder.receipt()
+        protocol_checks = protocol_receipt["checks"]
         checks = {
-            "one_reset": True,
-            "zero_inter_stage_resets": True,
+            "one_reset": protocol_checks["one_reset"],
+            "zero_inter_stage_resets": protocol_checks[
+                "zero_inter_stage_resets"
+            ],
+            "zero_post_start_state_writes": protocol_checks[
+                "zero_post_start_state_writes"
+            ],
+            "no_truncation_observed": protocol_checks["no_truncation_observed"],
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
             "coded_task_success": bool(final["task_success"]),
             "all_stages_latched": bool(final["stage1"] and final["stage2"] and final["stage3"]),
@@ -1477,9 +1570,19 @@ def main() -> None:
                     else "semantic_keyframe_joint_spline_with_cartesian_dls"
                 ),
                 "candidate_sampling": False,
-                "scene_resets": 1,
-                "inter_stage_resets": 0,
-                "teleports_after_reset": 0,
+                "scene_resets": protocol_receipt["environment_resets"],
+                "initial_state_restores": protocol_receipt[
+                    "initial_state_restores"
+                ],
+                "inter_stage_resets": protocol_receipt["inter_stage_resets"],
+                "teleports_after_reset": protocol_receipt[
+                    "teleports_after_rollout_start"
+                ],
+                "execution_instrumentation": protocol_receipt,
+                "semantic_execution_hooks": {
+                    "enabled": execution_hooks.enabled,
+                    "policy": "optional_observation_only",
+                },
                 "control_rate_hz": 30,
                 "steps": total_steps,
                 "seed": args.seed,
@@ -1628,9 +1731,17 @@ def main() -> None:
                 "terminal_marker_angular_speed_rps": float(np.linalg.norm(final["marker_velocity"][3:])),
                 "support_predicate_terminal": bool(final["placed_predicate_now"]),
                 "collision_proxy": {
-                    "marker_below_table_termination": False,
-                    "unexpected_termination": False,
-                    "contact_backed_grasps_only": True,
+                    "unexpected_termination": bool(
+                        protocol_receipt["termination_events"]
+                        and not final["task_success"]
+                    ),
+                    "termination_events": protocol_receipt[
+                        "termination_events"
+                    ],
+                    "contact_backed_grasps_only": all(
+                        channel["source"] == "env.robot.is_grasping"
+                        for channel in protocol_receipt["contact_channels"].values()
+                    ),
                 },
             },
             "terminal": final,
