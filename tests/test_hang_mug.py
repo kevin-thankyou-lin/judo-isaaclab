@@ -81,6 +81,77 @@ def test_low_branch_insert_compensation_only_corrects_below_support_bias():
     assert unchanged is trajectory
 
 
+def test_low_branch_insert_compensation_can_smooth_only_future_hold_steps():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=2,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    completed = insert + 2
+    corrected = compensate_low_branch_insert(
+        trajectory,
+        _pose(0.31, -0.02, 0.04),
+        _pose(0.30, 0.0, 0.01),
+        completed_step=completed,
+    )
+    assert corrected.right_poses[: completed + 1] == pytest.approx(
+        trajectory.right_poses[: completed + 1]
+    )
+    first_delta = np.linalg.norm(
+        corrected.right_poses[completed + 1, :3]
+        - trajectory.right_poses[completed + 1, :3]
+    )
+    terminal_delta = np.linalg.norm([0.01, -0.02, 0.03])
+    assert 0.0 < first_delta < terminal_delta
+    assert corrected.right_poses[unload, :3] == pytest.approx(
+        trajectory.right_poses[unload, :3] + [0.01, -0.02, 0.03]
+    )
+
+
+def test_held_convergence_applies_second_smooth_insert_feedback(capsys):
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    step = (insert + unload) // 2
+    corrected, _, feedback_compensated = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        step,
+        {
+            "mug_pose": _pose(0.29, 0.02, 0.01).tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": _pose().tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        _pose(0.31, 0.0, 0.04),
+        False,
+    )
+    assert feedback_compensated is True
+    assert corrected.right_poses[: step + 1] == pytest.approx(
+        trajectory.right_poses[: step + 1]
+    )
+    assert corrected.right_poses[unload, :3] == pytest.approx(
+        trajectory.right_poses[unload, :3] + [0.02, -0.02, 0.03]
+    )
+    assert "HANGMUG_HELD_CONVERGENCE_COMPENSATION=" in capsys.readouterr().out
+
+
 def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
@@ -126,7 +197,7 @@ def test_insert_compensation_receipt_accepts_list_observations(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
         _pose(0.1), _pose(0.2), _pose(0.3),
-        transport_steps=2, approach_steps=2, insert_steps=2,
+        transport_steps=2, approach_steps=2, insert_steps=7,
     )
     program.release_and_support(
         _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
@@ -156,7 +227,7 @@ def test_approach_compensation_uses_geometry_clearance(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
         _pose(0.1), _pose(0.2), _pose(0.3),
-        transport_steps=2, approach_steps=2, insert_steps=2,
+        transport_steps=2, approach_steps=2, insert_steps=7,
     )
     program.release_and_support(
         _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
@@ -190,7 +261,7 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
         _pose(0.1), _pose(0.2), _pose(0.3),
-        transport_steps=2, approach_steps=2, insert_steps=2,
+        transport_steps=2, approach_steps=2, insert_steps=7,
     )
     program.release_and_support(
         _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
@@ -245,9 +316,12 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
     insert = trajectory.waypoint_steps["branch_insert"]
     assert baseline_compensated is False
     assert approach_compensated is True
-    assert corrected.right_poses[step + 1, 2] == pytest.approx(
-        baseline.right_poses[step + 1, 2] + 0.06
+    correction = (
+        corrected.right_poses[step + 1 : insert + 1, 2]
+        - baseline.right_poses[step + 1 : insert + 1, 2]
     )
+    assert correction[0] == pytest.approx(0.0)
+    assert np.max(correction) == pytest.approx(0.06)
     assert corrected.right_poses[insert, 2] == pytest.approx(
         baseline.right_poses[insert, 2]
     )

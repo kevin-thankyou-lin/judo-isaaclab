@@ -106,6 +106,28 @@ def _start_replay_tail(
     return tail, joint_nominal, receipt
 
 
+def _record_feedback_collision_receipt(
+    receipt, *, planned, trajectory, trajectory_step,
+):
+    """Attach and print the collision receipt for one feedback correction."""
+
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    held_convergence = trajectory_step == (insert + unload) // 2
+    receipt_key = (
+        "held_convergence_clean_insertion"
+        if held_convergence
+        else "approach_feedback_clean_insertion"
+    )
+    planned[receipt_key] = receipt
+    label = (
+        "HANGMUG_HELD_CONVERGENCE_CLEAN_INSERTION="
+        if held_convergence
+        else "HANGMUG_APPROACH_FEEDBACK_CLEAN_INSERTION="
+    )
+    print(label + json.dumps(receipt, sort_keys=True), flush=True)
+
+
 def execute_hangmug_rollout(
     *,
     env: Any,
@@ -282,7 +304,7 @@ def execute_hangmug_rollout(
                     0.5 * float(target_parts.handle_outer_size[2])
                     + float(target_branch.radius_m)
                 )
-            trajectory, nominal_right_contact, approach_compensated = _reanchor_full_skill(
+            trajectory, nominal_right_contact, feedback_compensated = _reanchor_full_skill(
                 trajectory,
                 trajectory_step,
                 sample,
@@ -292,7 +314,7 @@ def execute_hangmug_rollout(
                 observed_handover_reanchor,
                 branch_entry_clearance_m,
             )
-            if approach_compensated and args.require_clean_insertion:
+            if feedback_compensated and args.require_clean_insertion:
                 from judo_isaaclab.hang_mug_clean_insertion import (
                     repair_compensated_insertion_path,
                 )
@@ -307,13 +329,9 @@ def execute_hangmug_rollout(
                     target_branch=target_branch,
                     target_assets=target_assets,
                 )
-                planned_clean_insertion["approach_feedback_clean_insertion"] = (
-                    feedback_receipt
-                )
-                print(
-                    "HANGMUG_APPROACH_FEEDBACK_CLEAN_INSERTION="
-                    + json.dumps(feedback_receipt, sort_keys=True),
-                    flush=True,
+                _record_feedback_collision_receipt(
+                    feedback_receipt, planned=planned_clean_insertion,
+                    trajectory=trajectory, trajectory_step=trajectory_step,
                 )
         if encoder is not None:
             frame = render_frame(env, sample)
@@ -351,6 +369,51 @@ def execute_hangmug_rollout(
     )
 
 
+def _apply_held_convergence_feedback(
+    trajectory, *, step, sample, intended_final,
+):
+    """Smoothly correct the remaining held suffix from a midpoint observation."""
+
+    insert = trajectory.waypoint_steps.get("branch_insert")
+    unload = trajectory.waypoint_steps.get("branch_unload")
+    convergence_step = (
+        (insert + unload) // 2
+        if insert is not None and unload is not None
+        else None
+    )
+    if (
+        step != convergence_step
+        or not sample["right_grasp"]
+        or intended_final is None
+    ):
+        return trajectory, False
+
+    from judo_isaaclab.hang_mug import compensate_low_branch_insert
+
+    before = trajectory.right_poses.copy()
+    trajectory = compensate_low_branch_insert(
+        trajectory,
+        intended_final,
+        sample["mug_pose"],
+        completed_step=step,
+    )
+    correction = trajectory.right_poses[-1, :3] - before[-1, :3]
+    quaternion_dot = abs(float(np.dot(
+        trajectory.right_poses[-1, 3:], before[-1, 3:]
+    )))
+    compensated = not np.allclose(trajectory.right_poses, before)
+    print("HANGMUG_HELD_CONVERGENCE_COMPENSATION=" + json.dumps({
+        "applied_translation_m": correction.tolist(),
+        "applied_rotation_rad": float(
+            2.0 * np.arccos(np.clip(quaternion_dot, -1.0, 1.0))
+        ),
+        "completed_step": int(step),
+        "observed_mug_position_m": list(sample["mug_pose"][:3]),
+        "intended_support_position_m": intended_final[:3].tolist(),
+    }, sort_keys=True))
+    return trajectory, compensated
+
+
 def _reanchor_full_skill(
     trajectory,
     step,
@@ -370,7 +433,7 @@ def _reanchor_full_skill(
     )
     from judo_isaaclab.put_marker import compose_pose, inverse_pose
 
-    approach_compensated = False
+    feedback_compensated = False
 
     if (
         observed_handover_reanchor
@@ -438,7 +501,7 @@ def _reanchor_full_skill(
                 correction_z = float(
                     np.max(trajectory.right_poses[:, 2] - before[:, 2])
                 )
-                approach_compensated = correction_z > 0.0
+                feedback_compensated = correction_z > 0.0
                 print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
                     "applied_vertical_m": correction_z,
                     "observed_mug_z_m": float(sample["mug_pose"][2]),
@@ -470,4 +533,8 @@ def _reanchor_full_skill(
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
                     "intended_support_position_m": intended_final[:3].tolist(),
                 }, sort_keys=True))
-    return trajectory, nominal_right_contact, approach_compensated
+    trajectory, held_compensated = _apply_held_convergence_feedback(
+        trajectory, step=step, sample=sample, intended_final=intended_final,
+    )
+    feedback_compensated = feedback_compensated or held_compensated
+    return trajectory, nominal_right_contact, feedback_compensated

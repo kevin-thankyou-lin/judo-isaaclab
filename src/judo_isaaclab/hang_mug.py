@@ -299,6 +299,7 @@ def compensate_low_branch_insert(
     observed_mug_pose: Any,
     *,
     minimum_vertical_error_m: float = 0.005,
+    completed_step: int | None = None,
 ) -> SkillTrajectory:
     """Compensate a measured below-support insertion bias before release.
 
@@ -321,7 +322,15 @@ def compensate_low_branch_insert(
     if translation[2] <= minimum_vertical_error_m:
         return trajectory
 
-    start = trajectory.waypoint_steps["branch_insert"] + 1
+    insert = trajectory.waypoint_steps["branch_insert"]
+    if completed_step is None:
+        completed_step = insert
+    if not insert <= completed_step < trajectory.waypoint_steps["branch_unload"]:
+        raise ValueError(
+            "completed_step must select the held interval from branch_insert "
+            "through the step before branch_unload"
+        )
+    start = completed_step + 1
     end = trajectory.waypoint_steps["branch_unload"]
     steps = end - start + 1
     if steps <= 0:
