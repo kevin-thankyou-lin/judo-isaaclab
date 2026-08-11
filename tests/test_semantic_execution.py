@@ -37,6 +37,21 @@ def test_protocol_receipt_measures_one_continuous_rollout():
         "no_truncation_observed": True,
     }
     assert receipt["steps"] == 1
+    assert receipt["reset_events"] == [
+        {
+            "index": 0,
+            "reason": "task_environment_reset",
+            "after_rollout_start": False,
+        }
+    ]
+    assert receipt["state_restore_events"] == [
+        {
+            "index": 0,
+            "reason": "target_initial_state",
+            "initial": True,
+            "after_rollout_start": False,
+        }
+    ]
     assert receipt["contact_channels"]["left_object_grasp"] == {
         "source": "env.robot.is_grasping",
         "observations": 1,
