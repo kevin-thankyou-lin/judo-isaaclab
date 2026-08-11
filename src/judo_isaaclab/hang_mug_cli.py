@@ -35,7 +35,8 @@ def add_replay_repair_arguments(parser: Any) -> None:
         default=1.0,
         help=(
             "Scale only the receiving arm's incremental IK correction from "
-            "branch approach through insertion; defaults to unchanged control."
+            "branch approach through the held insertion support; defaults to "
+            "unchanged control."
         ),
     )
     parser.add_argument(
