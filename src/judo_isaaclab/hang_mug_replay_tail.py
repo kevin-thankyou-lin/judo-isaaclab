@@ -65,6 +65,7 @@ def replay_tail_steps(
     *,
     unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
     release_steps: int = REPLAY_HANG_RELEASE_STEPS,
+    insert_time_scale: int = 1,
 ) -> int:
     """Return the source-relationship suffix horizon."""
 
@@ -78,10 +79,11 @@ def replay_tail_steps(
         raise ValueError("unload_steps must be nonnegative")
     if release_steps <= 0:
         raise ValueError("release_steps must be positive")
+    if insert_time_scale < 1:
+        raise ValueError("insert_time_scale must be positive")
     return (
         100
-        + path_steps
-        - 1
+        + (path_steps - 1) * insert_time_scale
         + unload_steps
         + release_steps
         + REPLAY_HANG_SETTLE_STEPS
@@ -98,6 +100,7 @@ def _source_relationship_mug_path(
     target_tree_pose: np.ndarray,
     observed_mug: np.ndarray,
     supported_mug_pose: np.ndarray,
+    insert_time_scale: int = 1,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Transfer the verified source insertion curve into the target branch frame."""
 
@@ -133,11 +136,23 @@ def _source_relationship_mug_path(
     mapped = np.asarray(
         [compose_pose(correction, pose) for correction, pose in zip(corrections, mapped)]
     )
+    if insert_time_scale < 1:
+        raise ValueError("insert_time_scale must be positive")
+    if insert_time_scale > 1:
+        segments = [
+            np.concatenate((
+                start[None],
+                interpolate_poses(start, end, insert_time_scale)[:-1],
+            ))
+            for start, end in zip(mapped[:-1], mapped[1:])
+        ]
+        mapped = np.concatenate((*segments, mapped[-1:]), axis=0)
     bridge = interpolate_poses(observed_mug, mapped[0], 100)
     quaternion_dot = abs(float(np.dot(original_terminal[3:], supported[3:])))
     receipt = {
         "method": "quintic_world_pose_alignment_to_branch_midpoint",
         "source_relationship_steps": len(mapped),
+        "insert_time_scale": insert_time_scale,
         "original_terminal_pose": original_terminal.tolist(),
         "supported_terminal_pose": supported.tolist(),
         "terminal_translation_m": float(
@@ -219,6 +234,7 @@ def build_replay_hang_tail(
     target_branch_policy: str = "source_corresponding",
     unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
     release_steps: int = REPLAY_HANG_RELEASE_STEPS,
+    insert_time_scale: int = 1,
 ) -> ReplayHangTail:
     """Build only transport, insertion, and release from observed contact.
 
@@ -297,6 +313,7 @@ def build_replay_hang_tail(
         target_tree_pose=np.asarray(target_tree_pose, dtype=np.float64),
         observed_mug=observed_mug,
         supported_mug_pose=supported_mug_pose,
+        insert_time_scale=insert_time_scale,
     )
     support_alignment["target_branch_selection"] = branch_selection
     trajectory = _trajectory_from_mug_path(
@@ -307,7 +324,8 @@ def build_replay_hang_tail(
         release_steps=release_steps,
     )
     if trajectory.steps != replay_tail_steps(
-        keyframes, unload_steps=unload_steps, release_steps=release_steps
+        keyframes, unload_steps=unload_steps, release_steps=release_steps,
+        insert_time_scale=insert_time_scale,
     ):
         raise RuntimeError("replay hang tail horizon changed unexpectedly")
     return ReplayHangTail(

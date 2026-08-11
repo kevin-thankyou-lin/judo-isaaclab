@@ -64,6 +64,7 @@ def _start_replay_tail(
         target_branch_policy=args.replay_target_branch_policy,
         unload_steps=args.replay_hang_unload_steps,
         release_steps=args.replay_hang_release_steps,
+        insert_time_scale=args.replay_hang_insert_time_scale,
     )
     release_timing = {
         "unload_steps": tail.unload_steps,

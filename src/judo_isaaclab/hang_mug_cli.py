@@ -38,6 +38,15 @@ def add_replay_repair_arguments(parser: Any) -> None:
             "branch approach through insertion; defaults to unchanged control."
         ),
     )
+    parser.add_argument(
+        "--replay-hang-insert-time-scale",
+        type=int,
+        default=1,
+        help=(
+            "Densify each source-relative insertion interval by this integer "
+            "factor; defaults to the unchanged source timing."
+        ),
+    )
 
 
 def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
@@ -51,3 +60,5 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-release-steps must be positive")
     if not 0.0 < args.replay_hang_insert_dls_gain <= 4.0:
         parser.error("--replay-hang-insert-dls-gain must be in (0, 4]")
+    if args.replay_hang_insert_time_scale < 1:
+        parser.error("--replay-hang-insert-time-scale must be positive")

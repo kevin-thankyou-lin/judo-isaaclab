@@ -216,3 +216,47 @@ def test_source_like_tail_releases_immediately_after_clean_insert():
     assert replaced.trajectory.waypoint_steps == tail.trajectory.waypoint_steps
     assert replaced.unload_steps == 0
     assert replaced.release_steps == 1
+
+
+def test_insertion_time_scale_preserves_geometry_and_densifies_only_insert():
+    keyframes = {
+        "frames": {"stable_settle": {
+            "mug_pose": _pose(1.0, 0.0, 1.0).tolist(),
+            "tree_pose": _pose().tolist(),
+        }},
+        "clean_insertion_path": {"mug_poses": [
+            _pose(0.8, 0.0, 1.1).tolist(),
+            _pose(0.9, 0.0, 1.05).tolist(),
+            _pose(1.0, 0.0, 1.0).tolist(),
+        ]},
+    }
+    def build(scale):
+        return build_replay_hang_tail(
+            keyframes=keyframes,
+            source_parts=_parts(), target_parts=_parts(),
+            source_branches=(_branch(1.0, 1.0, 1.0),),
+            target_tree_pose=_pose(),
+            target_branches=(_branch(1.0, 1.0, 1.0),),
+            observed_mug_pose=_pose(), left_eef_pose=_pose(),
+            right_eef_pose=_pose(), unload_steps=0, release_steps=1,
+            insert_time_scale=scale,
+        )
+
+    baseline = build(1)
+    dense = build(2)
+
+    assert dense.planned_mug_poses[0] == pytest.approx(
+        baseline.planned_mug_poses[0]
+    )
+    assert dense.planned_mug_poses[-1] == pytest.approx(
+        baseline.planned_mug_poses[-1]
+    )
+    assert dense.trajectory.waypoint_steps["branch_approach"] == 99
+    baseline_insert = baseline.trajectory.waypoint_steps["branch_insert"]
+    assert dense.trajectory.waypoint_steps["branch_insert"] == (
+        99 + 2 * (baseline_insert - 99)
+    )
+    assert dense.support_alignment["insert_time_scale"] == 2
+    assert dense.trajectory.steps == replay_tail_steps(
+        keyframes, unload_steps=0, release_steps=1, insert_time_scale=2
+    )
