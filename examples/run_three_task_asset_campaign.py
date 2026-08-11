@@ -219,6 +219,26 @@ def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, Any]]:
     return pairs
 
 
+def select_pair_range(
+    pairs: list[dict[str, Any]],
+    *,
+    start_pair: int,
+    max_pairs: int | None,
+) -> list[dict[str, Any]]:
+    """Select a one-based inclusive start through the existing prefix endpoint."""
+    if start_pair < 1:
+        raise ValueError("start_pair must be at least 1")
+    if max_pairs is not None and max_pairs < start_pair:
+        raise ValueError("max_pairs must be at least start_pair")
+    endpoint = len(pairs) if max_pairs is None else min(max_pairs, len(pairs))
+    selected = pairs[start_pair - 1 : endpoint]
+    if not selected:
+        raise ValueError(
+            f"start_pair {start_pair} is beyond the {len(pairs)}-pair campaign"
+        )
+    return selected
+
+
 def validate_asset_inventory(
     task: dict[str, Any], pairs: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -394,11 +414,14 @@ def run_task(
     output_root: Path,
     dry_run: bool,
     max_pairs: int | None,
+    start_pair: int = 1,
     repair_runner_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    pairs = enumerate_pairs(task)
-    if max_pairs is not None:
-        pairs = pairs[:max_pairs]
+    pairs = select_pair_range(
+        enumerate_pairs(task),
+        start_pair=start_pair,
+        max_pairs=max_pairs,
+    )
     inventory = validate_asset_inventory(task, pairs)
     input_blockers = dataset_exclusion_receipts(task)
     input_additions = dataset_addition_receipts(task)
@@ -420,6 +443,11 @@ def run_task(
     }
     ledger["input_pairs"] = int(task.get("expected_pairs", expected_runnable))
     ledger["expected_pairs"] = expected_runnable
+    ledger["selection"] = {
+        "start_pair": start_pair,
+        "max_pairs": max_pairs,
+        "pair_ids": [pair["pair_id"] for pair in pairs],
+    }
     ledger["input_blockers"] = input_blockers
     ledger["input_additions"] = input_additions
     keyframes = task_root / "source_keyframes.json" if task.get("needs_keyframes") else None
@@ -618,6 +646,15 @@ def main() -> None:
     parser.add_argument("--task", action="append")
     parser.add_argument("--max-pairs", type=int)
     parser.add_argument(
+        "--start-pair",
+        type=int,
+        default=1,
+        help=(
+            "One-based first pair to run. With --max-pairs N, selects the "
+            "disjoint inclusive range start-pair..N."
+        ),
+    )
+    parser.add_argument(
         "--repair-runner-arg",
         action="append",
         default=[],
@@ -639,6 +676,7 @@ def main() -> None:
             output_root=Path(args.output_root),
             dry_run=args.dry_run,
             max_pairs=args.max_pairs,
+            start_pair=args.start_pair,
             repair_runner_args=tuple(args.repair_runner_arg),
         )
         for task in tasks

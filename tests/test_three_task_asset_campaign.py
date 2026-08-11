@@ -13,6 +13,7 @@ from run_three_task_asset_campaign import (
     dataset_addition_receipts,
     dataset_exclusion_receipts,
     enumerate_pairs,
+    select_pair_range,
     validate_asset_inventory,
     validate_demo,
 )
@@ -39,6 +40,27 @@ def test_enumeration_requires_exact_unique_pair_set(tmp_path):
     }
     pairs = enumerate_pairs(task)
     assert [pair["pair_id"] for pair in pairs] == ["object_000", "object_001"]
+
+
+def test_pair_range_uses_one_based_start_and_prefix_endpoint(tmp_path):
+    for index in range(5):
+        _dataset(tmp_path / f"task_{index}.hdf5", {"object": f"Object/object_{index:03d}"})
+    task = {
+        "name": "task", "expected_pairs": 5,
+        "source_dataset": str(tmp_path / "task_0.hdf5"),
+        "dataset_globs": [str(tmp_path / "task_*.hdf5")],
+    }
+    pairs = enumerate_pairs(task)
+
+    selected = select_pair_range(pairs, start_pair=3, max_pairs=4)
+
+    assert [pair["pair_id"] for pair in selected] == ["object_002", "object_003"]
+    with pytest.raises(ValueError, match="at least 1"):
+        select_pair_range(pairs, start_pair=0, max_pairs=4)
+    with pytest.raises(ValueError, match="at least start_pair"):
+        select_pair_range(pairs, start_pair=3, max_pairs=2)
+    with pytest.raises(ValueError, match="beyond"):
+        select_pair_range(pairs, start_pair=6, max_pairs=None)
 
 
 def test_enumeration_fails_closed_on_wrong_count(tmp_path):
