@@ -488,7 +488,7 @@ def test_insert_feedback_corrects_small_measured_vertical_deficit(capsys):
     )
     receipt = capsys.readouterr().out
     assert '"minimum_vertical_error_m": 0.001' in receipt
-    assert '"correction_ramp_steps": 1' in receipt
+    assert '"correction_ramp_steps": 6' in receipt
 
 
 def test_insert_contact_reanchor_requires_exact_suffix_screen(capsys):

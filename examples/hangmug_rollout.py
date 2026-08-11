@@ -783,7 +783,6 @@ def _reanchor_full_skill(
                     observed_support_pose,
                     sample["mug_pose"],
                     minimum_vertical_error_m=0.001,
-                    correction_ramp_steps=1,
                 )
                 feedback_compensated = feedback_compensated or not np.allclose(
                     trajectory.right_poses, before
@@ -800,7 +799,10 @@ def _reanchor_full_skill(
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
                     "intended_support_position_m": observed_support_pose[:3].tolist(),
                     "minimum_vertical_error_m": 0.001,
-                    "correction_ramp_steps": 1,
+                    "correction_ramp_steps": (
+                        trajectory.waypoint_steps["branch_unload"]
+                        - trajectory.waypoint_steps["branch_insert"]
+                    ),
                     "tree_relative_support_reanchored": planning_tree_pose is not None,
                 }, sort_keys=True))
     trajectory, held_compensated = _apply_held_convergence_feedback(
