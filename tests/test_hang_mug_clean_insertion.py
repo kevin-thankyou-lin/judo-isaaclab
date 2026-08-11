@@ -456,3 +456,50 @@ def test_forced_rethread_uses_screened_nominal_endpoint(monkeypatch):
     assert receipt["forced_from_screened_nominal_suffix"] is True
     assert receipt["branch_tip_rethread_fallback"] is True
     np.testing.assert_allclose(corrected.right_poses[-1], trajectory.right_poses[-1])
+
+
+def test_preinsert_repair_propagates_corrected_endpoint_through_support(monkeypatch):
+    right_poses = np.repeat(IDENTITY[None], 13, axis=0)
+    right_poses[10, 0] = 0.02
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 13, axis=0),
+        right_poses=right_poses,
+        grippers=np.zeros((13, 2)),
+        stage_names=("insert",) * 11 + ("support",) * 2,
+        waypoint_steps={"branch_insert": 10, "branch_unload": 12},
+    )
+    receipts = iter((
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+    ))
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+    branch = SimpleNamespace(
+        inner_point=np.asarray([0.0, 0.0, 0.0]),
+        tip_point=np.asarray([0.06, 0.0, 0.0]),
+        radius_m=0.005,
+    )
+
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        completed_step=1,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.06, 0.08, 0.10],
+        target_branch=branch,
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        executed_mug_poses=np.repeat(IDENTITY[None], 2, axis=0),
+        force_branch_tip_rethread=True,
+    )
+
+    assert receipt["support_hold_propagated_steps"] == 2
+    assert not np.array_equal(corrected.right_poses[10], IDENTITY)
+    np.testing.assert_allclose(
+        corrected.right_poses[11:13],
+        np.repeat(corrected.right_poses[10:11], 2, axis=0),
+    )

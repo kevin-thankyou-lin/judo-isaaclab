@@ -343,6 +343,39 @@ def _executed_prefix_receipt(
     return receipt
 
 
+def _replace_corrected_suffix(
+    trajectory: SkillTrajectory,
+    *,
+    corrected_mug_poses: np.ndarray,
+    right_contact_in_mug: np.ndarray,
+    future_start: int,
+    audit_end: int,
+    insert: int,
+    unload: int,
+) -> tuple[SkillTrajectory, int]:
+    """Install a screened suffix and keep its inserted pose through support."""
+
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[future_start : audit_end + 1] = np.asarray(
+        [
+            compose_pose(pose, right_contact_in_mug)
+            for pose in corrected_mug_poses[future_start : audit_end + 1]
+        ],
+        dtype=np.float64,
+    )
+    propagated = 0
+    if audit_end == insert and unload > insert:
+        propagated = unload - insert
+        right[insert + 1 : unload + 1] = right[insert]
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    ), propagated
+
+
 def repair_compensated_insertion_path(
     trajectory: SkillTrajectory,
     *,
@@ -432,18 +465,17 @@ def repair_compensated_insertion_path(
                 "screened-nominal branch-tip rethread remains collision-unsafe: "
                 f"steps={receipt['collision_steps']}"
             )
-        right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-        right[future_start : audit_end + 1] = np.asarray(
-            [compose_pose(pose, contact) for pose in corrected[future_start:]],
-            dtype=np.float64,
+        repaired, propagated = _replace_corrected_suffix(
+            trajectory,
+            corrected_mug_poses=corrected,
+            right_contact_in_mug=contact,
+            future_start=future_start,
+            audit_end=audit_end,
+            insert=insert,
+            unload=unload,
         )
-        return SkillTrajectory(
-            left_poses=trajectory.left_poses.copy(),
-            right_poses=right,
-            grippers=trajectory.grippers.copy(),
-            stage_names=trajectory.stage_names,
-            waypoint_steps=dict(trajectory.waypoint_steps),
-        ), receipt
+        receipt["support_hold_propagated_steps"] = propagated
+        return repaired, receipt
 
     collision_steps = [int(step) for step in initial["collision_steps"]]
     corrected_future, correction = apply_branch_radial_clearance(
@@ -546,15 +578,14 @@ def repair_compensated_insertion_path(
                     f"steps={receipt['collision_steps']}"
                 )
 
-    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[future_start : audit_end + 1] = np.asarray(
-        [compose_pose(pose, contact) for pose in corrected[future_start:]],
-        dtype=np.float64,
+    repaired, propagated = _replace_corrected_suffix(
+        trajectory,
+        corrected_mug_poses=corrected,
+        right_contact_in_mug=contact,
+        future_start=future_start,
+        audit_end=audit_end,
+        insert=insert,
+        unload=unload,
     )
-    return SkillTrajectory(
-        left_poses=trajectory.left_poses.copy(),
-        right_poses=right,
-        grippers=trajectory.grippers.copy(),
-        stage_names=trajectory.stage_names,
-        waypoint_steps=dict(trajectory.waypoint_steps),
-    ), receipt
+    receipt["support_hold_propagated_steps"] = propagated
+    return repaired, receipt
