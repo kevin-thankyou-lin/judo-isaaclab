@@ -61,3 +61,30 @@ def test_branch_radial_clearance_rejects_empty_collision_window():
             target_branch=branch,
             collision_steps=[],
         )
+
+
+def test_branch_radial_clearance_tapers_to_exact_terminal_support():
+    path = np.repeat(IDENTITY[None], 40, axis=0)
+    path[:, :3] = [0.5, 0.02, 0.0]
+    branch = BranchPart(
+        frame=IDENTITY,
+        inner_point=np.asarray([0.0, 0.0, 0.0]),
+        tip_point=np.asarray([1.0, 0.0, 0.0]),
+        tangent=np.asarray([1.0, 0.0, 0.0]),
+        length_m=1.0,
+        radius_m=0.01,
+        normalized_height=0.5,
+        azimuth_rad=0.0,
+    )
+
+    corrected, receipt = apply_branch_radial_clearance(
+        path,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        target_branch=branch,
+        collision_steps=[35, 36],
+    )
+
+    assert receipt["correction_window"][-1] == len(path) - 1
+    assert receipt["preserves_final_pose"] is True
+    np.testing.assert_allclose(corrected[-1], path[-1], atol=1.0e-12)

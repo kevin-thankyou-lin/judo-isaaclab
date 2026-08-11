@@ -271,7 +271,9 @@ def test_runner_derives_protocol_claims_from_measured_receipt():
     assert "protocol_recorder.record_environment_reset" in source
     assert "protocol_recorder.record_state_restore" in source
     assert "protocol_recorder.record_step" in rollout_source
+    assert 'args.mode != "replay_hang"' not in rollout_source
     assert '"execution_instrumentation": protocol_receipt' in source
+    assert 'coded_skill=args.mode in {"replay_hang", "skill"}' in source
 
 
 def test_right_handover_assist_uses_zero_delay_contact_backed_joint():

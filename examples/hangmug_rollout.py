@@ -234,7 +234,6 @@ def execute_hangmug_rollout(
         if (
             trajectory is not None
             and trajectory_step is not None
-            and args.mode != "replay_hang"
         ):
             update_assist_releases(env, trajectory, trajectory_step)
         sample = sample_environment(env, step, stage, info)

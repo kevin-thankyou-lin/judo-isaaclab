@@ -189,5 +189,7 @@ def apply_branch_radial_clearance(
         "correction_window": [start, end],
         "direction_world": direction.tolist(),
         "maximum_displacement_m": radius,
-        "preserves_final_pose": bool(end < len(poses) - 1),
+        "preserves_final_pose": bool(
+            np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
+        ),
     }
