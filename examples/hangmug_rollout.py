@@ -351,7 +351,7 @@ def _reanchor_full_skill(
             correction = trajectory.right_poses[-1, :3] - before[-1, :3]
             print("HANGMUG_INSERT_COMPENSATION=" + json.dumps({
                 "applied_translation_m": correction.tolist(),
-                "observed_mug_position_m": sample["mug_pose"][:3].tolist(),
+                "observed_mug_position_m": list(sample["mug_pose"][:3]),
                 "intended_support_position_m": intended_final[:3].tolist(),
             }, sort_keys=True))
     return trajectory, nominal_right_contact
