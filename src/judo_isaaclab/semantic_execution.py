@@ -110,16 +110,33 @@ class SemanticProtocolRecorder:
     steps: int = 0
     rollout_started: bool = False
     rollout_finished: bool = False
+    reset_events: list[dict[str, Any]] = field(default_factory=list)
+    state_restore_events: list[dict[str, Any]] = field(default_factory=list)
     termination_events: list[dict[str, Any]] = field(default_factory=list)
     truncation_events: list[dict[str, Any]] = field(default_factory=list)
     _contacts: dict[str, _ContactChannel] = field(default_factory=dict)
 
     def record_environment_reset(self, *, reason: str) -> None:
         self.environment_resets += 1
+        self.reset_events.append(
+            {
+                "index": self.environment_resets - 1,
+                "reason": reason,
+                "after_rollout_start": self.rollout_started,
+            }
+        )
         if self.rollout_started:
             self.inter_stage_resets += 1
 
     def record_state_restore(self, *, initial: bool, reason: str) -> None:
+        self.state_restore_events.append(
+            {
+                "index": len(self.state_restore_events),
+                "reason": reason,
+                "initial": bool(initial),
+                "after_rollout_start": self.rollout_started,
+            }
+        )
         if initial:
             if self.rollout_started:
                 raise RuntimeError("initial state cannot be restored after rollout start")
@@ -197,6 +214,8 @@ class SemanticProtocolRecorder:
             "steps": self.steps,
             "rollout_started": self.rollout_started,
             "rollout_finished": self.rollout_finished,
+            "reset_events": list(self.reset_events),
+            "state_restore_events": list(self.state_restore_events),
             "termination_events": list(self.termination_events),
             "truncation_events": list(self.truncation_events),
             "contact_channels": {
