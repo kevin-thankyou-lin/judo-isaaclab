@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -359,3 +361,57 @@ def test_held_suffix_expands_to_geometry_clearance_after_radius_is_insufficient(
     assert receipt["passed"] is True
     assert receipt["geometry_correction"]["fallback_after_branch_radius_failed"]
     np.testing.assert_allclose(corrected.right_poses[:4], trajectory.right_poses[:4])
+
+
+def test_collision_unsafe_feedback_rethreads_beyond_branch_tip(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 13, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 13, axis=0),
+        grippers=np.zeros((13, 2)),
+        stage_names=("support",) * 13,
+        waypoint_steps={"branch_insert": 2, "branch_unload": 12},
+    )
+    receipts = iter((
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+        {"passed": False, "collision_count": 1, "collision_steps": [5]},
+        {"passed": False, "collision_count": 1, "collision_steps": [5]},
+        {"passed": False, "collision_count": 1, "collision_steps": [5]},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+    ))
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+    monkeypatch.setattr(
+        clean_insertion,
+        "apply_branch_radial_clearance",
+        lambda path, **kwargs: (
+            path.copy(), {"correction_window": [0, len(path) - 1]}
+        ),
+    )
+    branch = SimpleNamespace(
+        inner_point=np.asarray([0.0, 0.0, 0.0]),
+        tip_point=np.asarray([0.06, 0.0, 0.0]),
+        radius_m=0.005,
+    )
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        completed_step=2,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.06, 0.08, 0.10],
+        target_branch=branch,
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        executed_mug_poses=np.repeat(IDENTITY[None], 3, axis=0),
+    )
+
+    assert receipt["passed"] is True
+    assert receipt["branch_tip_rethread_fallback"] is True
+    geometry = receipt["geometry_correction"]
+    assert geometry["method"] == "branch_tip_withdraw_align_axial_reinsert"
+    assert geometry["withdrawal_m"] == pytest.approx(0.04)
+    assert sum(geometry["phase_steps"].values()) == 10
+    np.testing.assert_allclose(corrected.right_poses[:3], trajectory.right_poses[:3])
+    np.testing.assert_allclose(corrected.right_poses[-1], trajectory.right_poses[-1])

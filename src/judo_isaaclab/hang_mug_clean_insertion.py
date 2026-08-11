@@ -8,7 +8,13 @@ from typing import Any
 
 import numpy as np
 
-from .put_marker import SkillTrajectory, compose_pose, inverse_pose, quaternion_rotate
+from .put_marker import (
+    SkillTrajectory,
+    compose_pose,
+    interpolate_poses,
+    inverse_pose,
+    quaternion_rotate,
+)
 
 
 def _asset_root_usd(asset_path: str) -> str:
@@ -228,6 +234,87 @@ def apply_branch_radial_clearance(
     }
 
 
+def apply_branch_tip_rethread(
+    mug_poses: Any,
+    *,
+    completed_mug_pose: Any,
+    tree_pose: Any,
+    target_branch: Any,
+    future_start_step: int,
+    audit_end_step: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Withdraw, align, and axially reinsert a contact-trapped handle.
+
+    A direct SE(3) correction can be collision-unsafe after the handle catches
+    beside a branch: the shortest Cartesian path cuts the mug body through the
+    tree.  Route the *future* held suffix beyond the detected branch tip,
+    perform the pose alignment there, and then insert along the branch axis.
+    This is a single geometry-derived path, not candidate sampling.
+    """
+
+    poses = np.asarray(mug_poses, dtype=np.float64)
+    completed = np.asarray(completed_mug_pose, dtype=np.float64)
+    tree = np.asarray(tree_pose, dtype=np.float64)
+    start = int(future_start_step)
+    end = int(audit_end_step)
+    if poses.ndim != 2 or poses.shape[1] != 7:
+        raise ValueError("mug_poses must have shape (steps, 7)")
+    if completed.shape != (7,) or tree.shape != (7,):
+        raise ValueError("completed mug and tree poses must have shape (7,)")
+    if not 0 <= start <= end < len(poses):
+        raise ValueError("rethread window must select future mug poses")
+    count = end - start + 1
+    if count < 9:
+        raise ValueError("branch-tip rethread requires at least nine future steps")
+
+    inner = tree[:3] + quaternion_rotate(tree[3:], target_branch.inner_point)
+    tip = tree[:3] + quaternion_rotate(tree[3:], target_branch.tip_point)
+    axis = tip - inner
+    length = float(np.linalg.norm(axis))
+    radius = float(target_branch.radius_m)
+    if length <= 0.0 or radius <= 0.0:
+        raise ValueError("target branch must have positive length and radius")
+    tangent = axis / length
+    # The semantic support pose seats the handle at the branch midpoint.  A
+    # half-length plus two radii therefore moves that pose fully beyond the tip
+    # before alignment, while remaining entirely asset-geometry-derived.
+    withdrawal = 0.5 * length + 2.0 * radius
+    withdrawn_observed = completed.copy()
+    withdrawn_observed[:3] += withdrawal * tangent
+    target = poses[end].copy()
+    withdrawn_target = target.copy()
+    withdrawn_target[:3] += withdrawal * tangent
+
+    first = count // 3
+    second = count // 3
+    third = count - first - second
+    future = np.concatenate(
+        (
+            interpolate_poses(completed, withdrawn_observed, first),
+            interpolate_poses(withdrawn_observed, withdrawn_target, second),
+            interpolate_poses(withdrawn_target, target, third),
+        ),
+        axis=0,
+    )
+    corrected = poses.copy()
+    corrected[start : end + 1] = future
+    return corrected, {
+        "method": "branch_tip_withdraw_align_axial_reinsert",
+        "future_window": [start, end],
+        "phase_steps": {
+            "withdraw": first,
+            "align_beyond_tip": second,
+            "axial_reinsert": third,
+        },
+        "branch_length_m": length,
+        "branch_radius_m": radius,
+        "withdrawal_m": withdrawal,
+        "preserves_final_pose": bool(
+            np.allclose(corrected[end], poses[end], atol=1.0e-12)
+        ),
+    }
+
+
 def _executed_prefix_receipt(
     poses: Any | None,
     *,
@@ -380,9 +467,41 @@ def repair_compensated_insertion_path(
         expanded["fallback_after_branch_radius_failed"] = True
         receipt["geometry_correction"] = expanded
         if not receipt["passed"]:
-            raise RuntimeError(
-                "geometry-sized observation correction remains collision-unsafe"
+            if executed_mug_poses is None:
+                raise RuntimeError(
+                    "geometry-sized observation correction remains collision-unsafe"
+                )
+            try:
+                corrected, rethread = apply_branch_tip_rethread(
+                    mug_path,
+                    completed_mug_pose=np.asarray(executed_mug_poses)[-1],
+                    tree_pose=tree_pose,
+                    target_branch=target_branch,
+                    future_start_step=future_start,
+                    audit_end_step=audit_end,
+                )
+            except ValueError as error:
+                raise RuntimeError(
+                    "geometry-sized observation correction remains collision-unsafe"
+                ) from error
+            receipt = exact_body_collision_receipt(
+                corrected,
+                tree_pose=tree_pose,
+                target_assets=target_assets,
+                start_step=future_start,
+                release_step=audit_end + 1,
             )
+            receipt["observation_compensated_path"] = True
+            receipt["audit_end_step"] = audit_end
+            receipt["executed_prefix"] = executed_receipt
+            receipt["pre_correction_collision_count"] = initial["collision_count"]
+            receipt["pre_correction_collision_steps"] = initial["collision_steps"]
+            receipt["geometry_correction"] = rethread
+            receipt["branch_tip_rethread_fallback"] = True
+            if not receipt["passed"]:
+                raise RuntimeError(
+                    "branch-tip rethread remains collision-unsafe"
+                )
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     right[future_start : audit_end + 1] = np.asarray(
