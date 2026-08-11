@@ -709,7 +709,6 @@ def _reanchor_full_skill(
                 sample["mug_pose"],
                 sample["right_eef_pose"],
                 completed_waypoint=completed,
-                transition_steps=8 if completed == "branch_insert" else 0,
             )
             audited_end = int(
                 trajectory.waypoint_steps.get(
@@ -732,7 +731,7 @@ def _reanchor_full_skill(
                 "exact_screen_required": reanchor_changed_audited_suffix,
                 "future_start_step": future_start,
                 "audited_end_step": audited_end,
-                "transition_steps": 8 if completed == "branch_insert" else 0,
+                "transition_steps": 0,
             }, sort_keys=True), flush=True)
             nominal_right_contact = compose_pose(
                 inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
@@ -783,6 +782,7 @@ def _reanchor_full_skill(
                     trajectory,
                     observed_support_pose,
                     sample["mug_pose"],
+                    minimum_vertical_error_m=0.001,
                 )
                 feedback_compensated = feedback_compensated or not np.allclose(
                     trajectory.right_poses, before
@@ -798,6 +798,7 @@ def _reanchor_full_skill(
                     ),
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
                     "intended_support_position_m": observed_support_pose[:3].tolist(),
+                    "minimum_vertical_error_m": 0.001,
                     "tree_relative_support_reanchored": planning_tree_pose is not None,
                 }, sort_keys=True))
     trajectory, held_compensated = _apply_held_convergence_feedback(

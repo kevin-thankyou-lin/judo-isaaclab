@@ -414,6 +414,54 @@ def test_insert_compensation_receipt_accepts_list_observations(capsys):
     assert "HANGMUG_INSERT_COMPENSATION=" in capsys.readouterr().out
 
 
+def test_insert_feedback_corrects_small_measured_vertical_deficit(capsys):
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    observed_mug = _pose(z=0.0177)
+    observed_right = _pose()
+    reanchored = reanchor_branch_transport_contact(
+        trajectory,
+        _pose(),
+        observed_mug,
+        observed_right,
+        completed_waypoint="branch_insert",
+    )
+    corrected, _, feedback_compensated = hangmug_rollout._reanchor_full_skill(
+        trajectory,
+        insert,
+        {
+            "mug_pose": observed_mug.tolist(),
+            "left_eef_pose": _pose().tolist(),
+            "right_eef_pose": observed_right.tolist(),
+            "left_grasp": False,
+            "right_grasp": True,
+        },
+        _pose(),
+        _pose(),
+        _pose(z=0.0200),
+        False,
+    )
+
+    assert feedback_compensated is True
+    assert corrected.right_poses[insert] == pytest.approx(
+        trajectory.right_poses[insert]
+    )
+    assert corrected.right_poses[unload, 2] == pytest.approx(
+        reanchored.right_poses[unload, 2] + 0.0023
+    )
+    receipt = capsys.readouterr().out
+    assert '"minimum_vertical_error_m": 0.001' in receipt
+
+
 def test_insert_contact_reanchor_requires_exact_suffix_screen(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
