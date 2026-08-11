@@ -8,7 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from judo_isaaclab.put_marker import SkillTrajectory, compose_pose, inverse_pose
+from judo_isaaclab.put_marker import (
+    SkillTrajectory,
+    compose_pose,
+    interpolate_poses,
+    inverse_pose,
+)
 
 
 def _rotation_distance(left: np.ndarray, right: np.ndarray) -> float:
@@ -98,10 +103,27 @@ class ObservedTreePathTracker:
         world_delta = compose_pose(current, inverse_pose(previous))
         right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
         start = trajectory_step + 1
-        right[start:] = np.asarray(
-            [compose_pose(world_delta, pose) for pose in right[start:]],
-            dtype=np.float64,
-        )
+        identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        held_steps = unload - start + 1
+        if held_steps > 0:
+            corrections = interpolate_poses(identity, world_delta, held_steps)
+            right[start : unload + 1] = np.asarray(
+                [
+                    compose_pose(correction, pose)
+                    for correction, pose in zip(
+                        corrections, right[start : unload + 1]
+                    )
+                ],
+                dtype=np.float64,
+            )
+        if unload + 1 < len(right):
+            right[unload + 1 :] = np.asarray(
+                [
+                    compose_pose(world_delta, pose)
+                    for pose in right[unload + 1 :]
+                ],
+                dtype=np.float64,
+            )
         self.updates += 1
         self._emit_receipt(
             trajectory, trajectory_step, current=current,

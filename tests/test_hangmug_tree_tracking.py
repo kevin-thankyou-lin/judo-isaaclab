@@ -81,3 +81,28 @@ def test_tracker_preserves_clean_insertion_then_applies_accumulated_support_delt
     np.testing.assert_allclose(at_insert.right_poses[:4], original.right_poses[:4])
     assert at_insert.right_poses[4, 0] == pytest.approx(1.1)
     assert tracker.updates == 1
+
+
+def test_tracker_smoothly_ramps_accumulated_delta_through_held_support():
+    poses = np.asarray([_pose(1.0) for _ in range(7)])
+    trajectory = SkillTrajectory(
+        left_poses=poses.copy(),
+        right_poses=poses.copy(),
+        grippers=np.zeros((7, 2)),
+        stage_names=("insert",) * 7,
+        waypoint_steps={
+            "branch_approach": 0,
+            "branch_insert": 2,
+            "branch_unload": 5,
+        },
+    )
+    tracked = ObservedTreePathTracker(_pose()).update(
+        trajectory,
+        2,
+        {"tree_pose": _pose(0.12).tolist(), "right_grasp": True},
+    )
+
+    np.testing.assert_allclose(tracked.right_poses[:3], trajectory.right_poses[:3])
+    assert 1.0 < tracked.right_poses[3, 0] < tracked.right_poses[4, 0]
+    assert tracked.right_poses[5, 0] == pytest.approx(1.12)
+    assert tracked.right_poses[6, 0] == pytest.approx(1.12)
