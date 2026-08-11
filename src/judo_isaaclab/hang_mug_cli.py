@@ -79,8 +79,8 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-release-steps must be positive")
     if not 0.0 < args.replay_hang_insert_dls_gain <= 4.0:
         parser.error("--replay-hang-insert-dls-gain must be in (0, 4]")
-    if not 0.0 < args.replay_hang_support_dls_gain <= 4.0:
-        parser.error("--replay-hang-support-dls-gain must be in (0, 4]")
+    if not 0.0 < args.replay_hang_support_dls_gain <= 8.0:
+        parser.error("--replay-hang-support-dls-gain must be in (0, 8]")
     if args.replay_hang_support_gain_lead_steps < 0:
         parser.error("--replay-hang-support-gain-lead-steps must be nonnegative")
     if args.replay_hang_insert_time_scale < 1:
