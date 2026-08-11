@@ -709,6 +709,7 @@ def _reanchor_full_skill(
                 sample["mug_pose"],
                 sample["right_eef_pose"],
                 completed_waypoint=completed,
+                transition_steps=8 if completed == "branch_insert" else 0,
             )
             audited_end = int(
                 trajectory.waypoint_steps.get(
@@ -731,6 +732,7 @@ def _reanchor_full_skill(
                 "exact_screen_required": reanchor_changed_audited_suffix,
                 "future_start_step": future_start,
                 "audited_end_step": audited_end,
+                "transition_steps": 8 if completed == "branch_insert" else 0,
             }, sort_keys=True), flush=True)
             nominal_right_contact = compose_pose(
                 inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]

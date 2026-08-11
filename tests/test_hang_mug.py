@@ -986,6 +986,40 @@ def test_branch_transport_reanchors_observed_right_contact():
     )
 
 
+def test_branch_insert_reanchor_smooths_first_support_command():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=7,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=8, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    observed_right = _pose(0.31)
+    baseline = reanchor_branch_transport_contact(
+        trajectory, _pose(), _pose(0.29), observed_right,
+        completed_waypoint="branch_insert",
+    )
+    smoothed = reanchor_branch_transport_contact(
+        trajectory, _pose(), _pose(0.29), observed_right,
+        completed_waypoint="branch_insert", transition_steps=4,
+    )
+
+    assert smoothed.right_poses[: insert + 1] == pytest.approx(
+        trajectory.right_poses[: insert + 1]
+    )
+    assert np.linalg.norm(
+        smoothed.right_poses[insert + 1, :3] - observed_right[:3]
+    ) < np.linalg.norm(
+        baseline.right_poses[insert + 1, :3] - observed_right[:3]
+    )
+    assert smoothed.right_poses[insert + 4] == pytest.approx(
+        baseline.right_poses[insert + 4]
+    )
+
+
 def test_handover_pregrasp_reanchors_close_to_observed_mug():
     program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
     program.semantic_left_grasp(

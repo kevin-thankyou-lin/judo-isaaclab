@@ -274,6 +274,7 @@ def reanchor_branch_transport_contact(
     observed_right_pose: Any,
     *,
     completed_waypoint: str = "left_release",
+    transition_steps: int = 0,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -290,6 +291,14 @@ def reanchor_branch_transport_contact(
     for index in range(start, len(right)):
         intended_mug = compose_pose(right[index], inverse_pose(planned_contact))
         right[index] = compose_pose(intended_mug, observed_contact)
+    transition = int(transition_steps)
+    if transition < 0:
+        raise ValueError("transition_steps must be nonnegative")
+    transition = min(transition, len(right) - start)
+    if transition > 0:
+        right[start : start + transition] = interpolate_poses(
+            observed_right_pose, right[start + transition - 1], transition
+        )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
