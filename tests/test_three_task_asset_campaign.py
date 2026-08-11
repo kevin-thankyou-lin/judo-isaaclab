@@ -239,6 +239,9 @@ def test_reuses_only_hash_verified_classification(tmp_path):
         "status": "passed",
         "mode": "replay",
         "acceptance_checks": {"technical": True},
+        # A quality failure is a valid classification outcome and must not
+        # force the expensive source-action replay to run again before repair.
+        "checks": {"clean_insertion_body_collision_free": False},
         "provenance": {
             "target_dataset": {"sha256": digest(target)},
             "trace": {"path": str(trace), "sha256": digest(trace)},

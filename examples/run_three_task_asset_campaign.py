@@ -364,8 +364,11 @@ def run_task(
         if (
             not dry_run
             and _reusable_classification(prior_replay, pair["dataset"])
-            and _required_result_checks_pass(task, prior_replay)
         ):
+            # A classification is reusable even when it records a task-quality
+            # failure: that observed failure is what selects the repair path.
+            # Final quality checks are still required below for direct
+            # acceptance and again on the repaired result.
             replay_rc = 0
             print(f"CAMPAIGN_REUSE_CLASSIFICATION={task['name']}:{pair_id}", flush=True)
         else:
