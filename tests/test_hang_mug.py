@@ -94,8 +94,12 @@ def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
     assert corrected.right_poses[approach] == pytest.approx(
         trajectory.right_poses[approach]
     )
-    assert corrected.right_poses[approach + 1 :, 2] == pytest.approx(
-        trajectory.right_poses[approach + 1 :, 2] + 0.03
+    insert = trajectory.waypoint_steps["branch_insert"]
+    assert corrected.right_poses[approach + 1, 2] == pytest.approx(
+        trajectory.right_poses[approach + 1, 2] + 0.03
+    )
+    assert corrected.right_poses[insert:, 2] == pytest.approx(
+        trajectory.right_poses[insert:, 2]
     )
     unchanged = compensate_low_branch_approach(
         trajectory, _pose(0.3, 0.0, 0.1), _pose(0.2, 0.0, 0.12)
@@ -144,7 +148,7 @@ def test_approach_compensation_uses_geometry_clearance(capsys):
     )
     trajectory = program.build()
     step = trajectory.waypoint_steps["branch_approach"]
-    corrected, _ = hangmug_rollout._reanchor_full_skill(
+    corrected, _, approach_compensated = hangmug_rollout._reanchor_full_skill(
         trajectory,
         step,
         {
@@ -161,6 +165,7 @@ def test_approach_compensation_uses_geometry_clearance(capsys):
         0.04,
     )
     assert corrected is not trajectory
+    assert approach_compensated is True
     receipt = capsys.readouterr().out
     assert '"applied_vertical_m": 0.06' in receipt
     assert '"support_clearance_m": 0.04' in receipt
@@ -195,7 +200,7 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
     }
     baseline_waypoints = dict(waypoints)
     baseline_waypoints["branch_approach"] = step + 1
-    baseline, _ = hangmug_rollout._reanchor_full_skill(
+    baseline, _, baseline_compensated = hangmug_rollout._reanchor_full_skill(
         SkillTrajectory(
             left_poses=original.left_poses,
             right_poses=original.right_poses,
@@ -211,7 +216,7 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
         False,
         0.04,
     )
-    corrected, _ = hangmug_rollout._reanchor_full_skill(
+    corrected, _, approach_compensated = hangmug_rollout._reanchor_full_skill(
         trajectory,
         step,
         sample,
@@ -222,8 +227,14 @@ def test_approach_compensation_runs_for_colocated_transport_milestone(capsys):
         0.04,
     )
 
-    assert corrected.right_poses[step + 1 :, 2] == pytest.approx(
-        baseline.right_poses[step + 1 :, 2] + 0.06
+    insert = trajectory.waypoint_steps["branch_insert"]
+    assert baseline_compensated is False
+    assert approach_compensated is True
+    assert corrected.right_poses[step + 1, 2] == pytest.approx(
+        baseline.right_poses[step + 1, 2] + 0.06
+    )
+    assert corrected.right_poses[insert, 2] == pytest.approx(
+        baseline.right_poses[insert, 2]
     )
     assert "HANGMUG_APPROACH_COMPENSATION=" in capsys.readouterr().out
 

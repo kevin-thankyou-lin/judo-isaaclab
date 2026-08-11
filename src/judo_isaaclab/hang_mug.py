@@ -357,8 +357,10 @@ def compensate_low_branch_approach(
     retained for small errors that remain after contact.
     """
 
-    if "branch_approach" not in trajectory.waypoint_steps:
-        raise ValueError("branch trajectory is missing branch_approach")
+    required = ("branch_approach", "branch_insert")
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"branch trajectory is missing waypoints: {missing}")
     if support_clearance_m < 0.0:
         raise ValueError("support_clearance_m must be nonnegative")
     if maximum_vertical_correction_m < 0.0:
@@ -375,7 +377,13 @@ def compensate_low_branch_approach(
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     start = trajectory.waypoint_steps["branch_approach"] + 1
-    right[start:, 2] += correction_z
+    end = trajectory.waypoint_steps["branch_insert"]
+    steps = end - start + 1
+    if steps <= 0:
+        raise ValueError("branch_insert must follow branch_approach")
+    fraction = np.linspace(0.0, 1.0, steps)
+    smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    right[start : end + 1, 2] += correction_z * (1.0 - smooth)
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,

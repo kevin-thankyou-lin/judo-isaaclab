@@ -282,7 +282,7 @@ def execute_hangmug_rollout(
                     0.5 * float(target_parts.handle_outer_size[2])
                     + float(target_branch.radius_m)
                 )
-            trajectory, nominal_right_contact = _reanchor_full_skill(
+            trajectory, nominal_right_contact, approach_compensated = _reanchor_full_skill(
                 trajectory,
                 trajectory_step,
                 sample,
@@ -292,6 +292,28 @@ def execute_hangmug_rollout(
                 observed_handover_reanchor,
                 branch_entry_clearance_m,
             )
+            if approach_compensated and args.require_clean_insertion:
+                from judo_isaaclab.hang_mug_clean_insertion import (
+                    repair_compensated_insertion_path,
+                )
+
+                trajectory, feedback_receipt = repair_compensated_insertion_path(
+                    trajectory,
+                    right_contact_in_mug=nominal_right_contact,
+                    tree_pose=target_tree.root_pose,
+                    mug_body_frame=target_parts.body_frame,
+                    mug_body_size=target_parts.body_size,
+                    target_branch=target_branch,
+                    target_assets=target_assets,
+                )
+                planned_clean_insertion["approach_feedback_clean_insertion"] = (
+                    feedback_receipt
+                )
+                print(
+                    "HANGMUG_APPROACH_FEEDBACK_CLEAN_INSERTION="
+                    + json.dumps(feedback_receipt, sort_keys=True),
+                    flush=True,
+                )
         if encoder is not None:
             frame = render_frame(env, sample)
             encoder.write(frame)
@@ -346,6 +368,8 @@ def _reanchor_full_skill(
         reanchor_right_grasp_from_observed_mug,
     )
     from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    approach_compensated = False
 
     if (
         observed_handover_reanchor
@@ -411,8 +435,9 @@ def _reanchor_full_skill(
                     ),
                 )
                 correction_z = float(
-                    trajectory.right_poses[-1, 2] - before[-1, 2]
+                    np.max(trajectory.right_poses[:, 2] - before[:, 2])
                 )
+                approach_compensated = correction_z > 0.0
                 print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
                     "applied_vertical_m": correction_z,
                     "observed_mug_z_m": float(sample["mug_pose"][2]),
@@ -438,4 +463,4 @@ def _reanchor_full_skill(
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
                     "intended_support_position_m": intended_final[:3].tolist(),
                 }, sort_keys=True))
-    return trajectory, nominal_right_contact
+    return trajectory, nominal_right_contact, approach_compensated

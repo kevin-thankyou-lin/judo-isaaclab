@@ -1,9 +1,12 @@
 import numpy as np
 import pytest
 
+import judo_isaaclab.hang_mug_clean_insertion as clean_insertion
 from judo_isaaclab.hang_mug_clean_insertion import (
     apply_branch_radial_clearance,
+    repair_compensated_insertion_path,
 )
+from judo_isaaclab.put_marker import SkillTrajectory
 from judo_isaaclab.semantic_parts import BranchPart
 
 
@@ -122,3 +125,46 @@ def test_branch_radial_clearance_never_routes_downward():
     assert receipt["direction_world"][2] == pytest.approx(0.0)
     assert np.min(corrected[:, 2] - path[:, 2]) == pytest.approx(0.0)
     np.testing.assert_allclose(corrected[-1], path[-1], atol=1.0e-12)
+
+
+def test_compensated_insertion_is_rescreened_before_execution(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 4, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 4, axis=0),
+        grippers=np.zeros((4, 2)),
+        stage_names=("insert",) * 4,
+        waypoint_steps={"branch_insert": 2},
+    )
+    receipts = iter(
+        (
+            {"passed": False, "collision_count": 1, "collision_steps": [1]},
+            {"passed": True, "collision_count": 0, "collision_steps": []},
+        )
+    )
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+
+    def correct(path, **kwargs):
+        corrected = path.copy()
+        corrected[1, 0] += 0.02
+        return corrected, {"method": "test_correction"}
+
+    monkeypatch.setattr(clean_insertion, "apply_branch_radial_clearance", correct)
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.08, 0.08, 0.10],
+        target_branch=object(),
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+    )
+
+    assert receipt["passed"] is True
+    assert receipt["pre_correction_collision_count"] == 1
+    assert receipt["observation_compensated_path"] is True
+    assert corrected.right_poses[1, 0] == pytest.approx(0.02)
+    np.testing.assert_allclose(corrected.right_poses[3], trajectory.right_poses[3])

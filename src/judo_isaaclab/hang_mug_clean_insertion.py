@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from .put_marker import compose_pose, quaternion_rotate
+from .put_marker import SkillTrajectory, compose_pose, inverse_pose, quaternion_rotate
 
 
 def _asset_root_usd(asset_path: str) -> str:
@@ -215,3 +215,72 @@ def apply_branch_radial_clearance(
             np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
         ),
     }
+
+
+def repair_compensated_insertion_path(
+    trajectory: SkillTrajectory,
+    *,
+    right_contact_in_mug: Any,
+    tree_pose: Any,
+    mug_body_frame: Any,
+    mug_body_size: Any,
+    target_branch: Any,
+    target_assets: dict[str, str],
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Exact-screen and repair an observation-compensated insertion suffix."""
+
+    if "branch_insert" not in trajectory.waypoint_steps:
+        raise ValueError("branch trajectory is missing branch_insert")
+    insert = int(trajectory.waypoint_steps["branch_insert"])
+    contact = np.asarray(right_contact_in_mug, dtype=np.float64)
+    if contact.shape != (7,):
+        raise ValueError("right_contact_in_mug must have shape (7,)")
+    contact_inverse = inverse_pose(contact)
+    mug_path = np.asarray(
+        [compose_pose(pose, contact_inverse) for pose in trajectory.right_poses[: insert + 1]],
+        dtype=np.float64,
+    )
+    initial = exact_body_collision_receipt(
+        mug_path,
+        tree_pose=tree_pose,
+        target_assets=target_assets,
+    )
+    receipt = dict(initial)
+    receipt["observation_compensated_path"] = True
+    if initial["passed"]:
+        receipt["geometry_correction"] = None
+        return trajectory, receipt
+
+    corrected, correction = apply_branch_radial_clearance(
+        mug_path,
+        tree_pose=tree_pose,
+        mug_body_frame=mug_body_frame,
+        mug_body_size=mug_body_size,
+        target_branch=target_branch,
+        collision_steps=initial["collision_steps"],
+    )
+    receipt = exact_body_collision_receipt(
+        corrected,
+        tree_pose=tree_pose,
+        target_assets=target_assets,
+    )
+    receipt["observation_compensated_path"] = True
+    receipt["pre_correction_collision_count"] = initial["collision_count"]
+    receipt["pre_correction_collision_steps"] = initial["collision_steps"]
+    receipt["geometry_correction"] = correction
+    if not receipt["passed"]:
+        raise RuntimeError(
+            "observation-compensated insertion remains collision-unsafe"
+        )
+
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[: insert + 1] = np.asarray(
+        [compose_pose(pose, contact) for pose in corrected], dtype=np.float64
+    )
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    ), receipt
