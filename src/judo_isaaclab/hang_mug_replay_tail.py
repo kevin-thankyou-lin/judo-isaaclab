@@ -413,8 +413,9 @@ def apply_branch_tip_support_clearance(
 
     Midpoint seating can put a wide mug body into the tree even when the handle
     opening itself is valid.  Move the support relationship outward by the
-    geometry-derived free axial span while leaving one branch radius beyond the
-    handle.  A quintic ramp keeps the incoming insertion path continuous.
+    geometry-derived free axial span while leaving half a branch radius beyond
+    the handle.  The remaining half-radius is a deterministic tracking margin;
+    a quintic ramp keeps the incoming insertion path continuous.
     """
 
     poses = np.asarray(mug_poses, dtype=np.float64)
@@ -430,7 +431,8 @@ def apply_branch_tip_support_clearance(
     if handle_span <= 0.0:
         raise ValueError("handle_axis_span_m must be positive")
     remaining_half_span = 0.5 * (float(target_branch.length_m) - handle_span)
-    displacement = remaining_half_span - float(target_branch.radius_m)
+    engagement_margin = 0.5 * float(target_branch.radius_m)
+    displacement = remaining_half_span - engagement_margin
     if displacement <= 0.0:
         raise ValueError(
             "branch is too short to shift support while retaining engagement"
@@ -447,7 +449,7 @@ def apply_branch_tip_support_clearance(
         "terminal_step": len(poses) - 1,
         "direction_world": direction.tolist(),
         "displacement_m": displacement,
-        "branch_tip_engagement_margin_m": float(target_branch.radius_m),
+        "branch_tip_engagement_margin_m": engagement_margin,
         "terminal_pose_changed": bool(
             not np.allclose(corrected[-1], poses[-1], atol=1.0e-12)
         ),
