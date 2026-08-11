@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+import run_hangmug_skill_program
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -133,6 +135,19 @@ def test_datagen_grasp_assist_mechanism_override():
     assert manager_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
     assert config_module.GRASP_ASSIST_CONFIG["left"]["mechanism"] == "friction"
     assert config["left"]["mechanism"] == "fixed_joint"
+
+
+def test_runner_derives_protocol_claims_from_measured_receipt():
+    source = inspect.getsource(run_hangmug_skill_program.main)
+
+    assert '"one_reset": True' not in source
+    assert '"zero_inter_stage_resets": True' not in source
+    assert '"contact_backed_grasps_only": True' not in source
+    assert '"teleports_after_reset": 0' not in source
+    assert "protocol_recorder.record_environment_reset" in source
+    assert "protocol_recorder.record_state_restore" in source
+    assert "protocol_recorder.record_step" in source
+    assert '"execution_instrumentation": protocol_receipt' in source
 
 
 def test_right_handover_assist_uses_zero_delay_contact_backed_joint():
