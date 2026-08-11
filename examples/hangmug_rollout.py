@@ -187,7 +187,9 @@ def _insertion_tracking_gain(
     unload = int(trajectory.waypoint_steps.get("branch_unload", insert))
     insert_gain = float(getattr(args, "replay_hang_insert_dls_gain", 1.0))
     support_gain = float(getattr(args, "replay_hang_support_dls_gain", 1.0))
-    if approach < trajectory_step <= insert:
+    support_lead = int(getattr(args, "replay_hang_support_gain_lead_steps", 0))
+    support_start = max(approach, insert - support_lead)
+    if approach < trajectory_step <= support_start:
         gain = max(float(base_gain), insert_gain)
         if trajectory_step == approach + 1:
             print(
@@ -203,15 +205,17 @@ def _insertion_tracking_gain(
                 flush=True,
             )
         return gain
-    if insert < trajectory_step <= unload:
+    if support_start < trajectory_step <= unload:
         gain = max(float(base_gain), support_gain)
-        if trajectory_step == insert + 1:
+        if trajectory_step == support_start + 1:
             print(
                 "HANGMUG_SUPPORT_TRACKING_GAIN="
                 + json.dumps(
                     {
                         "branch_insert": insert,
                         "branch_unload": unload,
+                        "support_gain_lead_steps": support_lead,
+                        "support_gain_start": support_start + 1,
                         "right_dls_gain": gain,
                     },
                     sort_keys=True,

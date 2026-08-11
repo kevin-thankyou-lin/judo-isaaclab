@@ -196,6 +196,7 @@ def test_insert_and_support_tracking_gains_have_separate_scopes():
     args = SimpleNamespace(
         replay_hang_insert_dls_gain=2.0,
         replay_hang_support_dls_gain=4.0,
+        replay_hang_support_gain_lead_steps=0,
     )
     gain = hangmug_rollout._insertion_tracking_gain
 
@@ -207,6 +208,11 @@ def test_insert_and_support_tracking_gains_have_separate_scopes():
     assert gain(trajectory, 184, args, base_gain=1.0) == 1.0
     assert gain(trajectory, 150, args, base_gain=2.5) == 2.5
     assert gain(trajectory, 175, args, base_gain=4.5) == 4.5
+
+    args.replay_hang_support_gain_lead_steps = 4
+    assert gain(trajectory, 167, args, base_gain=1.0) == 2.0
+    assert gain(trajectory, 168, args, base_gain=1.0) == 4.0
+    assert gain(trajectory, 171, args, base_gain=1.0) == 4.0
 
 
 def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():

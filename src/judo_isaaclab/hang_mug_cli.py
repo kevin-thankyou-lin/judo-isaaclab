@@ -49,6 +49,15 @@ def add_replay_repair_arguments(parser: Any) -> None:
         ),
     )
     parser.add_argument(
+        "--replay-hang-support-gain-lead-steps",
+        type=int,
+        default=0,
+        help=(
+            "Begin the support gain this many controller steps before the "
+            "insert waypoint; defaults to support-only behavior."
+        ),
+    )
+    parser.add_argument(
         "--replay-hang-insert-time-scale",
         type=int,
         default=1,
@@ -72,5 +81,7 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-insert-dls-gain must be in (0, 4]")
     if not 0.0 < args.replay_hang_support_dls_gain <= 4.0:
         parser.error("--replay-hang-support-dls-gain must be in (0, 4]")
+    if args.replay_hang_support_gain_lead_steps < 0:
+        parser.error("--replay-hang-support-gain-lead-steps must be nonnegative")
     if args.replay_hang_insert_time_scale < 1:
         parser.error("--replay-hang-insert-time-scale must be positive")
