@@ -17,6 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "examples"))
 
+from judo_isaaclab.semantic_execution import (
+    SemanticExecutionEvent,
+    SemanticExecutionHooks,
+    SemanticProtocolRecorder,
+)
+
 
 def _parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -686,6 +692,8 @@ def _frame(env, sample):
 
 def main() -> None:
     args = _parser()
+    protocol_recorder = SemanticProtocolRecorder()
+    execution_hooks = SemanticExecutionHooks()
     _physics_device_receipt(
         args.device,
         require_cpu=args.require_cpu_physics,
@@ -739,10 +747,17 @@ def main() -> None:
             env, override["grasp_assistance_config"]
         )
         env.reset(warm_up=False, seed=args.seed)
+        protocol_recorder.record_environment_reset(
+            reason="task_environment_reset"
+        )
         source = _load_dataset(args.source_dataset, args.episode, env.device)
         target = _load_dataset(args.target_dataset, args.episode, env.device)
         env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
+        protocol_recorder.record_state_restore(
+            initial=True,
+            reason="target_dataset_initial_state",
+        )
         env.sim.forward()
         env.reset_success_check(env_ids)
         source_mug = _geometry(source_assets["mug"], source["mug_pose"][0])
@@ -788,6 +803,24 @@ def main() -> None:
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
+        milestones_by_step: dict[int, list[str]] = {}
+        if trajectory is not None:
+            for name, milestone_step in trajectory.waypoint_steps.items():
+                milestones_by_step.setdefault(int(milestone_step), []).append(name)
+        protocol_recorder.start_rollout()
+        execution_hooks.emit(
+            SemanticExecutionEvent(
+                kind="rollout_start",
+                step=0,
+                stage=(
+                    "direct_source_action_replay"
+                    if trajectory is None
+                    else trajectory.stage_names[0]
+                ),
+                observation=samples[-1],
+                metadata={"mode": args.mode},
+            )
+        )
         for step in range(total_steps):
             if trajectory is None:
                 action = source["actions"][step : step + 1]
@@ -806,10 +839,53 @@ def main() -> None:
                     integrate_right_ik=integrate,
                 )
                 desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
-            observation, _, _, _, info = env.step(action)
+            execution_hooks.emit(
+                SemanticExecutionEvent(
+                    kind="before_step",
+                    step=step,
+                    stage=stage,
+                )
+            )
+            observation, _, terminated, truncated, info = env.step(action)
             if trajectory is not None:
                 _update_authored_assist_releases(env, trajectory, step)
             sample = _sample(env, step, stage, info)
+            protocol_recorder.record_step(
+                step=step,
+                stage=stage,
+                terminated=terminated,
+                truncated=truncated,
+            )
+            protocol_recorder.record_contact_observation(
+                "left_mug_grasp",
+                step=step,
+                active=sample["left_grasp"],
+                source="env.robot.is_grasping",
+            )
+            protocol_recorder.record_contact_observation(
+                "right_mug_grasp",
+                step=step,
+                active=sample["right_grasp"],
+                source="env.robot.is_grasping",
+            )
+            execution_hooks.emit(
+                SemanticExecutionEvent(
+                    kind="after_step",
+                    step=step,
+                    stage=stage,
+                    observation=sample,
+                )
+            )
+            for milestone in milestones_by_step.get(step, ()):
+                execution_hooks.emit(
+                    SemanticExecutionEvent(
+                        kind="milestone",
+                        step=step,
+                        stage=stage,
+                        milestone=milestone,
+                        observation=sample,
+                    )
+                )
             demo_recorder.append(
                 action,
                 env.scene.get_state(is_relative=False),
@@ -881,6 +957,15 @@ def main() -> None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
                 print("HANGMUG_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}, sort_keys=True), flush=True)
+        protocol_recorder.finish_rollout()
+        execution_hooks.emit(
+            SemanticExecutionEvent(
+                kind="rollout_end",
+                step=total_steps - 1,
+                stage=samples[-1]["program_stage"],
+                observation=samples[-1],
+            )
+        )
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -914,11 +999,28 @@ def main() -> None:
             with open(args.direct_replay_result, encoding="utf-8") as stream:
                 direct_replay = json.load(stream)
         terminal_speed = float(np.linalg.norm(final["mug_velocity"][:3]))
+        protocol_receipt = protocol_recorder.receipt()
+        protocol_checks = protocol_receipt["checks"]
+        contact_backed_grasps_only = bool(
+            protocol_receipt["contact_channels"]
+        ) and all(
+            channel["source"] == "env.robot.is_grasping"
+            for channel in protocol_receipt["contact_channels"].values()
+        )
         checks = {
-            "one_reset": True,
-            "zero_inter_stage_resets": True,
+            "one_reset": protocol_checks["one_reset"],
+            "zero_inter_stage_resets": protocol_checks[
+                "zero_inter_stage_resets"
+            ],
+            "zero_post_start_state_writes": protocol_checks[
+                "zero_post_start_state_writes"
+            ],
+            "no_truncation_observed": protocol_checks["no_truncation_observed"],
+            "no_unexpected_termination": bool(
+                not protocol_receipt["termination_events"] or final["task_success"]
+            ),
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
-            "contact_backed_grasps_only": True,
+            "contact_backed_grasps_only": contact_backed_grasps_only,
             "datagen_grasp_assist_configured": bool(env.grasp_assists),
             "left_grasp_assist_engaged": any(
                 row["grasp_assist_engaged"].get("left", False) for row in samples
@@ -996,7 +1098,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": protocol_receipt["environment_resets"], "initial_state_restores": protocol_receipt["initial_state_restores"], "inter_stage_resets": protocol_receipt["inter_stage_resets"], "teleports_after_reset": protocol_receipt["teleports_after_rollout_start"], "execution_instrumentation": protocol_receipt, "semantic_execution_hooks": {"enabled": execution_hooks.enabled, "policy": "optional_observation_only"}, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
             "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),
