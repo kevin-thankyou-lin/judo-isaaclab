@@ -415,3 +415,44 @@ def test_collision_unsafe_feedback_rethreads_beyond_branch_tip(monkeypatch):
     assert sum(geometry["phase_steps"].values()) == 10
     np.testing.assert_allclose(corrected.right_poses[:3], trajectory.right_poses[:3])
     np.testing.assert_allclose(corrected.right_poses[-1], trajectory.right_poses[-1])
+
+
+def test_forced_rethread_uses_screened_nominal_endpoint(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 13, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 13, axis=0),
+        grippers=np.zeros((13, 2)),
+        stage_names=("support",) * 13,
+        waypoint_steps={"branch_insert": 2, "branch_unload": 12},
+    )
+    receipts = iter((
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+    ))
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+    branch = SimpleNamespace(
+        inner_point=np.asarray([0.0, 0.0, 0.0]),
+        tip_point=np.asarray([0.06, 0.0, 0.0]),
+        radius_m=0.005,
+    )
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        completed_step=2,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.06, 0.08, 0.10],
+        target_branch=branch,
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        executed_mug_poses=np.repeat(IDENTITY[None], 3, axis=0),
+        force_branch_tip_rethread=True,
+    )
+
+    assert receipt["forced_from_screened_nominal_suffix"] is True
+    assert receipt["branch_tip_rethread_fallback"] is True
+    np.testing.assert_allclose(corrected.right_poses[-1], trajectory.right_poses[-1])

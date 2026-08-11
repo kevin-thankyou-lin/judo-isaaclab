@@ -172,12 +172,25 @@ def _screen_or_reject_observation_feedback(
     except RuntimeError as error:
         if "collision-unsafe" not in str(error):
             raise
-        retained, receipt = repair_compensated_insertion_path(
-            previous_trajectory, **previous_repair_kwargs,
-        )
+        try:
+            retained, receipt = repair_compensated_insertion_path(
+                previous_trajectory,
+                **previous_repair_kwargs,
+                force_branch_tip_rethread=True,
+            )
+            receipt = dict(receipt)
+            receipt["recovered_unsafe_feedback_with_branch_tip_rethread"] = True
+            receipt["rejected_reason"] = str(error)
+            receipt["right_dls_gain"] = 2.0
+            return retained, receipt, 2.0
+        except (RuntimeError, ValueError) as rethread_error:
+            rethread_failure = str(rethread_error)
+            retained, receipt = repair_compensated_insertion_path(
+                previous_trajectory, **previous_repair_kwargs,
+            )
         receipt = dict(receipt)
         receipt["rejected_observation_feedback"] = True
-        receipt["rejected_reason"] = str(error)
+        receipt["rejected_reason"] = rethread_failure
         receipt["right_dls_gain"] = 2.0
         return retained, receipt, 2.0
 

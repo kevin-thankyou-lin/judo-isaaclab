@@ -211,6 +211,10 @@ def test_collision_unsafe_feedback_retains_previous_suffix(monkeypatch):
             raise RuntimeError(
                 "geometry-sized observation correction remains collision-unsafe"
             )
+        if kwargs.get("force_branch_tip_rethread"):
+            raise RuntimeError(
+                "screened-nominal branch-tip rethread remains collision-unsafe"
+            )
         return trajectory, safe_receipt
 
     monkeypatch.setattr(
@@ -224,13 +228,47 @@ def test_collision_unsafe_feedback_retains_previous_suffix(monkeypatch):
         previous_repair_kwargs={"completed_step": 3},
     )
 
-    assert [call[0] for call in calls] == [unsafe, previous]
+    assert [call[0] for call in calls] == [unsafe, previous, previous]
     assert retained is previous
     assert receipt["passed"] is True
     assert receipt["rejected_observation_feedback"] is True
     assert receipt["right_dls_gain"] == pytest.approx(2.0)
     assert gain == pytest.approx(2.0)
     assert calls[1][1]["completed_step"] == 3
+    assert calls[1][1]["force_branch_tip_rethread"] is True
+
+
+def test_collision_unsafe_feedback_rethreads_screened_nominal_suffix(monkeypatch):
+    previous = SimpleNamespace(name="previous")
+    unsafe = SimpleNamespace(name="unsafe")
+    recovered = SimpleNamespace(name="rethreaded")
+    calls = []
+
+    def screen(trajectory, **kwargs):
+        calls.append((trajectory, kwargs))
+        if trajectory is unsafe:
+            raise RuntimeError(
+                "geometry-sized observation correction remains collision-unsafe"
+            )
+        assert kwargs["force_branch_tip_rethread"] is True
+        return recovered, {"passed": True, "branch_tip_rethread_fallback": True}
+
+    monkeypatch.setattr(
+        "judo_isaaclab.hang_mug_clean_insertion.repair_compensated_insertion_path",
+        screen,
+    )
+    corrected, receipt, gain = hangmug_rollout._screen_or_reject_observation_feedback(
+        unsafe,
+        previous,
+        repair_kwargs={"completed_step": 4},
+        previous_repair_kwargs={"completed_step": 3},
+    )
+
+    assert corrected is recovered
+    assert receipt["recovered_unsafe_feedback_with_branch_tip_rethread"] is True
+    assert receipt["rejected_reason"].startswith("geometry-sized")
+    assert gain == pytest.approx(2.0)
+    assert [call[0] for call in calls] == [unsafe, previous]
 
 
 def test_insert_and_support_tracking_gains_have_separate_scopes():

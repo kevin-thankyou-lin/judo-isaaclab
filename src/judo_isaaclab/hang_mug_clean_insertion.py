@@ -355,6 +355,7 @@ def repair_compensated_insertion_path(
     target_assets: dict[str, str],
     executed_mug_poses: Any | None = None, executed_tree_poses: Any | None = None,
     tracking_margin_m: float = 0.0,
+    force_branch_tip_rethread: bool = False,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Exact-screen and repair an observation-compensated insertion suffix."""
 
@@ -399,9 +400,50 @@ def repair_compensated_insertion_path(
     receipt["observation_compensated_path"] = True
     receipt["audit_end_step"] = audit_end
     receipt["executed_prefix"] = executed_receipt
-    if initial["passed"]:
+    if initial["passed"] and not force_branch_tip_rethread:
         receipt["geometry_correction"] = None
         return trajectory, receipt
+    if initial["passed"]:
+        if executed_mug_poses is None:
+            raise ValueError("forced branch-tip rethread requires executed mug poses")
+        corrected, rethread = apply_branch_tip_rethread(
+            mug_path,
+            completed_mug_pose=np.asarray(executed_mug_poses)[-1],
+            tree_pose=tree_pose,
+            target_branch=target_branch,
+            future_start_step=future_start,
+            audit_end_step=audit_end,
+        )
+        receipt = exact_body_collision_receipt(
+            corrected,
+            tree_pose=tree_pose,
+            target_assets=target_assets,
+            start_step=future_start,
+            release_step=audit_end + 1,
+        )
+        receipt["observation_compensated_path"] = True
+        receipt["audit_end_step"] = audit_end
+        receipt["executed_prefix"] = executed_receipt
+        receipt["geometry_correction"] = rethread
+        receipt["branch_tip_rethread_fallback"] = True
+        receipt["forced_from_screened_nominal_suffix"] = True
+        if not receipt["passed"]:
+            raise RuntimeError(
+                "screened-nominal branch-tip rethread remains collision-unsafe: "
+                f"steps={receipt['collision_steps']}"
+            )
+        right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+        right[future_start : audit_end + 1] = np.asarray(
+            [compose_pose(pose, contact) for pose in corrected[future_start:]],
+            dtype=np.float64,
+        )
+        return SkillTrajectory(
+            left_poses=trajectory.left_poses.copy(),
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ), receipt
 
     collision_steps = [int(step) for step in initial["collision_steps"]]
     corrected_future, correction = apply_branch_radial_clearance(
@@ -500,7 +542,8 @@ def repair_compensated_insertion_path(
             receipt["branch_tip_rethread_fallback"] = True
             if not receipt["passed"]:
                 raise RuntimeError(
-                    "branch-tip rethread remains collision-unsafe"
+                    "branch-tip rethread remains collision-unsafe: "
+                    f"steps={receipt['collision_steps']}"
                 )
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
