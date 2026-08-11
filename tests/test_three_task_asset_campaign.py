@@ -7,6 +7,7 @@ import pytest
 
 from run_three_task_asset_campaign import (
     _command,
+    _repair_eligible,
     _reusable_classification,
     dataset_exclusion_receipts,
     enumerate_pairs,
@@ -104,6 +105,30 @@ def test_campaign_command_passes_dataset_aliases_to_runner(tmp_path):
         if value == "--dataset-object-alias"
     ]
     assert aliases == ["obj_0=mug", "obj_1=mug_tree"]
+
+
+def test_repair_eligibility_can_require_observed_handover_instead_of_success():
+    task = {
+        "repair_requires_checks": {
+            "left_pick_observed": True,
+            "right_handover_observed": True,
+        }
+    }
+    failed_hang = {
+        "checks": {
+            "coded_task_success": False,
+            "left_pick_observed": True,
+            "right_handover_observed": True,
+        }
+    }
+    assert _repair_eligible(task, failed_hang)
+    failed_hang["checks"]["right_handover_observed"] = False
+    assert not _repair_eligible(task, failed_hang)
+
+
+def test_repair_eligibility_keeps_putpot_success_default():
+    assert _repair_eligible({}, {"checks": {"coded_task_success": True}})
+    assert not _repair_eligible({}, {"checks": {"coded_task_success": False}})
 
 
 def test_asset_inventory_fails_before_simulator_startup(tmp_path):

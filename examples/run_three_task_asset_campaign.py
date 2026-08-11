@@ -191,6 +191,18 @@ def _task_success(result: dict[str, Any]) -> bool:
     )
 
 
+def _repair_eligible(task: dict[str, Any], replay_result: dict[str, Any]) -> bool:
+    """Apply a configured repair only after its observed replay prerequisites."""
+
+    required = task.get("repair_requires_checks")
+    if required is None:
+        required = {"coded_task_success": True}
+    if not isinstance(required, dict) or not required:
+        raise ValueError("repair_requires_checks must be a nonempty mapping")
+    checks = replay_result.get("checks", {})
+    return all(bool(checks.get(name)) is bool(expected) for name, expected in required.items())
+
+
 def _reusable_classification(result: dict[str, Any], target_dataset: str) -> bool:
     if result.get("status") != "passed" or result.get("mode") != "replay":
         return False
@@ -302,12 +314,17 @@ def run_task(
     )
     task_root = output_root / task["name"]
     ledger_path = task_root / "ledger.json"
+    expected_runnable = int(
+        task.get("expected_runnable_pairs", task.get("expected_pairs", 40))
+    )
     ledger = _load(ledger_path) if ledger_path.is_file() else {
         "schema_version": 1,
         "task": task["name"],
-        "expected_pairs": int(task.get("expected_pairs", 40)),
+        "expected_pairs": expected_runnable,
         "pairs": {},
     }
+    ledger["input_pairs"] = int(task.get("expected_pairs", expected_runnable))
+    ledger["expected_pairs"] = expected_runnable
     ledger["input_blockers"] = input_blockers
     keyframes = task_root / "source_keyframes.json" if task.get("needs_keyframes") else None
 
@@ -368,8 +385,9 @@ def run_task(
                 }
             else:
                 repair_record = None
+                repair_failure_record = None
                 repair_mode = task.get("repair_mode")
-                if repair_mode and replay_result.get("checks", {}).get("coded_task_success"):
+                if repair_mode and _repair_eligible(task, replay_result):
                     repair = _command(
                         task,
                         python=python,
@@ -386,12 +404,29 @@ def run_task(
                     if repair_rc == 0 and repair_result.get("status") == "passed" and _task_success(repair_result):
                         demo = validate_demo(pair_root / f"{repair_mode}_demo.hdf5", pair["assets"])
                         repair_record = {
-                            "status": "accepted", "method": "source_action_prefix_with_supported_center_repair",
+                            "status": "accepted",
+                            "method": task.get(
+                                "repair_method",
+                                "source_action_prefix_with_supported_center_repair",
+                            ),
                             "dataset": pair["dataset"], "assets": pair["assets"],
                             "replay_result": str(replay_result_path.resolve()),
                             "result": str(repair_result_path.resolve()),
                             "video": str((pair_root / f"{repair_mode}.mp4").resolve()),
                             "demonstration": demo,
+                        }
+                    else:
+                        repair_failure_record = {
+                            "status": "adaptation_failed",
+                            "method": task.get(
+                                "repair_method",
+                                "source_action_prefix_with_supported_center_repair",
+                            ),
+                            "dataset": pair["dataset"],
+                            "assets": pair["assets"],
+                            "returncode": repair_rc,
+                            "replay_result": str(replay_result_path.resolve()),
+                            "result": str(repair_result_path.resolve()),
                         }
                 if repair_record is not None:
                     record = repair_record
@@ -405,36 +440,39 @@ def run_task(
                     _atomic_json(ledger_path, ledger)
                     print("CAMPAIGN_PAIR=" + json.dumps({"task": task["name"], "pair": pair_id, **record}, sort_keys=True), flush=True)
                     continue
-                skill = _command(
-                    task,
-                    python=python,
-                    gear_repo=gear_repo,
-                    target=pair["dataset"],
-                    mode="skill",
-                    output=pair_root,
-                    source_keyframes=keyframes,
-                    direct_replay_result=replay_result_path,
-                )
-                skill_rc = _run(skill, pair_root / "skill.log", dry_run=False)
-                skill_result_path = pair_root / "skill_result.json"
-                skill_result = _load(skill_result_path) if skill_result_path.is_file() else {}
-                if skill_rc == 0 and skill_result.get("status") == "passed" and _task_success(skill_result):
-                    demo = validate_demo(pair_root / "skill_demo.hdf5", pair["assets"])
-                    record = {
-                        "status": "accepted", "method": "deterministic_semantic_skill",
-                        "dataset": pair["dataset"], "assets": pair["assets"],
-                        "replay_result": str(replay_result_path.resolve()),
-                        "result": str(skill_result_path.resolve()),
-                        "video": str((pair_root / "skill.mp4").resolve()),
-                        "demonstration": demo,
-                    }
+                if repair_failure_record is not None and task.get("repair_is_primary_fallback"):
+                    record = repair_failure_record
                 else:
-                    record = {
-                        "status": "adaptation_failed", "method": "deterministic_semantic_skill",
-                        "dataset": pair["dataset"], "assets": pair["assets"],
-                        "returncode": skill_rc, "replay_result": str(replay_result_path.resolve()),
-                        "result": str(skill_result_path.resolve()),
-                    }
+                    skill = _command(
+                        task,
+                        python=python,
+                        gear_repo=gear_repo,
+                        target=pair["dataset"],
+                        mode="skill",
+                        output=pair_root,
+                        source_keyframes=keyframes,
+                        direct_replay_result=replay_result_path,
+                    )
+                    skill_rc = _run(skill, pair_root / "skill.log", dry_run=False)
+                    skill_result_path = pair_root / "skill_result.json"
+                    skill_result = _load(skill_result_path) if skill_result_path.is_file() else {}
+                    if skill_rc == 0 and skill_result.get("status") == "passed" and _task_success(skill_result):
+                        demo = validate_demo(pair_root / "skill_demo.hdf5", pair["assets"])
+                        record = {
+                            "status": "accepted", "method": "deterministic_semantic_skill",
+                            "dataset": pair["dataset"], "assets": pair["assets"],
+                            "replay_result": str(replay_result_path.resolve()),
+                            "result": str(skill_result_path.resolve()),
+                            "video": str((pair_root / "skill.mp4").resolve()),
+                            "demonstration": demo,
+                        }
+                    else:
+                        record = {
+                            "status": "adaptation_failed", "method": "deterministic_semantic_skill",
+                            "dataset": pair["dataset"], "assets": pair["assets"],
+                            "returncode": skill_rc, "replay_result": str(replay_result_path.resolve()),
+                            "result": str(skill_result_path.resolve()),
+                        }
         ledger["pairs"][pair_id] = record
         ledger["summary"] = {
             "accepted": sum(v.get("status") == "accepted" for v in ledger["pairs"].values()),
@@ -447,6 +485,10 @@ def run_task(
         if record.get("status") == "infrastructure_failed":
             raise RuntimeError(
                 f"{task['name']}:{pair_id}: infrastructure failure; stopping campaign"
+            )
+        if task.get("stop_after_nonaccepted") and record.get("status") != "accepted":
+            raise RuntimeError(
+                f"{task['name']}:{pair_id}: pair requires repair; later prefixes remain gated"
             )
     return ledger
 

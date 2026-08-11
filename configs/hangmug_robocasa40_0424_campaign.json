@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy": "provenance-preserving legacy-label HangMug adaptation; one heavy Isaac process; stop and diagnose the first failed pair",
+  "policy": "provenance-preserving legacy-label HangMug adaptation; one heavy Isaac process; repair the current failed pair before advancing",
   "tasks": [
     {
       "name": "hangmug_robocasa40_0424",
@@ -25,6 +25,14 @@
       "objects_root": "${HANGMUG_ROBOCASA40_ROOT}/train_assets/train_assets_rescaled",
       "runner": "examples/run_hangmug_skill_program.py",
       "needs_keyframes": true,
+      "repair_mode": "replay_hang",
+      "repair_method": "source_action_prefix_with_semantic_hang_tail",
+      "repair_requires_checks": {
+        "left_pick_observed": true,
+        "right_handover_observed": true
+      },
+      "repair_is_primary_fallback": true,
+      "stop_after_nonaccepted": true,
       "runner_args": [
         "--device",
         "cpu",

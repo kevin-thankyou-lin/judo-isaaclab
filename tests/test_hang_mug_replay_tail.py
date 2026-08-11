@@ -1,0 +1,107 @@
+import numpy as np
+import pytest
+
+from judo_isaaclab.hang_mug_replay_tail import (
+    build_replay_hang_tail,
+    repeated_joint_nominal,
+    replay_prefix_steps,
+    replay_tail_ready,
+    replay_tail_steps,
+)
+from judo_isaaclab.put_marker import compose_pose
+from judo_isaaclab.semantic_parts import BranchPart, MugParts
+
+
+def _pose(x=0.0, y=0.0, z=0.0):
+    return np.asarray([x, y, z, 1.0, 0.0, 0.0, 0.0])
+
+
+def _parts(scale=1.0):
+    return MugParts(
+        body_frame=_pose(),
+        body_size=np.asarray([0.2, 0.2, 0.3]) * scale,
+        handle_hole_frame=_pose(0.1 * scale),
+        handle_outer_size=np.asarray([0.08, 0.04, 0.06]) * scale,
+        handle_thickness_m=0.01 * scale,
+        handle_axis=0,
+        handle_sign=1,
+    )
+
+
+def _branch(x, z, length):
+    return BranchPart(
+        frame=_pose(x, 0.0, z),
+        inner_point=np.asarray([x - 0.4, 0.0, z]),
+        tip_point=np.asarray([x + 0.1, 0.0, z]),
+        tangent=np.asarray([1.0, 0.0, 0.0]),
+        length_m=length,
+        radius_m=0.01,
+        normalized_height=z / 2.0,
+        azimuth_rad=0.0,
+    )
+
+
+def test_replay_prefix_ends_before_source_release_and_requires_live_handover():
+    keyframes = {"frames": {"inserted_held": {"action_index": 541}}}
+    assert replay_prefix_steps(keyframes) == 542
+    assert replay_tail_ready(
+        {"stage2": True, "right_grasp": True, "left_grasp": False}
+    )
+    assert not replay_tail_ready(
+        {"stage2": True, "right_grasp": False, "left_grasp": False}
+    )
+    assert not replay_tail_ready(
+        {"stage2": True, "right_grasp": True, "left_grasp": True}
+    )
+
+
+def test_joint_nominal_holds_last_byte_identical_prefix_action():
+    actions = np.arange(42, dtype=np.float64).reshape(3, 14)
+    nominal = repeated_joint_nominal(actions, prefix_steps=2, tail_steps=4)
+    assert nominal.shape == (4, 14)
+    assert np.array_equal(nominal, np.repeat(actions[1:2], 4, axis=0))
+
+
+def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
+    source_branch = _branch(1.0, 1.0, 1.0)
+    target_branch = _branch(1.5, 1.5, 1.5)
+    source_parts = _parts()
+    target_parts = _parts(1.2)
+    observed_mug = _pose(0.5, -0.1, 1.0)
+    observed_right = _pose(0.58, -0.12, 1.05)
+    keyframes = {
+        "frames": {
+            "stable_settle": {
+                "mug_pose": _pose(1.0, 0.02, 1.03).tolist(),
+                "tree_pose": _pose().tolist(),
+            }
+        }
+    }
+
+    tail = build_replay_hang_tail(
+        keyframes=keyframes,
+        source_parts=source_parts,
+        target_parts=target_parts,
+        source_branches=(_branch(-1.0, 0.3, 0.8), source_branch),
+        target_tree_pose=_pose(2.0, 3.0, 0.0),
+        target_branches=(_branch(-1.0, 0.4, 0.9), target_branch),
+        observed_mug_pose=observed_mug,
+        left_eef_pose=_pose(0.3, 0.2, 1.1),
+        right_eef_pose=observed_right,
+        insert_clearance_m=0.08,
+    )
+
+    assert tail.trajectory.steps == replay_tail_steps()
+    reconstructed_right = compose_pose(observed_mug, tail.right_contact_in_mug)
+    assert reconstructed_right == pytest.approx(observed_right)
+    final_handle = compose_pose(
+        tail.intended_final_mug_pose, target_parts.handle_hole_frame
+    )
+    target_support = target_branch.frame.copy()
+    target_support[:3] = 0.5 * (
+        target_branch.inner_point + target_branch.tip_point
+    )
+    target_support_world = compose_pose(_pose(2.0, 3.0, 0.0), target_support)
+    assert final_handle[:3] == pytest.approx(target_support_world[:3])
+    assert tail.trajectory.stage_names[0] == "handle_to_branch_insertion"
+    assert tail.trajectory.stage_names[-1] == "stable_settle"

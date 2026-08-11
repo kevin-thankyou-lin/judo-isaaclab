@@ -30,6 +30,7 @@ from run_hangmug_skill_program import (
     _validate_datagen_grasp_assists,
 )
 import run_hangmug_skill_program
+import hangmug_rollout
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
@@ -139,6 +140,7 @@ def test_datagen_grasp_assist_mechanism_override():
 
 def test_runner_derives_protocol_claims_from_measured_receipt():
     source = inspect.getsource(run_hangmug_skill_program.main)
+    rollout_source = inspect.getsource(hangmug_rollout.execute_hangmug_rollout)
 
     assert '"one_reset": True' not in source
     assert '"zero_inter_stage_resets": True' not in source
@@ -146,7 +148,7 @@ def test_runner_derives_protocol_claims_from_measured_receipt():
     assert '"teleports_after_reset": 0' not in source
     assert "protocol_recorder.record_environment_reset" in source
     assert "protocol_recorder.record_state_restore" in source
-    assert "protocol_recorder.record_step" in source
+    assert "protocol_recorder.record_step" in rollout_source
     assert '"execution_instrumentation": protocol_receipt' in source
 
 
