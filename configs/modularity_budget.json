@@ -1,0 +1,23 @@
+{
+  "baseline_ref": "bd44a1402817e14b148e621c915f2ec582dccdd9",
+  "large_change_warning_lines": 200,
+  "profiles": [
+    {
+      "name": "production",
+      "roots": ["src", "examples"],
+      "module_warning_lines": 800,
+      "module_limit_lines": 1200,
+      "function_warning_lines": 100,
+      "function_limit_lines": 250,
+      "main_limit_lines": 200
+    },
+    {
+      "name": "tests",
+      "roots": ["tests"],
+      "module_warning_lines": 1000,
+      "module_limit_lines": 1500,
+      "function_warning_lines": 150,
+      "function_limit_lines": 250
+    }
+  ]
+}

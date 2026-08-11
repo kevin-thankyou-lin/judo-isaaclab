@@ -89,6 +89,11 @@ is useful regression coverage but does not prove adaptation.
 9. Finish with one reset, no inter-stage teleport, coded success, full video
    decode, visual inspection, tests, clean worktrees, and matching remote hash.
 
+The loop also follows the ratcheted module and function limits in
+`docs/coding_agent_modularity.md`. Run `python scripts/check_modularity_budget.py`
+before editing and before delivery. Experimental repairs remain isolated behind
+a strategy interface; they do not accumulate as branches inside the CLI runner.
+
 The final demonstration must retain actions, states, observations, asset and
 dataset hashes, controller parameters, stage/success traces, and the exact code
 revision. A filename or successful process exit is not acceptance evidence.
