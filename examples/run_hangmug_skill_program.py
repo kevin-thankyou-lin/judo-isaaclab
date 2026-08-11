@@ -82,6 +82,15 @@ def _parser() -> argparse.Namespace:
         default=0,
         help="Approach the observed-state receiving contact while open, then close in place.",
     )
+    parser.add_argument(
+        "--replay-handover-latch-grace-steps",
+        type=int,
+        default=0,
+        help=(
+            "Replay this many additional source actions after the source handover "
+            "keyframe before starting a replay_hang suffix."
+        ),
+    )
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -869,7 +878,10 @@ def main() -> None:
                 replay_tail_steps,
             )
 
-            repair_prefix_steps = replay_prefix_steps(keyframes)
+            repair_prefix_steps = replay_prefix_steps(
+                keyframes,
+                latch_grace_steps=args.replay_handover_latch_grace_steps,
+            )
             total_steps = repair_prefix_steps + replay_tail_steps(keyframes)
         else:
             total_steps = trajectory.steps if trajectory is not None else len(source["actions"])

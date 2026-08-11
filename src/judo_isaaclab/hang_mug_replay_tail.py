@@ -26,8 +26,10 @@ class ReplayHangTail:
     planned_mug_poses: np.ndarray
 
 
-def replay_prefix_steps(keyframes: dict[str, Any]) -> int:
-    """Return the source-action count ending at the proven handover."""
+def replay_prefix_steps(
+    keyframes: dict[str, Any], *, latch_grace_steps: int = 0
+) -> int:
+    """Return the source-action count ending after a bounded handover grace."""
 
     try:
         action_index = int(keyframes["frames"]["handover"]["action_index"])
@@ -35,7 +37,9 @@ def replay_prefix_steps(keyframes: dict[str, Any]) -> int:
         raise ValueError("source keyframes lack a handover action index") from error
     if action_index < 0:
         raise ValueError("handover action index must be nonnegative")
-    return action_index + 1
+    if latch_grace_steps < 0:
+        raise ValueError("latch_grace_steps must be nonnegative")
+    return action_index + 1 + latch_grace_steps
 
 
 def replay_tail_ready(sample: dict[str, Any]) -> bool:

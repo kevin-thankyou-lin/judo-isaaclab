@@ -43,6 +43,8 @@
         "--require-cpu-physics",
         "--grasp-assist-mechanism",
         "task_config",
+        "--replay-handover-latch-grace-steps",
+        "8",
         "--require-clean-insertion"
       ]
     }

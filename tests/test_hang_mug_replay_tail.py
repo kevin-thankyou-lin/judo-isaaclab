@@ -44,6 +44,9 @@ def _branch(x, z, length):
 def test_replay_prefix_ends_before_source_release_and_requires_live_handover():
     keyframes = {"frames": {"handover": {"action_index": 358}}}
     assert replay_prefix_steps(keyframes) == 359
+    assert replay_prefix_steps(keyframes, latch_grace_steps=8) == 367
+    with pytest.raises(ValueError, match="latch_grace_steps"):
+        replay_prefix_steps(keyframes, latch_grace_steps=-1)
     assert replay_tail_ready(
         {"stage2": True, "right_grasp": True, "left_grasp": False}
     )
