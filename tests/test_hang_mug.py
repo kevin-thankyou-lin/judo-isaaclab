@@ -77,7 +77,7 @@ def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
         _pose(0.1), _pose(0.2), _pose(0.3),
-        transport_steps=2, approach_steps=2, insert_steps=2,
+        transport_steps=2, approach_steps=2, insert_steps=7,
     )
     program.release_and_support(
         _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
@@ -95,8 +95,15 @@ def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
         trajectory.right_poses[approach]
     )
     insert = trajectory.waypoint_steps["branch_insert"]
-    assert corrected.right_poses[approach + 1, 2] == pytest.approx(
-        trajectory.right_poses[approach + 1, 2] + 0.03
+    assert corrected.right_poses[approach + 1] == pytest.approx(
+        trajectory.right_poses[approach + 1]
+    )
+    assert np.max(
+        corrected.right_poses[approach + 1 : insert, 2]
+        - trajectory.right_poses[approach + 1 : insert, 2]
+    ) == pytest.approx(0.03)
+    assert corrected.right_poses[insert] == pytest.approx(
+        trajectory.right_poses[insert]
     )
     assert corrected.right_poses[insert:, 2] == pytest.approx(
         trajectory.right_poses[insert:, 2]

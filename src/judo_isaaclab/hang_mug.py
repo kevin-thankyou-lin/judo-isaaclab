@@ -383,7 +383,8 @@ def compensate_low_branch_approach(
         raise ValueError("branch_insert must follow branch_approach")
     fraction = np.linspace(0.0, 1.0, steps)
     smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
-    right[start : end + 1, 2] += correction_z * (1.0 - smooth)
+    lift = 4.0 * smooth * (1.0 - smooth)
+    right[start : end + 1, 2] += correction_z * lift
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
