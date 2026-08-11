@@ -32,6 +32,7 @@ class HandleLocalMpcConfig:
     closure_position_tolerance_m: float = 0.010
     closure_rotation_tolerance_rad: float = 0.20
     physical_contact_threshold_n: float = 0.1
+    depth_guard_transverse_tolerance_m: float = 0.010
 
     def __post_init__(self) -> None:
         if not 10 <= self.horizon_steps <= 20:
@@ -45,6 +46,7 @@ class HandleLocalMpcConfig:
             self.closure_position_tolerance_m,
             self.closure_rotation_tolerance_rad,
             self.physical_contact_threshold_n,
+            self.depth_guard_transverse_tolerance_m,
         )
         if not np.all(np.isfinite(positive)) or any(value <= 0.0 for value in positive):
             raise ValueError("handle-local MPC positive bounds must be finite")
@@ -219,6 +221,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         "planned_controls",
         "executed_control",
         "hard_constraints",
+        "contact_frame_guard",
         "latch",
         "fail_closed",
         "fail_reason",
@@ -243,6 +246,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
     residuals = receipt.get("signed_residuals", {})
     controls = receipt.get("executed_control", {})
     constraints = receipt.get("hard_constraints", {})
+    contact_frame_guard = receipt.get("contact_frame_guard", {})
     latch = receipt.get("latch", {})
     return bool(
         set(residuals)
@@ -273,6 +277,17 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "translation_step_within_bound",
             "rotation_step_within_bound",
             "jaw_step_within_bound",
+        }
+        and set(contact_frame_guard)
+        == {
+            "enabled",
+            "active",
+            "physical_contact_observed",
+            "transverse_tolerance_m",
+            "transverse_residual_world_m",
+            "transverse_residual_norm_m",
+            "signed_depth_residual_m",
+            "suppressed_depth_control_world_m",
         }
         and set(latch)
         == {
@@ -310,6 +325,7 @@ def handle_local_mpc_step(
     current_jaw_command: float,
     robust_streak: int,
     require_peer_latch: bool = True,
+    depth_guarded_transverse_intercept: bool = False,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
 ) -> HandleLocalMpcCommand:
     """Plan and return the first bounded active-wrist and jaw control increment."""
@@ -373,6 +389,24 @@ def handle_local_mpc_step(
     blended_translation = (
         (1.0 - prior_weight) * translation_world + prior_weight * warm_residual
     )
+    signed_depth_residual = float(np.dot(translation_world, mean_pad_axis))
+    transverse_residual = (
+        translation_world - signed_depth_residual * mean_pad_axis
+    )
+    physical_contact_observed = bool(
+        np.any(forces >= config.physical_contact_threshold_n)
+    )
+    depth_guard_active = bool(
+        depth_guarded_transverse_intercept
+        and not physical_contact_observed
+        and np.linalg.norm(transverse_residual)
+        > config.depth_guard_transverse_tolerance_m
+    )
+    suppressed_depth_control = np.zeros(3, dtype=np.float64)
+    if depth_guard_active:
+        blended_depth = float(np.dot(blended_translation, mean_pad_axis))
+        suppressed_depth_control = blended_depth * mean_pad_axis
+        blended_translation = blended_translation - suppressed_depth_control
     remaining = max(1, config.horizon_steps - contact_window_step)
     translation_increment = _clip_norm(
         blended_translation / remaining, config.maximum_translation_step_m
@@ -498,6 +532,20 @@ def handle_local_mpc_step(
             ),
             "jaw_step_within_bound": bool(
                 abs(jaw_increment) <= config.maximum_jaw_step + 1.0e-12
+            ),
+        },
+        "contact_frame_guard": {
+            "enabled": bool(depth_guarded_transverse_intercept),
+            "active": depth_guard_active,
+            "physical_contact_observed": physical_contact_observed,
+            "transverse_tolerance_m": config.depth_guard_transverse_tolerance_m,
+            "transverse_residual_world_m": transverse_residual.tolist(),
+            "transverse_residual_norm_m": float(
+                np.linalg.norm(transverse_residual)
+            ),
+            "signed_depth_residual_m": signed_depth_residual,
+            "suppressed_depth_control_world_m": (
+                suppressed_depth_control.tolist()
             ),
         },
         "latch": {

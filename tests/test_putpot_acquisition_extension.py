@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 from judo_isaaclab.put_marker import SkillTrajectory
-from run_putpot_skill_program import _extend_handle_local_acquisition_window
+from run_putpot_skill_program import (
+    _assert_acquisition_only_stage,
+    _extend_handle_local_acquisition_window,
+    _resolved_program_command,
+)
 
 
 def _trajectory() -> SkillTrajectory:
@@ -70,3 +74,71 @@ def test_zero_acquisition_extension_preserves_non_contact_behavior():
     )
     assert unchanged_trajectory is trajectory
     assert unchanged_nominal is nominal
+
+
+def test_acquisition_extension_is_inserted_before_transport_suffix():
+    trajectory = _trajectory()
+    poses = np.concatenate(
+        (
+            trajectory.left_poses,
+            np.asarray(
+                [
+                    [0.2, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                    [0.3, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                ]
+            ),
+        )
+    )
+    trajectory = SkillTrajectory(
+        left_poses=poses,
+        right_poses=poses,
+        grippers=np.asarray(
+            [[-0.0475, -0.0475], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+        ),
+        stage_names=("approach", "contact_hold", "smooth_transport", "release"),
+        waypoint_steps={
+            "pregrasp": 0,
+            "bimanual_contact_hold": 1,
+            "transport_end": 2,
+            "release": 3,
+        },
+    )
+    nominal = np.arange(56, dtype=np.float64).reshape(4, 14)
+
+    extended, extended_nominal = _extend_handle_local_acquisition_window(
+        trajectory, nominal, 2, acquisition_end_step=1
+    )
+
+    assert extended.stage_names == (
+        "approach",
+        "contact_hold",
+        "handle_local_acquisition_extension",
+        "handle_local_acquisition_extension",
+        "smooth_transport",
+        "release",
+    )
+    np.testing.assert_array_equal(extended.left_poses[2:4], poses[[1, 1]])
+    np.testing.assert_array_equal(extended.left_poses[4:], poses[2:])
+    np.testing.assert_array_equal(extended_nominal[2:4], nominal[[1, 1]])
+    np.testing.assert_array_equal(extended_nominal[4:], nominal[2:])
+    assert extended.waypoint_steps["bimanual_contact_hold"] == 1
+    assert extended.waypoint_steps["handle_local_acquisition_extension"] == 3
+    assert extended.waypoint_steps["transport_end"] == 4
+    assert extended.waypoint_steps["release"] == 5
+
+
+def test_fail_closed_base_command_routes_without_plugin_and_stage_guard_blocks_transport():
+    held = {
+        "stage": "bimanual_handle_grasp_fail_closed",
+        "left_pose": np.arange(7, dtype=np.float64),
+        "right_pose": np.arange(7, dtype=np.float64) + 10.0,
+        "grippers": np.asarray([0.0, 0.0]),
+    }
+    assert _resolved_program_command(held, None) is held
+    plugin = {"stage": "plugin", "kind": "cartesian_target"}
+    assert _resolved_program_command(held, plugin) is plugin
+    _assert_acquisition_only_stage(held["stage"])
+    with pytest.raises(RuntimeError, match="forbidden stage"):
+        _assert_acquisition_only_stage("smooth_bimanual_transport")
+    with pytest.raises(RuntimeError, match="forbidden stage"):
+        _assert_acquisition_only_stage("release_and_withdraw")

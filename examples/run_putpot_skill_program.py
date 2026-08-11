@@ -39,9 +39,10 @@ def _extend_handle_local_acquisition_window(
     joint_nominal,
     extension_steps: int,
     *,
+    acquisition_end_step: int | None = None,
     maximum_extension_steps: int = 120,
 ):
-    """Append a bounded, stationary nominal window for event-gated acquisition."""
+    """Insert a bounded stationary window at the acquisition boundary."""
 
     if not 0 <= extension_steps <= maximum_extension_steps:
         raise ValueError(
@@ -54,44 +55,99 @@ def _extend_handle_local_acquisition_window(
 
     if "handle_local_acquisition_extension" in trajectory.waypoint_steps:
         raise ValueError("handle-local acquisition window was already extended")
+    if acquisition_end_step is None:
+        acquisition_end_step = int(
+            trajectory.waypoint_steps.get(
+                "bimanual_contact_hold", trajectory.steps - 1
+            )
+        )
+    acquisition_end_step = int(acquisition_end_step)
+    if not 0 <= acquisition_end_step < trajectory.steps:
+        raise ValueError("acquisition boundary is outside the trajectory")
+    insertion_step = acquisition_end_step + 1
+
     def repeat_pose(pose):
         return np.repeat(
             np.asarray(pose, dtype=np.float64)[None], extension_steps, axis=0
         )
+
+    def insert_rows(values, held):
+        return np.concatenate(
+            (
+                values[:insertion_step],
+                repeat_pose(held),
+                values[insertion_step:],
+            )
+        )
+
+    shifted_waypoints = {
+        name: int(step) + (extension_steps if int(step) > acquisition_end_step else 0)
+        for name, step in trajectory.waypoint_steps.items()
+    }
+    shifted_waypoints["handle_local_acquisition_extension"] = (
+        acquisition_end_step + extension_steps
+    )
     extended = SkillTrajectory(
-        left_poses=np.concatenate(
-            (trajectory.left_poses, repeat_pose(trajectory.left_poses[-1]))
+        left_poses=insert_rows(
+            trajectory.left_poses, trajectory.left_poses[acquisition_end_step]
         ),
-        right_poses=np.concatenate(
-            (trajectory.right_poses, repeat_pose(trajectory.right_poses[-1]))
+        right_poses=insert_rows(
+            trajectory.right_poses, trajectory.right_poses[acquisition_end_step]
         ),
         grippers=np.concatenate(
             (
-                trajectory.grippers,
+                trajectory.grippers[:insertion_step],
                 np.repeat(
-                    np.asarray(trajectory.grippers[-1], dtype=np.float64)[None],
+                    np.asarray(
+                        trajectory.grippers[acquisition_end_step], dtype=np.float64
+                    )[None],
                     extension_steps,
                     axis=0,
                 ),
+                trajectory.grippers[insertion_step:],
             )
         ),
-        stage_names=trajectory.stage_names
-        + ("handle_local_acquisition_extension",) * extension_steps,
-        waypoint_steps={
-            **trajectory.waypoint_steps,
-            "handle_local_acquisition_extension": trajectory.steps
-            + extension_steps
-            - 1,
-        },
+        stage_names=(
+            trajectory.stage_names[:insertion_step]
+            + ("handle_local_acquisition_extension",) * extension_steps
+            + trajectory.stage_names[insertion_step:]
+        ),
+        waypoint_steps=shifted_waypoints,
     )
     nominal = np.asarray(joint_nominal, dtype=np.float64)
     extended_nominal = np.concatenate(
         (
-            nominal,
-            np.repeat(nominal[-1][None], extension_steps, axis=0),
+            nominal[:insertion_step],
+            np.repeat(
+                nominal[acquisition_end_step][None], extension_steps, axis=0
+            ),
+            nominal[insertion_step:],
         )
     )
     return extended, extended_nominal
+
+
+_ACQUISITION_ONLY_FORBIDDEN_STAGE_TOKENS = (
+    "transport",
+    "release",
+    "withdraw",
+)
+
+
+def _assert_acquisition_only_stage(stage: str) -> None:
+    """Reject any transport/release command before it reaches physics."""
+
+    lowered = str(stage).lower()
+    if any(token in lowered for token in _ACQUISITION_ONLY_FORBIDDEN_STAGE_TOKENS):
+        raise RuntimeError(
+            f"acquisition-only execution rejected forbidden stage {stage!r}"
+        )
+
+
+def _resolved_program_command(base_command, plugin_command):
+    """Route the fail-closed base command when no plugin supplies an override."""
+
+    return base_command if plugin_command is None else plugin_command
 
 
 def _parser(argv: list[str] | None = None) -> argparse.Namespace:
@@ -272,6 +328,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Bounded event-gated acquisition continuation after the source-timed "
             "window; valid only with acquisition-only handle-local MPC."
+        ),
+    )
+    parser.add_argument(
+        "--target-handle-local-depth-guarded-intercept",
+        action="store_true",
+        help=(
+            "For the left local contact window, remove pad-depth motion until "
+            "the observed jaw midpoint is centered in the handle contact plane."
         ),
     )
     return parser.parse_args(argv)
@@ -2000,6 +2064,13 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "right handle-local bootstrap requires handle-local MPC acquisition"
         )
+    if (
+        args.target_handle_local_depth_guarded_intercept
+        and not args.target_handle_local_mpc_acquisition
+    ):
+        raise ValueError(
+            "depth-guarded intercept requires handle-local MPC acquisition"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -2797,6 +2868,7 @@ def main(argv: list[str] | None = None) -> None:
                 trajectory,
                 joint_nominal,
                 extension_steps,
+                acquisition_end_step=grasp_complete_step,
             )
             grasp_complete_step += extension_steps
         pregrasp_complete_step = (
@@ -3145,11 +3217,8 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 if command is not None and command["terminate"]:
                     break
-                stage = (
-                    trajectory.stage_names[step]
-                    if command is None
-                    else command["stage"]
-                )
+                resolved_command = _resolved_program_command(base_command, command)
+                stage = resolved_command["stage"]
                 integrate_ik = bool(integrate_target_ik)
                 if command is not None and command["kind"] == "joint_action":
                     action = torch.as_tensor(
@@ -3160,20 +3229,14 @@ def main(argv: list[str] | None = None) -> None:
                     desired_left.append(np.asarray(samples[-1]["left_eef_pose"]))
                     desired_right.append(np.asarray(samples[-1]["right_eef_pose"]))
                 else:
-                    left_target = (
-                        trajectory.left_poses[step]
-                        if command is None
-                        else np.asarray(command["left_pose"], dtype=np.float64)
+                    left_target = np.asarray(
+                        resolved_command["left_pose"], dtype=np.float64
                     )
-                    right_target = (
-                        trajectory.right_poses[step]
-                        if command is None
-                        else np.asarray(command["right_pose"], dtype=np.float64)
+                    right_target = np.asarray(
+                        resolved_command["right_pose"], dtype=np.float64
                     )
-                    grippers = (
-                        trajectory.grippers[step]
-                        if command is None
-                        else np.asarray(command["grippers"], dtype=np.float64)
+                    grippers = np.asarray(
+                        resolved_command["grippers"], dtype=np.float64
                     )
                     grippers = np.asarray(grippers, dtype=np.float64).copy()
                     joint_nominal_weight = None
@@ -3356,6 +3419,10 @@ def main(argv: list[str] | None = None) -> None:
                                 current_jaw_command=current_jaw,
                                 robust_streak=active_streak,
                                 require_peer_latch=active_arm == "left",
+                                depth_guarded_transverse_intercept=bool(
+                                    active_arm == "left"
+                                    and args.target_handle_local_depth_guarded_intercept
+                                ),
                                 config=local_mpc_config,
                             )
                             local_mpc_frame_receipts.append(
@@ -3451,6 +3518,8 @@ def main(argv: list[str] | None = None) -> None:
                     desired_right.append(right_target)
                 if command is not None:
                     controller_command_count += 1
+            if args.acquisition_only:
+                _assert_acquisition_only_stage(stage)
             observation, _, terminated, truncated, info = env.step(action)
             sample = _sample(env, step, stage, info)
             demo_recorder.append(
@@ -5054,11 +5123,24 @@ def main(argv: list[str] | None = None) -> None:
         centered_on_cooktop = bool(
             final["center_error_m"] <= CENTERED_ON_COOKTOP_TOLERANCE_M
         )
+        acquisition_only_no_forbidden_stages = bool(
+            not args.acquisition_only
+            or all(
+                not any(
+                    token in str(row["program_stage"]).lower()
+                    for token in _ACQUISITION_ONLY_FORBIDDEN_STAGE_TOKENS
+                )
+                for row in samples
+            )
+        )
         checks = {
             "one_reset": True,
             "zero_inter_stage_resets": True,
             "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
             "contact_backed_grasps_only": True,
+            "acquisition_only_no_transport_or_release": (
+                acquisition_only_no_forbidden_stages
+            ),
             "smooth_collision_aware_transport": bool(
                 not args.acquisition_only
                 and (
@@ -5190,6 +5272,11 @@ def main(argv: list[str] | None = None) -> None:
                         direct_replay.get("terminal", {}).get("task_success", True),
                     )
                 )
+        if args.acquisition_only:
+            acceptance_checks = dict(acceptance_checks)
+            acceptance_checks["acquisition_only_no_transport_or_release"] = checks[
+                "acquisition_only_no_transport_or_release"
+            ]
         demo_artifact = None
         if args.demo_hdf5 and checks["accepted_task_success"] and all(acceptance_checks.values()):
             from judo_isaaclab.demo_artifact import relative_asset_paths
@@ -5258,7 +5345,17 @@ def main(argv: list[str] | None = None) -> None:
                     "executed_steps": int(
                         args.target_handle_local_mpc_acquisition_extension_steps
                     ),
-                    "transport_commands": False,
+                    "inserted_at_acquisition_boundary": True,
+                    "transport_commands": not checks[
+                        "acquisition_only_no_transport_or_release"
+                    ],
+                },
+                "depth_guarded_transverse_intercept": {
+                    "enabled_for_left_only": bool(
+                        args.target_handle_local_depth_guarded_intercept
+                    ),
+                    "right_bootstrap_unchanged": True,
+                    "inward_depth_suppressed_until_transverse_centering": True,
                 },
                 "config": handle_local_mpc_config_receipt(local_mpc_config),
                 "frame_receipts": local_mpc_frame_receipts,

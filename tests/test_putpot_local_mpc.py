@@ -148,6 +148,52 @@ def test_local_mpc_output_is_deterministic_and_frame_receipt_is_complete():
     assert not handle_local_mpc_frame_receipt_complete(incomplete_latch)
 
 
+def test_depth_guard_centers_transverse_contact_frame_before_inward_motion():
+    guarded = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=20,
+            observed_handle_contact_frame=_pose(x=0.100, z=-0.030),
+        ),
+        depth_guarded_transverse_intercept=True,
+    )
+    control = np.asarray(
+        guarded.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    guard = guarded.frame_receipt["contact_frame_guard"]
+    assert guard["enabled"]
+    assert guard["active"]
+    assert guard["transverse_residual_norm_m"] == pytest.approx(0.100)
+    assert guard["signed_depth_residual_m"] == pytest.approx(-0.030)
+    assert np.dot(control, [0.0, 0.0, 1.0]) == pytest.approx(0.0, abs=1.0e-12)
+    assert np.linalg.norm(control) == pytest.approx(0.004)
+
+    centered = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=20,
+            observed_handle_contact_frame=_pose(x=0.005, z=-0.030),
+        ),
+        depth_guarded_transverse_intercept=True,
+    )
+    assert not centered.frame_receipt["contact_frame_guard"]["active"]
+    assert centered.frame_receipt["executed_control"]["translation_world_m"][2] < 0.0
+
+
+def test_depth_guard_is_opt_in_and_preserves_default_controller_output():
+    values = _inputs(
+        contact_window_step=20,
+        observed_handle_contact_frame=_pose(x=0.100, z=-0.030),
+    )
+    default = handle_local_mpc_step(**values)
+    explicit_off = handle_local_mpc_step(
+        **values, depth_guarded_transverse_intercept=False
+    )
+    np.testing.assert_array_equal(
+        default.wrist_target_pose, explicit_off.wrist_target_pose
+    )
+    assert default.jaw_command == explicit_off.jaw_command
+    assert default.frame_receipt == explicit_off.frame_receipt
+
+
 def test_non_contact_activation_and_nominal_behavior_are_unchanged():
     assert not handle_local_mpc_active(
         enabled=False,
