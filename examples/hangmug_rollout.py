@@ -82,6 +82,11 @@ def _start_replay_tail(
                 mug_body_size=target_parts.body_size,
                 target_branch=tail.target_branch,
                 collision_steps=receipt["collision_steps"],
+                minimum_displacement_m=(
+                    0.5 * float(np.max(target_parts.body_size[:2]))
+                    + args.clean_insertion_tracking_margin_m
+                    if args.clean_insertion_tracking_margin_m > 0.0 else 0.0
+                ),
             )
             tail = replace_replay_hang_tail_path(tail, corrected)
             receipt = exact_body_collision_receipt(
@@ -376,6 +381,7 @@ def execute_hangmug_rollout(
                     "executed_mug_poses": mug_poses[
                         0 if repair_prefix_steps is None else repair_prefix_steps :
                     ],
+                    "tracking_margin_m": args.clean_insertion_tracking_margin_m,
                 }
                 previous_repair_kwargs = dict(repair_kwargs)
                 previous_repair_kwargs["right_contact_in_mug"] = (

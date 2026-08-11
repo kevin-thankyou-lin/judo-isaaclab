@@ -183,6 +183,45 @@ def test_compensated_insertion_is_rescreened_before_execution(monkeypatch):
     np.testing.assert_allclose(corrected.right_poses[3], trajectory.right_poses[3])
 
 
+def test_tracking_margin_expands_radial_clearance(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 4, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 4, axis=0),
+        grippers=np.zeros((4, 2)),
+        stage_names=("insert",) * 4,
+        waypoint_steps={"branch_insert": 2},
+    )
+    receipts = iter((
+        {"passed": False, "collision_count": 1, "collision_steps": [1]},
+        {"passed": True, "collision_count": 0, "collision_steps": []},
+    ))
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+    observed = {}
+
+    def correct(path, **kwargs):
+        observed.update(kwargs)
+        return path, {"correction_window": [0, 1]}
+
+    monkeypatch.setattr(clean_insertion, "apply_branch_radial_clearance", correct)
+    repair_compensated_insertion_path(
+        trajectory,
+        completed_step=0,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.06, 0.08, 0.10],
+        target_branch=object(),
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        tracking_margin_m=0.025,
+    )
+
+    assert observed["minimum_displacement_m"] == pytest.approx(0.065)
+
+
 def test_held_suffix_is_rescreened_without_rewriting_completed_steps(monkeypatch):
     trajectory = SkillTrajectory(
         left_poses=np.repeat(IDENTITY[None], 6, axis=0),

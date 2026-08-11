@@ -263,6 +263,7 @@ def repair_compensated_insertion_path(
     target_branch: Any,
     target_assets: dict[str, str],
     executed_mug_poses: Any | None = None,
+    tracking_margin_m: float = 0.0,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Exact-screen and repair an observation-compensated insertion suffix."""
 
@@ -279,6 +280,13 @@ def repair_compensated_insertion_path(
     if contact.shape != (7,):
         raise ValueError("right_contact_in_mug must have shape (7,)")
     contact_inverse = inverse_pose(contact)
+    tracking_margin = float(tracking_margin_m)
+    if tracking_margin < 0.0:
+        raise ValueError("tracking_margin_m must be nonnegative")
+    body_half_width = 0.5 * float(np.max(np.asarray(mug_body_size)[:2]))
+    minimum_clearance = (
+        body_half_width + tracking_margin if tracking_margin > 0.0 else 0.0
+    )
     mug_path = np.asarray([
         compose_pose(pose, contact_inverse)
         for pose in trajectory.right_poses[: audit_end + 1]
@@ -312,6 +320,7 @@ def repair_compensated_insertion_path(
         mug_body_size=mug_body_size,
         target_branch=target_branch,
         collision_steps=[step - future_start for step in collision_steps],
+        minimum_displacement_m=minimum_clearance,
     )
     corrected = mug_path.copy()
     corrected[future_start:] = corrected_future
@@ -335,7 +344,7 @@ def repair_compensated_insertion_path(
     receipt["pre_correction_collision_steps"] = initial["collision_steps"]
     receipt["geometry_correction"] = correction
     if not receipt["passed"]:
-        clearance = 0.5 * float(np.max(np.asarray(mug_body_size)[:2]))
+        clearance = body_half_width + tracking_margin
         corrected_future, expanded = apply_branch_radial_clearance(
             mug_path[future_start:],
             tree_pose=tree_pose,
