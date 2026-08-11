@@ -459,8 +459,14 @@ def _reanchor_full_skill(
                     sample["mug_pose"],
                 )
                 correction = trajectory.right_poses[-1, :3] - before[-1, :3]
+                quaternion_dot = abs(float(np.dot(
+                    trajectory.right_poses[-1, 3:], before[-1, 3:]
+                )))
                 print("HANGMUG_INSERT_COMPENSATION=" + json.dumps({
                     "applied_translation_m": correction.tolist(),
+                    "applied_rotation_rad": float(
+                        2.0 * np.arccos(np.clip(quaternion_dot, -1.0, 1.0))
+                    ),
                     "observed_mug_position_m": list(sample["mug_pose"][:3]),
                     "intended_support_position_m": intended_final[:3].tolist(),
                 }, sort_keys=True))

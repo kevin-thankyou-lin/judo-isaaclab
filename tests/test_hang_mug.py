@@ -67,6 +67,14 @@ def test_low_branch_insert_compensation_only_corrects_below_support_bias():
     assert corrected.right_poses[unload, :3] == pytest.approx(
         trajectory.right_poses[unload, :3] + [0.0, -0.02, 0.03]
     )
+    rotated = compensate_low_branch_insert(
+        trajectory,
+        [0.3, 0.0, 0.04, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)],
+        _pose(0.3, 0.0, 0.01),
+    )
+    assert abs(float(np.dot(
+        rotated.right_poses[unload, 3:], trajectory.right_poses[unload, 3:]
+    ))) == pytest.approx(np.sqrt(0.5))
     unchanged = compensate_low_branch_insert(
         trajectory, _pose(0.3, 0.0, 0.0), _pose(0.3, 0.0, 0.01)
     )

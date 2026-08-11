@@ -317,8 +317,8 @@ def compensate_low_branch_insert(
         raise ValueError("minimum_vertical_error_m must be nonnegative")
     intended = _pose(intended_mug_pose, "intended_mug_pose")
     observed = _pose(observed_mug_pose, "observed_mug_pose")
-    correction = intended[:3] - observed[:3]
-    if correction[2] <= minimum_vertical_error_m:
+    translation = intended[:3] - observed[:3]
+    if translation[2] <= minimum_vertical_error_m:
         return trajectory
 
     start = trajectory.waypoint_steps["branch_insert"] + 1
@@ -326,11 +326,21 @@ def compensate_low_branch_insert(
     steps = end - start + 1
     if steps <= 0:
         raise ValueError("branch_unload must follow branch_insert")
-    fraction = np.linspace(1.0 / steps, 1.0, steps)
-    smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    world_correction = compose_pose(intended, inverse_pose(observed))
+    identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    corrections = interpolate_poses(identity, world_correction, steps)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[start : end + 1, :3] += smooth[:, None] * correction[None]
-    right[end + 1 :, :3] += correction
+    right[start : end + 1] = np.asarray(
+        [
+            compose_pose(correction, pose)
+            for correction, pose in zip(corrections, right[start : end + 1])
+        ],
+        dtype=np.float64,
+    )
+    right[end + 1 :] = np.asarray(
+        [compose_pose(world_correction, pose) for pose in right[end + 1 :]],
+        dtype=np.float64,
+    )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
