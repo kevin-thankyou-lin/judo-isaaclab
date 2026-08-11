@@ -114,6 +114,34 @@ def test_low_branch_insert_compensation_can_smooth_only_future_hold_steps():
     )
 
 
+def test_low_branch_insert_compensation_can_correct_first_support_step():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=2,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=6, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    insert = trajectory.waypoint_steps["branch_insert"]
+    unload = trajectory.waypoint_steps["branch_unload"]
+    corrected = compensate_low_branch_insert(
+        trajectory,
+        _pose(0.3, 0.0, 0.0200),
+        _pose(0.3, 0.0, 0.0177),
+        minimum_vertical_error_m=0.001,
+        correction_ramp_steps=1,
+    )
+
+    assert corrected.right_poses[insert] == pytest.approx(
+        trajectory.right_poses[insert]
+    )
+    assert corrected.right_poses[insert + 1 : unload + 1, 2] == pytest.approx(
+        trajectory.right_poses[insert + 1 : unload + 1, 2] + 0.0023
+    )
+
+
 def test_held_convergence_applies_second_smooth_insert_feedback(capsys):
     program = HangMugSkillProgram(_pose(), _pose())
     program.handle_to_branch_insert(
@@ -460,6 +488,7 @@ def test_insert_feedback_corrects_small_measured_vertical_deficit(capsys):
     )
     receipt = capsys.readouterr().out
     assert '"minimum_vertical_error_m": 0.001' in receipt
+    assert '"correction_ramp_steps": 1' in receipt
 
 
 def test_insert_contact_reanchor_requires_exact_suffix_screen(capsys):

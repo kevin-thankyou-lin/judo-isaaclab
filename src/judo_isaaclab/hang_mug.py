@@ -315,6 +315,7 @@ def compensate_low_branch_insert(
     *,
     minimum_vertical_error_m: float = 0.005,
     completed_step: int | None = None,
+    correction_ramp_steps: int | None = None,
 ) -> SkillTrajectory:
     """Compensate a measured below-support insertion bias before release.
 
@@ -352,15 +353,36 @@ def compensate_low_branch_insert(
         raise ValueError("branch_unload must follow branch_insert")
     world_correction = compose_pose(intended, inverse_pose(observed))
     identity = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-    corrections = interpolate_poses(identity, world_correction, steps)
+    if correction_ramp_steps is None:
+        ramp_steps = steps
+        corrections = interpolate_poses(identity, world_correction, ramp_steps)
+    else:
+        ramp_steps = int(correction_ramp_steps)
+        if not 1 <= ramp_steps <= steps:
+            raise ValueError(
+                "correction_ramp_steps must select at least one available "
+                "held-support step"
+            )
+        corrections = interpolate_poses(
+            identity, world_correction, ramp_steps + 1
+        )[1:]
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[start : end + 1] = np.asarray(
+    ramp_end = start + ramp_steps
+    right[start:ramp_end] = np.asarray(
         [
             compose_pose(correction, pose)
-            for correction, pose in zip(corrections, right[start : end + 1])
+            for correction, pose in zip(corrections, right[start:ramp_end])
         ],
         dtype=np.float64,
     )
+    if ramp_end <= end:
+        right[ramp_end : end + 1] = np.asarray(
+            [
+                compose_pose(world_correction, pose)
+                for pose in right[ramp_end : end + 1]
+            ],
+            dtype=np.float64,
+        )
     right[end + 1 :] = np.asarray(
         [compose_pose(world_correction, pose) for pose in right[end + 1 :]],
         dtype=np.float64,
