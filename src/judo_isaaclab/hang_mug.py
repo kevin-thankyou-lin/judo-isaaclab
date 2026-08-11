@@ -297,12 +297,18 @@ class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 
     def __init__(
-        self, left_start: Any, right_start: Any, *, opened: float = -0.0475
+        self,
+        left_start: Any,
+        right_start: Any,
+        *,
+        opened: float = -0.0475,
+        left_gripper: float | None = None,
+        right_gripper: float | None = None,
     ) -> None:
         self._left = _pose(left_start, "left_start")
         self._right = _pose(right_start, "right_start")
-        self._left_gripper = float(opened)
-        self._right_gripper = float(opened)
+        self._left_gripper = float(opened if left_gripper is None else left_gripper)
+        self._right_gripper = float(opened if right_gripper is None else right_gripper)
         self._initial_left = self._left.copy()
         self._initial_right = self._right.copy()
         self._initial_grippers = (self._left_gripper, self._right_gripper)

@@ -105,3 +105,6 @@ def test_hang_tail_preserves_observed_contact_and_targets_measured_branch():
     assert final_handle[:3] == pytest.approx(target_support_world[:3])
     assert tail.trajectory.stage_names[0] == "handle_to_branch_insertion"
     assert tail.trajectory.stage_names[-1] == "stable_settle"
+    assert tail.trajectory.grippers[0] == pytest.approx([-0.0475, 0.0])
+    branch_unload = tail.trajectory.waypoint_steps["branch_unload"]
+    assert np.all(tail.trajectory.grippers[: branch_unload + 1, 1] == 0.0)

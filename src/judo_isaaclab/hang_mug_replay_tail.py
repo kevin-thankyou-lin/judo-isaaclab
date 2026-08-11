@@ -107,7 +107,12 @@ def build_replay_hang_tail(
     approach_mug[:3] += branch_tangent * float(insert_clearance_m)
     approach_mug[2] += 0.03
 
-    program = HangMugSkillProgram(left_start, right_start)
+    program = HangMugSkillProgram(
+        left_start,
+        right_start,
+        left_gripper=-0.0475,
+        right_gripper=0.0,
+    )
     program.handle_to_branch_insert(
         compose_pose(transport_mug, right_contact),
         compose_pose(approach_mug, right_contact),
