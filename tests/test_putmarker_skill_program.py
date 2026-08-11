@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -113,3 +114,15 @@ def test_terminal_close_extension_holds_final_sparse_nominal():
         [3.0, 4.0],
         [3.0, 4.0],
     ]
+
+
+def test_runner_derives_protocol_claims_from_measured_receipt():
+    source = inspect.getsource(_module().main)
+
+    assert '"one_reset": True' not in source
+    assert '"zero_inter_stage_resets": True' not in source
+    assert '"teleports_after_reset": 0' not in source
+    assert "protocol_recorder.record_environment_reset" in source
+    assert "protocol_recorder.record_state_restore" in source
+    assert "protocol_recorder.record_step" in source
+    assert '"execution_instrumentation": protocol_receipt' in source

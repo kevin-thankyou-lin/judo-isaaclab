@@ -1738,7 +1738,10 @@ def main() -> None:
                     "termination_events": protocol_receipt[
                         "termination_events"
                     ],
-                    "contact_backed_grasps_only": all(
+                    "contact_backed_grasps_only": bool(
+                        protocol_receipt["contact_channels"]
+                    )
+                    and all(
                         channel["source"] == "env.robot.is_grasping"
                         for channel in protocol_receipt["contact_channels"].values()
                     ),
