@@ -30,7 +30,7 @@
         "cpu",
         "--require-cpu-physics",
         "--grasp-assist-mechanism",
-        "friction"
+        "task_config"
       ]
     }
   ]

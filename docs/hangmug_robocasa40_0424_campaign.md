@@ -5,6 +5,9 @@ This lane consumes the immutable dataset at
 `obj_1`; the runner maps those labels to task-native `mug` and `mug_tree` only
 in memory.  Source file bytes and hashes are never rewritten.
 
+The lane uses `task_config` grasp assistance to match the successfully replayed
+source environment.  Any later mechanism comparison must use a separate receipt.
+
 The input inventory contains 40 `teleop/mug_*.hdf5` paths.  The pinned
 `teleop/mug_003.hdf5` is a 96-byte truncated HDF5 and is retained as an explicit
 input blocker.  Thirty-nine inputs are runnable.  The campaign cannot report
