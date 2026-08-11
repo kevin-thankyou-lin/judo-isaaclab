@@ -81,10 +81,10 @@ def test_branch_tip_support_clearance_retains_radius_beyond_handle():
     )
 
     assert receipt["method"] == "geometry_bounded_branch_tip_support_clearance"
-    assert receipt["displacement_m"] == pytest.approx(0.0175)
-    assert receipt["branch_tip_engagement_margin_m"] == pytest.approx(0.0025)
+    assert receipt["displacement_m"] == pytest.approx(0.0195)
+    assert receipt["branch_tip_engagement_margin_m"] == pytest.approx(0.0005)
     np.testing.assert_allclose(corrected[:6], poses[:6])
-    assert corrected[-1, 0] == pytest.approx(0.0175)
+    assert corrected[-1, 0] == pytest.approx(0.0195)
     assert receipt["terminal_pose_changed"] is True
 
 

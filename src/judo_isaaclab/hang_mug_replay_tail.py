@@ -413,8 +413,8 @@ def apply_branch_tip_support_clearance(
 
     Midpoint seating can put a wide mug body into the tree even when the handle
     opening itself is valid.  Move the support relationship outward by the
-    geometry-derived free axial span while leaving one quarter branch radius
-    beyond the handle.  The remaining positive overlap retains engagement;
+    geometry-derived free axial span while leaving five percent of one branch
+    radius beyond the handle.  The remaining positive overlap retains engagement;
     a quintic ramp keeps the incoming insertion path continuous.
     """
 
@@ -431,7 +431,7 @@ def apply_branch_tip_support_clearance(
     if handle_span <= 0.0:
         raise ValueError("handle_axis_span_m must be positive")
     remaining_half_span = 0.5 * (float(target_branch.length_m) - handle_span)
-    engagement_margin = 0.25 * float(target_branch.radius_m)
+    engagement_margin = 0.05 * float(target_branch.radius_m)
     displacement = remaining_half_span - engagement_margin
     if displacement <= 0.0:
         raise ValueError(
