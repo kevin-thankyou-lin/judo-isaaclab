@@ -186,23 +186,27 @@ def test_collision_unsafe_feedback_retains_previous_suffix(monkeypatch):
     assert calls[1][1]["completed_step"] == 3
 
 
-def test_insert_tracking_gain_is_scoped_through_screened_support_segment():
+def test_insert_and_support_tracking_gains_have_separate_scopes():
     trajectory = SimpleNamespace(
         waypoint_steps={
             "branch_approach": 100, "branch_insert": 171,
             "branch_unload": 183,
         }
     )
-    args = SimpleNamespace(replay_hang_insert_dls_gain=2.0)
+    args = SimpleNamespace(
+        replay_hang_insert_dls_gain=2.0,
+        replay_hang_support_dls_gain=4.0,
+    )
     gain = hangmug_rollout._insertion_tracking_gain
 
     assert gain(trajectory, 100, args, base_gain=1.0) == 1.0
     assert gain(trajectory, 101, args, base_gain=1.0) == 2.0
     assert gain(trajectory, 171, args, base_gain=1.0) == 2.0
-    assert gain(trajectory, 172, args, base_gain=1.0) == 2.0
-    assert gain(trajectory, 183, args, base_gain=1.0) == 2.0
+    assert gain(trajectory, 172, args, base_gain=1.0) == 4.0
+    assert gain(trajectory, 183, args, base_gain=1.0) == 4.0
     assert gain(trajectory, 184, args, base_gain=1.0) == 1.0
     assert gain(trajectory, 150, args, base_gain=2.5) == 2.5
+    assert gain(trajectory, 175, args, base_gain=4.5) == 4.5
 
 
 def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():

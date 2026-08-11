@@ -180,13 +180,14 @@ def _screen_or_reject_observation_feedback(
 def _insertion_tracking_gain(
     trajectory, trajectory_step: int, args, *, base_gain: float,
 ) -> float:
-    """Apply and receipt an optional gain through screened insert support."""
+    """Apply and receipt separate optional gains for insert and support."""
 
     approach = int(trajectory.waypoint_steps["branch_approach"])
     insert = int(trajectory.waypoint_steps["branch_insert"])
     unload = int(trajectory.waypoint_steps.get("branch_unload", insert))
     insert_gain = float(getattr(args, "replay_hang_insert_dls_gain", 1.0))
-    if approach < trajectory_step <= unload:
+    support_gain = float(getattr(args, "replay_hang_support_dls_gain", 1.0))
+    if approach < trajectory_step <= insert:
         gain = max(float(base_gain), insert_gain)
         if trajectory_step == approach + 1:
             print(
@@ -194,6 +195,21 @@ def _insertion_tracking_gain(
                 + json.dumps(
                     {
                         "branch_approach": approach,
+                        "branch_insert": insert,
+                        "right_dls_gain": gain,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+        return gain
+    if insert < trajectory_step <= unload:
+        gain = max(float(base_gain), support_gain)
+        if trajectory_step == insert + 1:
+            print(
+                "HANGMUG_SUPPORT_TRACKING_GAIN="
+                + json.dumps(
+                    {
                         "branch_insert": insert,
                         "branch_unload": unload,
                         "right_dls_gain": gain,

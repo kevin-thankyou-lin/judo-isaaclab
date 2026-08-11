@@ -35,7 +35,16 @@ def add_replay_repair_arguments(parser: Any) -> None:
         default=1.0,
         help=(
             "Scale only the receiving arm's incremental IK correction from "
-            "branch approach through the held insertion support; defaults to "
+            "branch approach through insertion; defaults to unchanged control."
+        ),
+    )
+    parser.add_argument(
+        "--replay-hang-support-dls-gain",
+        type=float,
+        default=1.0,
+        help=(
+            "Scale only the receiving arm's incremental IK correction after "
+            "insertion while the mug is held on the branch; defaults to "
             "unchanged control."
         ),
     )
@@ -61,5 +70,7 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-release-steps must be positive")
     if not 0.0 < args.replay_hang_insert_dls_gain <= 4.0:
         parser.error("--replay-hang-insert-dls-gain must be in (0, 4]")
+    if not 0.0 < args.replay_hang_support_dls_gain <= 4.0:
+        parser.error("--replay-hang-support-dls-gain must be in (0, 4]")
     if args.replay_hang_insert_time_scale < 1:
         parser.error("--replay-hang-insert-time-scale must be positive")
