@@ -333,20 +333,52 @@ def object_path_collision_reports(
         if sampled_steps[-1] != len(object_poses) - 1:
             sampled_steps.append(len(object_poses) - 1)
         collision_steps = []
+        penetration_depths_m = []
         for step in sampled_steps:
             if dynamic_tree:
                 manager.set_transform("tree", _pose_matrix(tree_poses[step]))
             manager.set_transform(
                 "object_body", _pose_matrix(object_poses[step])
             )
-            if manager.in_collision_internal():
+            collision, contacts = manager.in_collision_internal(
+                return_data=True
+            )
+            if collision:
                 collision_steps.append(step)
+                penetration_depths_m.append(
+                    max(
+                        (float(contact.depth) for contact in contacts),
+                        default=0.0,
+                    )
+                )
+        consecutive_collision_samples = 0
+        maximum_consecutive_collision_samples = 0
+        previous_step = None
+        for step in collision_steps:
+            if previous_step is not None and step == previous_step + sample_stride:
+                consecutive_collision_samples += 1
+            else:
+                consecutive_collision_samples = 1
+            maximum_consecutive_collision_samples = max(
+                maximum_consecutive_collision_samples,
+                consecutive_collision_samples,
+            )
+            previous_step = step
         reports.append(
             {
                 "candidate_index": candidate_index,
                 "sampled_steps": sampled_steps,
                 "collision_steps": collision_steps,
                 "collision_count": len(collision_steps),
+                "penetration_depths_m": penetration_depths_m,
+                "maximum_penetration_depth_m": (
+                    0.0
+                    if not penetration_depths_m
+                    else max(penetration_depths_m)
+                ),
+                "maximum_consecutive_collision_samples": (
+                    maximum_consecutive_collision_samples
+                ),
                 "first_collision_step": (
                     None if not collision_steps else int(collision_steps[0])
                 ),

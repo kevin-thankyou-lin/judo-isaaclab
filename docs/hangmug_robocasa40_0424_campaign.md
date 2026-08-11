@@ -8,11 +8,26 @@ in memory.  Source file bytes and hashes are never rewritten.
 The lane uses `task_config` grasp assistance to match the successfully replayed
 source environment.  Any later mechanism comparison must use a separate receipt.
 
-The input inventory contains 40 `teleop/mug_*.hdf5` paths.  The pinned
-`teleop/mug_003.hdf5` is a 96-byte truncated HDF5 and is retained as an explicit
-input blocker.  Thirty-nine inputs are runnable.  The campaign cannot report
-40/40 until an asset-matched, hash-verified recovery of that canonical file is
-provided.
+The input inventory contains 40 `teleop/mug_*.hdf5` paths. The original strict
+campaign retains the pinned 96-byte `teleop/mug_003.hdf5` as an explicit input
+blocker and therefore has 39 runnable inputs.
+
+The success-first campaign recovers the 40th *target scene* without inventing a
+second action source. `examples/create_hangmug_target_descriptor.py` copies only
+the first state from the hash-pinned official `mug_003_rescale_0.hdf5`, relabels
+it to the official base `objaverse_mug_003` and `MugTree_011` assets, and writes
+one synthetic zero action. Its provenance marks it as a reset descriptor that
+can never be admitted as a source demonstration. All 40 rollouts still use only
+`teleop/mug_001.hdf5` as their action/keyframe authority.
+
+`configs/hangmug_robocasa40_0424_success_first_campaign.json` also enforces:
+
+- original insertion/support controller gains (`1.0`, with zero gain lead);
+- waypoint retiming, branch selection, and geometry reanchoring as the only
+  adaptation controls; and
+- an exact-mesh minor-contact budget of at most 8 total frames, 3 consecutive
+  frames, and 1 mm penetration. Stable release and coded task success remain
+  mandatory; deeper or sustained body contact still fails closed.
 
 Preflight without Isaac:
 

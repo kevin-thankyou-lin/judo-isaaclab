@@ -82,8 +82,16 @@ def exact_body_collision_receipt(
     target_assets: dict[str, str],
     start_step: int = 0,
     release_step: int | None = None,
+    maximum_collision_frames: int = 0,
+    maximum_consecutive_collision_frames: int = 0,
+    maximum_penetration_depth_m: float = 0.0,
 ) -> dict[str, Any]:
-    """Require zero cup-body/tree intersections while allowing handle contact."""
+    """Audit cup-body/tree contacts against an explicit bounded budget.
+
+    Defaults preserve the original strict zero-contact contract.  A task may
+    opt into shallow, transient body contact without weakening the exact-mesh
+    audit or allowing sustained/deep collisions.
+    """
 
     from .collision_screening import (
         load_usd_collision_mesh,
@@ -94,6 +102,14 @@ def exact_body_collision_receipt(
     release = len(poses) if release_step is None else int(release_step)
     if not 0 <= start_step < release <= len(poses):
         raise ValueError("clean insertion window must lie within the mug path")
+    if maximum_collision_frames < 0:
+        raise ValueError("maximum_collision_frames must be nonnegative")
+    if maximum_consecutive_collision_frames < 0:
+        raise ValueError(
+            "maximum_consecutive_collision_frames must be nonnegative"
+        )
+    if maximum_penetration_depth_m < 0.0:
+        raise ValueError("maximum_penetration_depth_m must be nonnegative")
     body_indices, handle_indices = _mug_body_collision_indices(
         target_assets["mug"]
     )
@@ -112,11 +128,21 @@ def exact_body_collision_receipt(
         sample_stride=1,
     )[0]
     collisions = [start_step + step for step in report["collision_steps"]]
+    maximum_depth = float(report["maximum_penetration_depth_m"])
+    maximum_consecutive = int(
+        report["maximum_consecutive_collision_samples"]
+    )
+    within_budget = bool(
+        len(collisions) <= maximum_collision_frames
+        and maximum_consecutive <= maximum_consecutive_collision_frames
+        and maximum_depth <= maximum_penetration_depth_m
+    )
     return {
         "method": report["method"],
         "semantic_contract": (
-            "exact cup-body/tree intersection forbidden before release; "
-            "handle/tree contact allowed"
+            "exact cup-body/tree contact measured before release; handle/tree "
+            "contact allowed; body contact must remain within the receipted "
+            "frame, consecutive-frame, and penetration-depth budget"
         ),
         "mug_body_collision_indices": list(body_indices),
         "allowed_mug_handle_collision_indices": list(handle_indices),
@@ -125,7 +151,21 @@ def exact_body_collision_receipt(
         "sampled_steps": release - start_step,
         "collision_steps": collisions,
         "collision_count": len(collisions),
-        "passed": not collisions,
+        "penetration_depths_m": report["penetration_depths_m"],
+        "maximum_penetration_depth_m": maximum_depth,
+        "maximum_consecutive_collision_frames": maximum_consecutive,
+        "contact_budget": {
+            "maximum_collision_frames": int(maximum_collision_frames),
+            "maximum_consecutive_collision_frames": int(
+                maximum_consecutive_collision_frames
+            ),
+            "maximum_penetration_depth_m": float(
+                maximum_penetration_depth_m
+            ),
+        },
+        "strict_collision_free": not collisions,
+        "within_contact_budget": within_budget,
+        "passed": within_budget,
         "tree_pose_mode": report["tree_pose_mode"],
     }
 

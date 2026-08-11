@@ -6,6 +6,7 @@ import pytest
 import judo_isaaclab.hang_mug_clean_insertion as clean_insertion
 from judo_isaaclab.hang_mug_clean_insertion import (
     apply_branch_radial_clearance,
+    exact_body_collision_receipt,
     repair_compensated_insertion_path,
 )
 from judo_isaaclab.put_marker import SkillTrajectory
@@ -13,6 +14,83 @@ from judo_isaaclab.semantic_parts import BranchPart
 
 
 IDENTITY = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+
+
+def test_exact_body_receipt_allows_only_bounded_minor_contact(monkeypatch):
+    monkeypatch.setattr(
+        clean_insertion,
+        "_mug_body_collision_indices",
+        lambda _path: ((0,), (1,)),
+    )
+    monkeypatch.setattr(clean_insertion, "_asset_root_usd", lambda path: path)
+    import judo_isaaclab.collision_screening as screening
+
+    monkeypatch.setattr(screening, "load_usd_collision_mesh", lambda *args: object())
+    monkeypatch.setattr(
+        screening,
+        "object_path_collision_reports",
+        lambda *args, **kwargs: [
+            {
+                "method": "python-fcl exact mesh intersection",
+                "collision_steps": [1, 2],
+                "penetration_depths_m": [0.0002, 0.0004],
+                "maximum_penetration_depth_m": 0.0004,
+                "maximum_consecutive_collision_samples": 2,
+                "tree_pose_mode": "static",
+            }
+        ],
+    )
+
+    receipt = exact_body_collision_receipt(
+        np.repeat(IDENTITY[None], 4, axis=0),
+        tree_pose=IDENTITY,
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        maximum_collision_frames=3,
+        maximum_consecutive_collision_frames=2,
+        maximum_penetration_depth_m=0.0005,
+    )
+
+    assert receipt["strict_collision_free"] is False
+    assert receipt["within_contact_budget"] is True
+    assert receipt["passed"] is True
+
+
+def test_exact_body_receipt_rejects_deep_contact(monkeypatch):
+    monkeypatch.setattr(
+        clean_insertion,
+        "_mug_body_collision_indices",
+        lambda _path: ((0,), (1,)),
+    )
+    monkeypatch.setattr(clean_insertion, "_asset_root_usd", lambda path: path)
+    import judo_isaaclab.collision_screening as screening
+
+    monkeypatch.setattr(screening, "load_usd_collision_mesh", lambda *args: object())
+    monkeypatch.setattr(
+        screening,
+        "object_path_collision_reports",
+        lambda *args, **kwargs: [
+            {
+                "method": "python-fcl exact mesh intersection",
+                "collision_steps": [1],
+                "penetration_depths_m": [0.002],
+                "maximum_penetration_depth_m": 0.002,
+                "maximum_consecutive_collision_samples": 1,
+                "tree_pose_mode": "static",
+            }
+        ],
+    )
+
+    receipt = exact_body_collision_receipt(
+        np.repeat(IDENTITY[None], 3, axis=0),
+        tree_pose=IDENTITY,
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+        maximum_collision_frames=3,
+        maximum_consecutive_collision_frames=2,
+        maximum_penetration_depth_m=0.0005,
+    )
+
+    assert receipt["within_contact_budget"] is False
+    assert receipt["passed"] is False
 
 
 def test_branch_radial_clearance_is_bounded_and_preserves_final_pose():

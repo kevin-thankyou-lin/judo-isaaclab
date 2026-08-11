@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "policy": "single-source HangMug adaptation; original controller gains; waypoint-only repair; bounded minor insertion contact; one heavy Isaac process; repair current pair before advancing",
+  "tasks": [
+    {
+      "name": "hangmug_robocasa40_0424_success_first",
+      "expected_pairs": 40,
+      "expected_runnable_pairs": 40,
+      "source_dataset": "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_001.hdf5",
+      "dataset_globs": [
+        "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_*.hdf5"
+      ],
+      "dataset_object_aliases": {
+        "obj_0": "mug",
+        "obj_1": "mug_tree"
+      },
+      "dataset_exclusions": [
+        {
+          "dataset": "${HANGMUG_ROBOCASA40_ROOT}/teleop/mug_003.hdf5",
+          "sha256": "5d326e08d1d18c88a8c5cc1d0029d10e32152ec9722665d7d0333e3df4ef2de3",
+          "reason": "official file is truncated; replaced only by a single-source-derived target-scene descriptor",
+          "require_invalid_hdf5": true
+        }
+      ],
+      "dataset_additions": [
+        {
+          "dataset": "${HANGMUG_ROBOCASA40_DERIVED_ROOT}/mug_003_target_scene.hdf5",
+          "sha256": "ab92d16f7e3de4444936a5a23ae2ad1bc5eaf0ee1a63b15894d0d9ab3d689820",
+          "reason": "official mug_003_rescale_0 initial state relabeled to the authoritative base mug_003 and MugTree_011 assets; zero actions; never admitted as a source demo",
+          "require_scene_descriptor": true,
+          "action_source_sha256": "231411d1bf0dc89b569124bd69d102663bcf2e86c17e86f92f4ddc5e7c10f100",
+          "state_template_sha256": "d34ed9ba0b1bb059429f4039cd385777b0718cfa3be5a3d555ebc544e0d17aac"
+        }
+      ],
+      "objects_root": "${HANGMUG_ROBOCASA40_ROOT}/train_assets/train_assets_rescaled",
+      "runner": "examples/run_hangmug_skill_program.py",
+      "needs_keyframes": true,
+      "repair_mode": "replay_hang",
+      "repair_method": "source_relationship_waypoint_path_with_bounded_exact_body_contact",
+      "required_result_checks": {
+        "clean_insertion_exact_mesh_audited": true,
+        "clean_insertion_body_contact_within_budget": true,
+        "default_controller_gains_required": true
+      },
+      "repair_requires_checks": {
+        "left_pick_observed": true,
+        "right_handover_observed": true
+      },
+      "repair_is_primary_fallback": true,
+      "stop_after_nonaccepted": true,
+      "runner_args": [
+        "--device",
+        "cpu",
+        "--require-cpu-physics",
+        "--grasp-assist-mechanism",
+        "task_config",
+        "--replay-handover-latch-grace-steps",
+        "8",
+        "--require-clean-insertion",
+        "--require-default-controller-gains",
+        "--max-clean-insertion-body-collision-frames",
+        "8",
+        "--max-clean-insertion-consecutive-body-collision-frames",
+        "3",
+        "--max-clean-insertion-body-penetration-depth-m",
+        "0.001",
+        "--replay-target-branch-policy",
+        "nearest_eef",
+        "--clean-insertion-tracking-margin-m",
+        "0.025",
+        "--replay-hang-unload-steps",
+        "30",
+        "--replay-hang-release-steps",
+        "1",
+        "--replay-hang-insert-time-scale",
+        "3"
+      ]
+    }
+  ]
+}

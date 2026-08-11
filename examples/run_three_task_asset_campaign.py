@@ -103,6 +103,78 @@ def dataset_exclusion_receipts(
     return receipts
 
 
+def dataset_addition_receipts(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate explicitly recovered target descriptors added to an input set."""
+
+    receipts = []
+    for configured in task.get("dataset_additions", []):
+        path = os.path.realpath(_expand(configured["dataset"]))
+        if not os.path.isfile(path):
+            raise RuntimeError(
+                f"{task['name']}: added target descriptor is missing: {path}"
+            )
+        actual_sha256 = _sha256(path)
+        if actual_sha256 != configured["sha256"]:
+            raise RuntimeError(
+                f"{task['name']}: added target descriptor hash changed: {path}; "
+                f"expected {configured['sha256']}, got {actual_sha256}"
+            )
+        assets = _assets(path)
+        descriptor_receipt = None
+        if configured.get("require_scene_descriptor", False):
+            import h5py
+            import numpy as np
+
+            with h5py.File(path, "r") as handle:
+                attrs = handle["data"].attrs
+                kind = attrs.get("TARGET_SCENE_DESCRIPTOR_KIND")
+                action_source_sha256 = attrs.get(
+                    "TARGET_SCENE_DESCRIPTOR_ACTION_SOURCE_SHA256"
+                )
+                state_template_sha256 = attrs.get(
+                    "TARGET_SCENE_DESCRIPTOR_STATE_TEMPLATE_SHA256"
+                )
+                demo = handle["data/demo_0"]
+                zero_actions = bool(np.all(np.asarray(demo["actions"]) == 0.0))
+                descriptor_only = bool(demo.attrs.get("descriptor_only", False))
+            if isinstance(kind, bytes):
+                kind = kind.decode("utf-8")
+            if isinstance(action_source_sha256, bytes):
+                action_source_sha256 = action_source_sha256.decode("utf-8")
+            if isinstance(state_template_sha256, bytes):
+                state_template_sha256 = state_template_sha256.decode("utf-8")
+            if (
+                kind
+                != "official_target_initial_state_with_zero_actions_not_source_demo"
+                or action_source_sha256 != configured["action_source_sha256"]
+                or state_template_sha256 != configured["state_template_sha256"]
+                or not zero_actions
+                or not descriptor_only
+            ):
+                raise RuntimeError(
+                    f"{task['name']}: added target descriptor lacks the "
+                    "required single-source provenance receipt"
+                )
+            descriptor_receipt = {
+                "kind": str(kind),
+                "action_source_sha256": str(action_source_sha256),
+                "state_template_sha256": str(state_template_sha256),
+                "zero_actions": zero_actions,
+                "admission_policy": "target_initial_state_only_not_a_source_demo",
+            }
+        receipts.append(
+            {
+                "dataset": path,
+                "sha256": actual_sha256,
+                "size_bytes": os.path.getsize(path),
+                "reason": configured["reason"],
+                "assets": assets,
+                "scene_descriptor": descriptor_receipt,
+            }
+        )
+    return receipts
+
+
 def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, Any]]:
     files = _dataset_files(task)
     expected = int(task.get("expected_pairs", 40))
@@ -113,6 +185,10 @@ def enumerate_pairs(task: dict[str, Any]) -> list[dict[str, Any]]:
     exclusions = dataset_exclusion_receipts(task, files)
     excluded_paths = {receipt["dataset"] for receipt in exclusions}
     runnable_files = [path for path in files if path not in excluded_paths]
+    additions = dataset_addition_receipts(task)
+    runnable_files.extend(receipt["dataset"] for receipt in additions)
+    if len(runnable_files) != len(set(runnable_files)):
+        raise RuntimeError(f"{task['name']}: duplicate runnable dataset paths")
     expected_runnable = int(task.get("expected_runnable_pairs", expected - len(exclusions)))
     if len(runnable_files) != expected_runnable:
         raise RuntimeError(
@@ -325,6 +401,7 @@ def run_task(
         pairs = pairs[:max_pairs]
     inventory = validate_asset_inventory(task, pairs)
     input_blockers = dataset_exclusion_receipts(task)
+    input_additions = dataset_addition_receipts(task)
     print(
         "CAMPAIGN_ASSET_PREFLIGHT="
         + json.dumps({"task": task["name"], **inventory}, sort_keys=True),
@@ -344,6 +421,7 @@ def run_task(
     ledger["input_pairs"] = int(task.get("expected_pairs", expected_runnable))
     ledger["expected_pairs"] = expected_runnable
     ledger["input_blockers"] = input_blockers
+    ledger["input_additions"] = input_additions
     keyframes = task_root / "source_keyframes.json" if task.get("needs_keyframes") else None
 
     for pair in pairs:

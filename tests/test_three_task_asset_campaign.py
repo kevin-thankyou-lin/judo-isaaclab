@@ -10,6 +10,7 @@ from run_three_task_asset_campaign import (
     _repair_eligible,
     _required_result_checks_pass,
     _reusable_classification,
+    dataset_addition_receipts,
     dataset_exclusion_receipts,
     enumerate_pairs,
     validate_asset_inventory,
@@ -80,6 +81,89 @@ def test_enumeration_canonicalizes_legacy_labels_and_receipts_corrupt_input(tmp_
     receipt = dataset_exclusion_receipts(task)[0]
     assert receipt["size_bytes"] == len(b"truncated")
     assert receipt["observed_error"].startswith("OSError:")
+
+
+def test_enumeration_can_replace_corrupt_input_with_hash_bound_descriptor(tmp_path):
+    source = tmp_path / "mug_001.hdf5"
+    blocked = tmp_path / "mug_003.hdf5"
+    recovered = tmp_path / "mug_003_target_descriptor.hdf5"
+    _dataset(source, {"obj_0": "Mugs/mug_001", "obj_1": "Trees/tree_003"})
+    blocked.write_bytes(b"truncated")
+    _dataset(recovered, {"obj_0": "Mugs/mug_003", "obj_1": "Trees/tree_011"})
+    task = {
+        "name": "hangmug",
+        "expected_pairs": 2,
+        "expected_runnable_pairs": 2,
+        "source_dataset": str(source),
+        "dataset_globs": [str(tmp_path / "mug_00[13].hdf5")],
+        "dataset_object_aliases": {"obj_0": "mug", "obj_1": "mug_tree"},
+        "dataset_exclusions": [
+            {
+                "dataset": str(blocked),
+                "sha256": hashlib.sha256(blocked.read_bytes()).hexdigest(),
+                "reason": "fixture is intentionally truncated",
+                "require_invalid_hdf5": True,
+            }
+        ],
+        "dataset_additions": [
+            {
+                "dataset": str(recovered),
+                "sha256": hashlib.sha256(recovered.read_bytes()).hexdigest(),
+                "reason": "hash-bound target-state descriptor",
+            }
+        ],
+    }
+
+    pairs = enumerate_pairs(task)
+
+    assert len(pairs) == 2
+    assert pairs[1]["assets"] == {
+        "mug": "Mugs/mug_003",
+        "mug_tree": "Trees/tree_011",
+    }
+    assert dataset_addition_receipts(task)[0]["dataset"] == str(recovered)
+
+
+def test_scene_descriptor_addition_requires_single_source_receipt(tmp_path):
+    descriptor = tmp_path / "target_descriptor.hdf5"
+    _dataset(descriptor, {"obj_0": "Mugs/mug_003", "obj_1": "Trees/tree_011"})
+    action_source_sha256 = "a" * 64
+    state_template_sha256 = "b" * 64
+    with h5py.File(descriptor, "r+") as handle:
+        handle["data"].attrs["TARGET_SCENE_DESCRIPTOR_KIND"] = (
+            "official_target_initial_state_with_zero_actions_not_source_demo"
+        )
+        handle["data"].attrs[
+            "TARGET_SCENE_DESCRIPTOR_ACTION_SOURCE_SHA256"
+        ] = action_source_sha256
+        handle["data"].attrs[
+            "TARGET_SCENE_DESCRIPTOR_STATE_TEMPLATE_SHA256"
+        ] = state_template_sha256
+        demo = handle["data"].create_group("demo_0")
+        demo.attrs["descriptor_only"] = True
+        demo.create_dataset("actions", data=np.zeros((1, 14)))
+    task = {
+        "name": "hangmug",
+        "dataset_additions": [
+            {
+                "dataset": str(descriptor),
+                "sha256": hashlib.sha256(descriptor.read_bytes()).hexdigest(),
+                "reason": "target reset descriptor",
+                "require_scene_descriptor": True,
+                "action_source_sha256": action_source_sha256,
+                "state_template_sha256": state_template_sha256,
+            }
+        ],
+    }
+
+    receipt = dataset_addition_receipts(task)[0]
+
+    assert receipt["scene_descriptor"]["action_source_sha256"] == (
+        action_source_sha256
+    )
+    assert receipt["scene_descriptor"]["admission_policy"] == (
+        "target_initial_state_only_not_a_source_demo"
+    )
 
 
 def test_campaign_command_passes_dataset_aliases_to_runner(tmp_path):

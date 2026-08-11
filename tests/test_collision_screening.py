@@ -136,8 +136,32 @@ def test_exact_body_collision_report_rejects_only_intersecting_path():
     assert collision["valid"] is False
     assert collision["collision_steps"] == [2]
     assert collision["first_collision_step"] == 2
+    assert collision["maximum_penetration_depth_m"] > 0.0
+    assert collision["maximum_consecutive_collision_samples"] == 1
+    assert len(collision["penetration_depths_m"]) == 1
     assert separated["valid"] is True
     assert separated["collision_steps"] == []
+    assert separated["maximum_penetration_depth_m"] == 0.0
+    assert separated["maximum_consecutive_collision_samples"] == 0
+
+
+def test_exact_collision_report_measures_consecutive_contact_samples():
+    body_mesh = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    tree_mesh = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    tree_pose = IDENTITY.copy()
+    tree_pose[0] = 0.5
+    object_path = np.broadcast_to(IDENTITY, (5, 7)).copy()
+    object_path[:, 0] = [0.0, 0.5, 0.5, 0.25, 0.5]
+
+    report = object_path_collision_reports(
+        object_path,
+        tree_pose=tree_pose,
+        object_mesh=body_mesh,
+        tree_mesh=tree_mesh,
+    )[0]
+
+    assert report["collision_steps"] == [1, 2, 4]
+    assert report["maximum_consecutive_collision_samples"] == 2
 
 
 def test_exact_collision_report_tracks_per_step_tree_motion():

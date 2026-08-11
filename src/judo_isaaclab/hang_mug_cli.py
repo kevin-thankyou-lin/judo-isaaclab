@@ -66,6 +66,32 @@ def add_replay_repair_arguments(parser: Any) -> None:
             "factor; defaults to the unchanged source timing."
         ),
     )
+    parser.add_argument(
+        "--require-default-controller-gains",
+        action="store_true",
+        help=(
+            "Fail closed unless insertion and support DLS gains remain at "
+            "their original 1.0 values and no early support-gain lead is used."
+        ),
+    )
+    parser.add_argument(
+        "--max-clean-insertion-body-collision-frames",
+        type=int,
+        default=0,
+        help="Allow at most this many exact body-contact frames before release.",
+    )
+    parser.add_argument(
+        "--max-clean-insertion-consecutive-body-collision-frames",
+        type=int,
+        default=0,
+        help="Allow at most this many consecutive exact body-contact frames.",
+    )
+    parser.add_argument(
+        "--max-clean-insertion-body-penetration-depth-m",
+        type=float,
+        default=0.0,
+        help="Allow exact body contact only up to this penetration depth in meters.",
+    )
 
 
 def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
@@ -85,3 +111,25 @@ def validate_replay_repair_arguments(parser: Any, args: Any) -> None:
         parser.error("--replay-hang-support-gain-lead-steps must be nonnegative")
     if args.replay_hang_insert_time_scale < 1:
         parser.error("--replay-hang-insert-time-scale must be positive")
+    if args.max_clean_insertion_body_collision_frames < 0:
+        parser.error(
+            "--max-clean-insertion-body-collision-frames must be nonnegative"
+        )
+    if args.max_clean_insertion_consecutive_body_collision_frames < 0:
+        parser.error(
+            "--max-clean-insertion-consecutive-body-collision-frames must be "
+            "nonnegative"
+        )
+    if args.max_clean_insertion_body_penetration_depth_m < 0.0:
+        parser.error(
+            "--max-clean-insertion-body-penetration-depth-m must be nonnegative"
+        )
+    if args.require_default_controller_gains and (
+        args.replay_hang_insert_dls_gain != 1.0
+        or args.replay_hang_support_dls_gain != 1.0
+        or args.replay_hang_support_gain_lead_steps != 0
+    ):
+        parser.error(
+            "--require-default-controller-gains forbids DLS gain scaling and "
+            "support-gain lead overrides"
+        )
