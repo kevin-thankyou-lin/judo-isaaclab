@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    compensate_low_branch_approach,
     compensate_low_branch_insert,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
@@ -68,6 +69,36 @@ def test_low_branch_insert_compensation_only_corrects_below_support_bias():
     )
     unchanged = compensate_low_branch_insert(
         trajectory, _pose(0.3, 0.0, 0.0), _pose(0.3, 0.0, 0.01)
+    )
+    assert unchanged is trajectory
+
+
+def test_low_branch_approach_compensation_precedes_contact_and_is_bounded():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.handle_to_branch_insert(
+        _pose(0.1), _pose(0.2), _pose(0.3),
+        transport_steps=2, approach_steps=2, insert_steps=2,
+    )
+    program.release_and_support(
+        _pose(0.3), _pose(0.3), unload_steps=2, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    corrected = compensate_low_branch_approach(
+        trajectory,
+        _pose(0.3, 0.0, 0.1),
+        _pose(0.2, 0.0, 0.04),
+        support_clearance_m=0.01,
+        maximum_vertical_correction_m=0.03,
+    )
+    approach = trajectory.waypoint_steps["branch_approach"]
+    assert corrected.right_poses[approach] == pytest.approx(
+        trajectory.right_poses[approach]
+    )
+    assert corrected.right_poses[approach + 1 :, 2] == pytest.approx(
+        trajectory.right_poses[approach + 1 :, 2] + 0.03
+    )
+    unchanged = compensate_low_branch_approach(
+        trajectory, _pose(0.3, 0.0, 0.1), _pose(0.2, 0.0, 0.12)
     )
     assert unchanged is trajectory
 

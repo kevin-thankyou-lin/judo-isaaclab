@@ -340,6 +340,51 @@ def compensate_low_branch_insert(
     )
 
 
+def compensate_low_branch_approach(
+    trajectory: SkillTrajectory,
+    intended_mug_pose: Any,
+    observed_mug_pose: Any,
+    *,
+    support_clearance_m: float = 0.01,
+    maximum_vertical_correction_m: float = 0.03,
+) -> SkillTrajectory:
+    """Raise the remaining insertion path before below-branch contact.
+
+    The approach observation provides a deterministic early warning that arm
+    tracking has left the held mug below its eventual support height.  Apply a
+    bounded vertical correction before insertion begins so the handle cannot
+    become trapped below the branch.  The later insert residual correction is
+    retained for small errors that remain after contact.
+    """
+
+    if "branch_approach" not in trajectory.waypoint_steps:
+        raise ValueError("branch trajectory is missing branch_approach")
+    if support_clearance_m < 0.0:
+        raise ValueError("support_clearance_m must be nonnegative")
+    if maximum_vertical_correction_m < 0.0:
+        raise ValueError("maximum_vertical_correction_m must be nonnegative")
+    intended = _pose(intended_mug_pose, "intended_mug_pose")
+    observed = _pose(observed_mug_pose, "observed_mug_pose")
+    correction_z = np.clip(
+        intended[2] + support_clearance_m - observed[2],
+        0.0,
+        maximum_vertical_correction_m,
+    )
+    if correction_z == 0.0:
+        return trajectory
+
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    start = trajectory.waypoint_steps["branch_approach"] + 1
+    right[start:, 2] += correction_z
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 

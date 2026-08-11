@@ -321,12 +321,37 @@ def _reanchor_full_skill(
         nominal_right_contact = compose_pose(
             inverse_pose(sample["mug_pose"]), sample["right_eef_pose"]
         )
+        if completed == "branch_approach" and intended_final is not None:
+            from judo_isaaclab.hang_mug import compensate_low_branch_approach
+
+            before = trajectory.right_poses.copy()
+            trajectory = compensate_low_branch_approach(
+                trajectory,
+                intended_final,
+                sample["mug_pose"],
+            )
+            correction_z = float(
+                trajectory.right_poses[-1, 2] - before[-1, 2]
+            )
+            print("HANGMUG_APPROACH_COMPENSATION=" + json.dumps({
+                "applied_vertical_m": correction_z,
+                "observed_mug_z_m": float(sample["mug_pose"][2]),
+                "support_clearance_m": 0.01,
+                "intended_support_z_m": float(intended_final[2]),
+            }, sort_keys=True))
         if completed == "branch_insert" and intended_final is not None:
             from judo_isaaclab.hang_mug import compensate_low_branch_insert
 
+            before = trajectory.right_poses.copy()
             trajectory = compensate_low_branch_insert(
                 trajectory,
                 intended_final,
                 sample["mug_pose"],
             )
+            correction = trajectory.right_poses[-1, :3] - before[-1, :3]
+            print("HANGMUG_INSERT_COMPENSATION=" + json.dumps({
+                "applied_translation_m": correction.tolist(),
+                "observed_mug_position_m": sample["mug_pose"][:3].tolist(),
+                "intended_support_position_m": intended_final[:3].tolist(),
+            }, sort_keys=True))
     return trajectory, nominal_right_contact
