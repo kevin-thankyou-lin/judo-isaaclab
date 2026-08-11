@@ -190,6 +190,22 @@ def _record_feedback_collision_receipt(
     print(label + json.dumps(receipt, sort_keys=True), flush=True)
 
 
+def _requires_branch_tip_rethread(receipt, repair_kwargs):
+    """Reject a radial wrist swing larger than the usable branch length."""
+
+    correction = receipt.get("geometry_correction") or {}
+    if correction.get("method") != "single_pass_branch_radial_clearance":
+        return False
+    branch = repair_kwargs.get("target_branch")
+    displacement = correction.get("maximum_displacement_m")
+    if branch is None or displacement is None:
+        return False
+    branch_length = float(np.linalg.norm(
+        np.asarray(branch.tip_point) - np.asarray(branch.inner_point)
+    ))
+    return float(displacement) > branch_length
+
+
 def _screen_or_reject_observation_feedback(
     trajectory, previous_trajectory, *, repair_kwargs, previous_repair_kwargs,
 ):
@@ -203,6 +219,25 @@ def _screen_or_reject_observation_feedback(
         corrected, receipt = repair_compensated_insertion_path(
             trajectory, **repair_kwargs,
         )
+        if _requires_branch_tip_rethread(receipt, repair_kwargs):
+            radial_displacement = float(
+                receipt["geometry_correction"]["maximum_displacement_m"]
+            )
+            branch = repair_kwargs["target_branch"]
+            branch_length = float(np.linalg.norm(
+                np.asarray(branch.tip_point) - np.asarray(branch.inner_point)
+            ))
+            retained, rethread = repair_compensated_insertion_path(
+                previous_trajectory,
+                **previous_repair_kwargs,
+                force_branch_tip_rethread=True,
+            )
+            receipt = dict(rethread)
+            receipt["recovered_branch_scale_radial_feedback_with_rethread"] = True
+            receipt["rejected_radial_correction_m"] = radial_displacement
+            receipt["target_branch_length_m"] = branch_length
+            receipt["right_dls_gain"] = 2.0
+            return retained, receipt, 2.0
         return corrected, receipt, 1.0
     except RuntimeError as error:
         if "collision-unsafe" not in str(error):

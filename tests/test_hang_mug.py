@@ -271,6 +271,49 @@ def test_collision_unsafe_feedback_rethreads_screened_nominal_suffix(monkeypatch
     assert [call[0] for call in calls] == [unsafe, previous]
 
 
+def test_branch_scale_radial_feedback_uses_tip_rethread(monkeypatch):
+    previous = SimpleNamespace(name="previous")
+    radial = SimpleNamespace(name="radial")
+    rethreaded = SimpleNamespace(name="rethreaded")
+    branch = SimpleNamespace(
+        inner_point=np.asarray([0.0, 0.0, 0.0]),
+        tip_point=np.asarray([0.05, 0.0, 0.0]),
+    )
+    calls = []
+
+    def screen(trajectory, **kwargs):
+        calls.append((trajectory, kwargs))
+        if trajectory is radial:
+            return trajectory, {
+                "passed": True,
+                "geometry_correction": {
+                    "method": "single_pass_branch_radial_clearance",
+                    "maximum_displacement_m": 0.06,
+                },
+            }
+        assert kwargs["force_branch_tip_rethread"] is True
+        return rethreaded, {"passed": True, "branch_tip_rethread_fallback": True}
+
+    monkeypatch.setattr(
+        "judo_isaaclab.hang_mug_clean_insertion.repair_compensated_insertion_path",
+        screen,
+    )
+    corrected, receipt, gain = hangmug_rollout._screen_or_reject_observation_feedback(
+        radial,
+        previous,
+        repair_kwargs={"completed_step": 4, "target_branch": branch},
+        previous_repair_kwargs={"completed_step": 3, "target_branch": branch},
+    )
+
+    assert corrected is rethreaded
+    assert [call[0] for call in calls] == [radial, previous]
+    assert receipt["recovered_branch_scale_radial_feedback_with_rethread"] is True
+    assert receipt["rejected_radial_correction_m"] == pytest.approx(0.06)
+    assert receipt["target_branch_length_m"] == pytest.approx(0.05)
+    assert receipt["right_dls_gain"] == pytest.approx(2.0)
+    assert gain == pytest.approx(2.0)
+
+
 def test_insert_and_support_tracking_gains_have_separate_scopes():
     trajectory = SimpleNamespace(
         waypoint_steps={
