@@ -140,6 +140,24 @@ def test_exact_body_collision_report_rejects_only_intersecting_path():
     assert separated["collision_steps"] == []
 
 
+def test_exact_collision_report_tracks_per_step_tree_motion():
+    body_mesh = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    tree_mesh = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    object_path = np.broadcast_to(IDENTITY, (3, 7)).copy()
+    tree_path = np.broadcast_to(IDENTITY, (3, 7)).copy()
+    tree_path[:, 0] = [0.5, 0.25, 0.0]
+
+    report = object_path_collision_reports(
+        object_path,
+        tree_pose=tree_path,
+        object_mesh=body_mesh,
+        tree_mesh=tree_mesh,
+    )[0]
+
+    assert report["collision_steps"] == [2]
+    assert report["tree_pose_mode"] == "per_step_observed"
+
+
 def test_robot_feasible_selection_prefers_less_terminal_rotation():
     current_eef = IDENTITY.copy()
     current_object = IDENTITY.copy()

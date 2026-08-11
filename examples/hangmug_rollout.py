@@ -16,6 +16,7 @@ class HangMugRollout:
     samples: list[dict[str, Any]]
     actions: list[np.ndarray]
     mug_poses: list[Any]
+    tree_poses: list[Any]
     left_eef: list[Any]
     right_eef: list[Any]
     desired_left: list[Any]
@@ -29,6 +30,7 @@ class HangMugRollout:
     target_branch: Any
     frame_stats: list[tuple[float, float]]
     planned_clean_insertion: dict[str, Any] | None
+    planning_tree_pose: Any
 
 
 def _start_replay_tail(
@@ -54,10 +56,12 @@ def _start_replay_tail(
             "replay hang tail requires an observed right-only handover "
             f"at prefix step {repair_prefix_steps - 1}: {sample}"
         )
+    observed_tree_pose = np.asarray(sample["tree_pose"], dtype=np.float64)
+    print("HANGMUG_OBSERVED_TREE_REANCHOR=" + json.dumps({"loaded_tree_pose": np.asarray(target_tree.root_pose).tolist(), "planning_tree_pose": observed_tree_pose.tolist()}, sort_keys=True), flush=True)
     tail = build_replay_hang_tail(
         keyframes=keyframes, source_parts=source_parts,
         target_parts=target_parts, source_branches=source_branches,
-        target_tree_pose=target_tree.root_pose,
+        target_tree_pose=observed_tree_pose,
         target_branches=target_branches, observed_mug_pose=sample["mug_pose"],
         left_eef_pose=sample["left_eef_pose"],
         right_eef_pose=sample["right_eef_pose"],
@@ -80,7 +84,7 @@ def _start_replay_tail(
     receipt = None
     if args.require_clean_insertion:
         receipt = exact_body_collision_receipt(
-            tail.planned_mug_poses, tree_pose=target_tree.root_pose,
+            tail.planned_mug_poses, tree_pose=observed_tree_pose,
             target_assets=target_assets,
         )
         receipt["support_alignment"] = tail.support_alignment
@@ -92,7 +96,7 @@ def _start_replay_tail(
         if not receipt["passed"]:
             corrected, correction = apply_branch_radial_clearance(
                 tail.planned_mug_poses,
-                tree_pose=target_tree.root_pose,
+                tree_pose=observed_tree_pose,
                 mug_body_frame=target_parts.body_frame,
                 mug_body_size=target_parts.body_size,
                 target_branch=tail.target_branch,
@@ -105,7 +109,7 @@ def _start_replay_tail(
             )
             tail = replace_replay_hang_tail_path(tail, corrected)
             receipt = exact_body_collision_receipt(
-                tail.planned_mug_poses, tree_pose=target_tree.root_pose,
+                tail.planned_mug_poses, tree_pose=observed_tree_pose,
                 target_assets=target_assets,
             )
             receipt["support_alignment"] = tail.support_alignment
@@ -277,16 +281,14 @@ def execute_hangmug_rollout(
 ) -> HangMugRollout:
     """Execute source actions and optional target-direct Cartesian suffix."""
 
-    actions = []
-    mug_poses = []
-    left_eef = []
-    right_eef = []
-    desired_left = []
-    desired_right = []
+    actions = []; mug_poses = []; tree_poses = []
+    left_eef = []; right_eef = []
+    desired_left = []; desired_right = []
     desired_steps = []
     frame_stats = []
     right_dls_gain = 1.0
     planned_clean_insertion = None
+    planning_tree_pose = np.asarray(target_tree.root_pose, dtype=np.float64)
     milestones_by_step: dict[int, list[str]] = {}
     if trajectory is not None:
         for name, milestone_step in trajectory.waypoint_steps.items():
@@ -327,8 +329,8 @@ def execute_hangmug_rollout(
                 trajectory = tail.trajectory
                 intended_final = tail.intended_final_mug_pose
                 nominal_right_contact = tail.right_contact_in_mug
-                source_branch = tail.source_branch
-                target_branch = tail.target_branch
+                source_branch = tail.source_branch; target_branch = tail.target_branch
+                planning_tree_pose = tail.planning_tree_pose
                 for name, milestone_step in trajectory.waypoint_steps.items():
                     absolute_step = repair_prefix_steps + int(milestone_step)
                     milestones_by_step.setdefault(absolute_step, []).append(name)
@@ -413,7 +415,7 @@ def execute_hangmug_rollout(
         )
         samples.append(sample)
         actions.append(action[0].detach().cpu().numpy())
-        mug_poses.append(sample["mug_pose"])
+        mug_poses.append(sample["mug_pose"]); tree_poses.append(sample["tree_pose"])
         left_eef.append(sample["left_eef_pose"])
         right_eef.append(sample["right_eef_pose"])
 
@@ -440,14 +442,13 @@ def execute_hangmug_rollout(
                 repair_kwargs = {
                     "completed_step": trajectory_step,
                     "right_contact_in_mug": nominal_right_contact,
-                    "tree_pose": target_tree.root_pose,
+                    "tree_pose": sample["tree_pose"],
                     "mug_body_frame": target_parts.body_frame,
                     "mug_body_size": target_parts.body_size,
                     "target_branch": target_branch,
                     "target_assets": target_assets,
-                    "executed_mug_poses": mug_poses[
-                        0 if repair_prefix_steps is None else repair_prefix_steps :
-                    ],
+                    "executed_mug_poses": mug_poses[0 if repair_prefix_steps is None else repair_prefix_steps :],
+                    "executed_tree_poses": tree_poses[0 if repair_prefix_steps is None else repair_prefix_steps :],
                     "tracking_margin_m": args.clean_insertion_tracking_margin_m,
                 }
                 previous_repair_kwargs = dict(repair_kwargs)
@@ -484,7 +485,7 @@ def execute_hangmug_rollout(
         )
     )
     return HangMugRollout(
-        samples=samples, actions=actions, mug_poses=mug_poses,
+        samples=samples, actions=actions, mug_poses=mug_poses, tree_poses=tree_poses,
         left_eef=left_eef, right_eef=right_eef,
         desired_left=desired_left, desired_right=desired_right,
         desired_steps=desired_steps, trajectory=trajectory,
@@ -492,6 +493,7 @@ def execute_hangmug_rollout(
         nominal_right_contact=nominal_right_contact,
         source_branch=source_branch, target_branch=target_branch,
         frame_stats=frame_stats, planned_clean_insertion=planned_clean_insertion,
+        planning_tree_pose=planning_tree_pose,
     )
 
 

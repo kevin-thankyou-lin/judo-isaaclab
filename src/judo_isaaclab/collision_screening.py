@@ -314,8 +314,18 @@ def object_path_collision_reports(
     paths = np.asarray(object_paths, dtype=np.float64)
     if paths.ndim == 2:
         paths = paths[None, ...]
+    tree_poses = np.asarray(tree_pose, dtype=np.float64)
+    if tree_poses.shape == (7,):
+        dynamic_tree = False
+    elif tree_poses.ndim == 2 and tree_poses.shape[1] == 7:
+        dynamic_tree = True
+        if tree_poses.shape[0] != paths.shape[1]:
+            raise ValueError("tree pose path must align with object path steps")
+    else:
+        raise ValueError("tree_pose must have shape (7,) or (steps, 7)")
     manager = trimesh.collision.CollisionManager()
-    manager.add_object("tree", tree_mesh, transform=_pose_matrix(tree_pose))
+    initial_tree = tree_poses[0] if dynamic_tree else tree_poses
+    manager.add_object("tree", tree_mesh, transform=_pose_matrix(initial_tree))
     manager.add_object("object_body", object_mesh)
     reports = []
     for candidate_index, object_poses in enumerate(paths):
@@ -324,6 +334,8 @@ def object_path_collision_reports(
             sampled_steps.append(len(object_poses) - 1)
         collision_steps = []
         for step in sampled_steps:
+            if dynamic_tree:
+                manager.set_transform("tree", _pose_matrix(tree_poses[step]))
             manager.set_transform(
                 "object_body", _pose_matrix(object_poses[step])
             )
@@ -342,6 +354,7 @@ def object_path_collision_reports(
                 "semantic_surface": "object_body",
                 "allowed_tree_contact": False,
                 "method": "python-fcl exact mesh intersection",
+                "tree_pose_mode": "per_step_observed" if dynamic_tree else "static",
             }
         )
     return reports

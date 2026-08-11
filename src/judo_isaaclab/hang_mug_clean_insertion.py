@@ -95,9 +95,12 @@ def exact_body_collision_receipt(
         _asset_root_usd(target_assets["mug"]), body_indices
     )
     tree = load_usd_collision_mesh(_asset_root_usd(target_assets["mug_tree"]))
+    trees = np.asarray(tree_pose, dtype=np.float64)
+    if trees.ndim == 2:
+        trees = trees[start_step:release]
     report = object_path_collision_reports(
         poses[start_step:release],
-        tree_pose=np.asarray(tree_pose, dtype=np.float64),
+        tree_pose=trees,
         object_mesh=body,
         tree_mesh=tree,
         sample_stride=1,
@@ -117,6 +120,7 @@ def exact_body_collision_receipt(
         "collision_steps": collisions,
         "collision_count": len(collisions),
         "passed": not collisions,
+        "tree_pose_mode": report["tree_pose_mode"],
     }
 
 
@@ -227,8 +231,7 @@ def apply_branch_radial_clearance(
 def _executed_prefix_receipt(
     poses: Any | None,
     *,
-    completed_step: int,
-    tree_pose: Any,
+    completed_step: int, tree_pose: Any, tree_poses: Any | None = None,
     target_assets: dict[str, str],
 ) -> dict[str, Any] | None:
     """Fail closed on observed collisions before editing future commands."""
@@ -242,7 +245,7 @@ def _executed_prefix_receipt(
         raise ValueError("executed_mug_poses must end at completed_step")
     receipt = exact_body_collision_receipt(
         executed,
-        tree_pose=tree_pose,
+        tree_pose=tree_pose if tree_poses is None else tree_poses,
         target_assets=target_assets,
     )
     if not receipt["passed"]:
@@ -262,7 +265,7 @@ def repair_compensated_insertion_path(
     mug_body_size: Any,
     target_branch: Any,
     target_assets: dict[str, str],
-    executed_mug_poses: Any | None = None,
+    executed_mug_poses: Any | None = None, executed_tree_poses: Any | None = None,
     tracking_margin_m: float = 0.0,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Exact-screen and repair an observation-compensated insertion suffix."""
@@ -293,8 +296,8 @@ def repair_compensated_insertion_path(
     ], dtype=np.float64)
     executed_receipt = _executed_prefix_receipt(
         executed_mug_poses,
-        completed_step=completed,
-        tree_pose=tree_pose,
+        completed_step=completed, tree_pose=tree_pose,
+        tree_poses=executed_tree_poses,
         target_assets=target_assets,
     )
     initial = exact_body_collision_receipt(

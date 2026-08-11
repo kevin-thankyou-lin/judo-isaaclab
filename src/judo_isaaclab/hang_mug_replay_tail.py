@@ -29,6 +29,7 @@ class ReplayHangTail:
     source_branch: Any
     target_branch: Any
     planned_mug_poses: np.ndarray
+    planning_tree_pose: np.ndarray
     support_alignment: dict[str, Any]
     unload_steps: int
     release_steps: int
@@ -308,8 +309,7 @@ def build_replay_hang_tail(
         keyframes=keyframes,
         source_parts=source_parts,
         target_parts=target_parts,
-        source_branch=source_branch,
-        target_branch=target_branch,
+        source_branch=source_branch, target_branch=target_branch,
         target_tree_pose=np.asarray(target_tree_pose, dtype=np.float64),
         observed_mug=observed_mug,
         supported_mug_pose=supported_mug_pose,
@@ -335,6 +335,7 @@ def build_replay_hang_tail(
         source_branch=source_branch,
         target_branch=target_branch,
         planned_mug_poses=planned_mug_poses,
+        planning_tree_pose=np.asarray(target_tree_pose, dtype=np.float64),
         support_alignment=support_alignment,
         unload_steps=unload_steps,
         release_steps=release_steps,
@@ -363,6 +364,7 @@ def replace_replay_hang_tail_path(
         source_branch=tail.source_branch,
         target_branch=tail.target_branch,
         planned_mug_poses=path,
+        planning_tree_pose=tail.planning_tree_pose,
         support_alignment=tail.support_alignment,
         unload_steps=tail.unload_steps,
         release_steps=tail.release_steps,

@@ -929,15 +929,13 @@ def main() -> None:
             render_frame=_frame,
         )
         samples = rollout.samples; actions = rollout.actions
-        mug_poses = rollout.mug_poses; left_eef = rollout.left_eef
+        mug_poses = rollout.mug_poses; tree_poses = rollout.tree_poses; left_eef = rollout.left_eef
         right_eef = rollout.right_eef; desired_left = rollout.desired_left
         desired_right = rollout.desired_right; desired_steps = rollout.desired_steps
-        trajectory = rollout.trajectory; joint_nominal = rollout.joint_nominal
-        intended_final = rollout.intended_final
-        nominal_right_contact = rollout.nominal_right_contact
-        source_branch = rollout.source_branch; target_branch = rollout.target_branch
+        trajectory = rollout.trajectory; joint_nominal = rollout.joint_nominal; intended_final = rollout.intended_final
+        nominal_right_contact = rollout.nominal_right_contact; source_branch = rollout.source_branch; target_branch = rollout.target_branch
         frame_stats = rollout.frame_stats
-        planned_clean_insertion = rollout.planned_clean_insertion
+        planned_clean_insertion = rollout.planned_clean_insertion; planning_tree_pose = rollout.planning_tree_pose
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -945,6 +943,7 @@ def main() -> None:
             args.trace_npz,
             actions=np.asarray(actions, dtype=np.float32),
             mug_poses=np.asarray(mug_poses, dtype=np.float32),
+            tree_poses=np.asarray(tree_poses, dtype=np.float32),
             left_eef_poses=np.asarray(left_eef, dtype=np.float32),
             right_eef_poses=np.asarray(right_eef, dtype=np.float32),
             program_stages=np.asarray(
@@ -989,7 +988,7 @@ def main() -> None:
 
             clean_insertion = exact_body_collision_receipt(
                 mug_poses,
-                tree_pose=final["tree_pose"],
+                tree_pose=tree_poses,
                 target_assets=target_assets,
                 start_step=clean_start,
                 release_step=clean_release,
@@ -1159,6 +1158,7 @@ def main() -> None:
                 "target_mug": target_mug.root_pose.tolist(),
                 "source_tree": source_tree.root_pose.tolist(),
                 "target_tree": target_tree.root_pose.tolist(),
+                "replay_tail_planning_tree_pose": planning_tree_pose.tolist() if planning_tree_pose is not None else None,
                 "source_mug_parts": jsonable(source_parts),
                 "target_mug_parts": jsonable(target_parts),
                 "source_branch": jsonable(source_branch),
