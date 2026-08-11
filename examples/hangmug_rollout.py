@@ -62,6 +62,8 @@ def _start_replay_tail(
         left_eef_pose=sample["left_eef_pose"],
         right_eef_pose=sample["right_eef_pose"],
         target_branch_policy=args.replay_target_branch_policy,
+        unload_steps=args.replay_hang_unload_steps,
+        release_steps=args.replay_hang_release_steps,
     )
     receipt = None
     if args.require_clean_insertion:

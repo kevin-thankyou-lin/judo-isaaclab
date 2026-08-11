@@ -22,6 +22,10 @@ from judo_isaaclab.dataset_aliases import (
     canonicalize_rigid_object_state,
     parse_object_aliases,
 )
+from judo_isaaclab.hang_mug_cli import (
+    add_replay_repair_arguments,
+    validate_replay_repair_arguments,
+)
 from judo_isaaclab.semantic_execution import (
     SemanticExecutionHooks,
     SemanticProtocolRecorder,
@@ -93,16 +97,7 @@ def _parser() -> argparse.Namespace:
             "keyframe before starting a replay_hang suffix."
         ),
     )
-    parser.add_argument(
-        "--replay-target-branch-policy",
-        choices=("source_corresponding", "nearest_eef"),
-        default="source_corresponding",
-        help=(
-            "For replay_hang, retain the source-corresponding branch or "
-            "select the branch requiring the least EEF translation from the "
-            "observed handover."
-        ),
-    )
+    add_replay_repair_arguments(parser)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
@@ -113,8 +108,7 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--direct-replay-result")
     args = parser.parse_args()
-    if args.clean_insertion_tracking_margin_m < 0.0:
-        parser.error("--clean-insertion-tracking-margin-m must be nonnegative")
+    validate_replay_repair_arguments(parser, args)
     return args
 
 
@@ -897,7 +891,11 @@ def main() -> None:
                 keyframes,
                 latch_grace_steps=args.replay_handover_latch_grace_steps,
             )
-            total_steps = repair_prefix_steps + replay_tail_steps(keyframes)
+            total_steps = repair_prefix_steps + replay_tail_steps(
+                keyframes,
+                unload_steps=args.replay_hang_unload_steps,
+                release_steps=args.replay_hang_release_steps,
+            )
         else:
             total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
         from judo_isaaclab.demo_artifact import DemonstrationRecorder

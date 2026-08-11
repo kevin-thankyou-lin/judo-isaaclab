@@ -30,6 +30,8 @@ class ReplayHangTail:
     target_branch: Any
     planned_mug_poses: np.ndarray
     support_alignment: dict[str, Any]
+    unload_steps: int
+    release_steps: int
 
 
 def replay_prefix_steps(
@@ -58,7 +60,12 @@ def replay_tail_ready(sample: dict[str, Any]) -> bool:
     )
 
 
-def replay_tail_steps(keyframes: dict[str, Any]) -> int:
+def replay_tail_steps(
+    keyframes: dict[str, Any],
+    *,
+    unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
+    release_steps: int = REPLAY_HANG_RELEASE_STEPS,
+) -> int:
     """Return the source-relationship suffix horizon."""
 
     try:
@@ -67,12 +74,16 @@ def replay_tail_steps(keyframes: dict[str, Any]) -> int:
         raise ValueError("source keyframes lack a clean insertion path") from error
     if path_steps < 2:
         raise ValueError("clean insertion path must contain at least two poses")
+    if unload_steps < 0:
+        raise ValueError("unload_steps must be nonnegative")
+    if release_steps <= 0:
+        raise ValueError("release_steps must be positive")
     return (
         100
         + path_steps
         - 1
-        + REPLAY_HANG_UNLOAD_STEPS
-        + REPLAY_HANG_RELEASE_STEPS
+        + unload_steps
+        + release_steps
         + REPLAY_HANG_SETTLE_STEPS
     )
 
@@ -145,14 +156,18 @@ def _trajectory_from_mug_path(
     *,
     left_pose: np.ndarray,
     right_contact: np.ndarray,
+    unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
+    release_steps: int = REPLAY_HANG_RELEASE_STEPS,
 ) -> SkillTrajectory:
     """Build a right-held insertion and release without resampling the curve."""
 
     right_insert = np.asarray(
         [compose_pose(pose, right_contact) for pose in mug_path], dtype=np.float64
     )
-    unload_steps = REPLAY_HANG_UNLOAD_STEPS
-    release_steps = REPLAY_HANG_RELEASE_STEPS
+    if unload_steps < 0:
+        raise ValueError("unload_steps must be nonnegative")
+    if release_steps <= 0:
+        raise ValueError("release_steps must be positive")
     settle_steps = REPLAY_HANG_SETTLE_STEPS
     hold = np.repeat(right_insert[-1:], unload_steps + release_steps + settle_steps, axis=0)
     right = np.concatenate((right_insert, hold), axis=0)
@@ -202,6 +217,8 @@ def build_replay_hang_tail(
     left_eef_pose: Any,
     right_eef_pose: Any,
     target_branch_policy: str = "source_corresponding",
+    unload_steps: int = REPLAY_HANG_UNLOAD_STEPS,
+    release_steps: int = REPLAY_HANG_RELEASE_STEPS,
 ) -> ReplayHangTail:
     """Build only transport, insertion, and release from observed contact.
 
@@ -286,8 +303,12 @@ def build_replay_hang_tail(
         planned_mug_poses,
         left_pose=left_start,
         right_contact=right_contact,
+        unload_steps=unload_steps,
+        release_steps=release_steps,
     )
-    if trajectory.steps != replay_tail_steps(keyframes):
+    if trajectory.steps != replay_tail_steps(
+        keyframes, unload_steps=unload_steps, release_steps=release_steps
+    ):
         raise RuntimeError("replay hang tail horizon changed unexpectedly")
     return ReplayHangTail(
         trajectory=trajectory,
@@ -297,6 +318,8 @@ def build_replay_hang_tail(
         target_branch=target_branch,
         planned_mug_poses=planned_mug_poses,
         support_alignment=support_alignment,
+        unload_steps=unload_steps,
+        release_steps=release_steps,
     )
 
 
@@ -312,6 +335,8 @@ def replace_replay_hang_tail_path(
         path,
         left_pose=tail.trajectory.left_poses[0],
         right_contact=tail.right_contact_in_mug,
+        unload_steps=tail.unload_steps,
+        release_steps=tail.release_steps,
     )
     return ReplayHangTail(
         trajectory=trajectory,
@@ -321,6 +346,8 @@ def replace_replay_hang_tail_path(
         target_branch=tail.target_branch,
         planned_mug_poses=path,
         support_alignment=tail.support_alignment,
+        unload_steps=tail.unload_steps,
+        release_steps=tail.release_steps,
     )
 
 
