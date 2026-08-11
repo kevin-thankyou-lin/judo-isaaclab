@@ -233,16 +233,21 @@ def repair_compensated_insertion_path(
     if "branch_insert" not in trajectory.waypoint_steps:
         raise ValueError("branch trajectory is missing branch_insert")
     insert = int(trajectory.waypoint_steps["branch_insert"])
+    unload = int(trajectory.waypoint_steps.get("branch_unload", insert))
     completed = int(completed_step)
-    if not -1 <= completed < insert:
-        raise ValueError("completed_step must precede branch_insert")
+    if not -1 <= completed < unload:
+        raise ValueError("completed_step must precede branch_unload")
+    audit_end = insert if completed < insert else unload
     future_start = completed + 1
     contact = np.asarray(right_contact_in_mug, dtype=np.float64)
     if contact.shape != (7,):
         raise ValueError("right_contact_in_mug must have shape (7,)")
     contact_inverse = inverse_pose(contact)
     mug_path = np.asarray(
-        [compose_pose(pose, contact_inverse) for pose in trajectory.right_poses[: insert + 1]],
+        [
+            compose_pose(pose, contact_inverse)
+            for pose in trajectory.right_poses[: audit_end + 1]
+        ],
         dtype=np.float64,
     )
     initial = exact_body_collision_receipt(
@@ -252,6 +257,7 @@ def repair_compensated_insertion_path(
     )
     receipt = dict(initial)
     receipt["observation_compensated_path"] = True
+    receipt["audit_end_step"] = audit_end
     if initial["passed"]:
         receipt["geometry_correction"] = None
         return trajectory, receipt
@@ -284,6 +290,7 @@ def repair_compensated_insertion_path(
         target_assets=target_assets,
     )
     receipt["observation_compensated_path"] = True
+    receipt["audit_end_step"] = audit_end
     receipt["pre_correction_collision_count"] = initial["collision_count"]
     receipt["pre_correction_collision_steps"] = initial["collision_steps"]
     receipt["geometry_correction"] = correction
@@ -293,7 +300,7 @@ def repair_compensated_insertion_path(
         )
 
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[future_start : insert + 1] = np.asarray(
+    right[future_start : audit_end + 1] = np.asarray(
         [compose_pose(pose, contact) for pose in corrected[future_start:]],
         dtype=np.float64,
     )

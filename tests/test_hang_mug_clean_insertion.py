@@ -181,3 +181,54 @@ def test_compensated_insertion_is_rescreened_before_execution(monkeypatch):
     np.testing.assert_allclose(corrected.right_poses[0], trajectory.right_poses[0])
     assert corrected.right_poses[1, 0] == pytest.approx(0.02)
     np.testing.assert_allclose(corrected.right_poses[3], trajectory.right_poses[3])
+
+
+def test_held_suffix_is_rescreened_without_rewriting_completed_steps(monkeypatch):
+    trajectory = SkillTrajectory(
+        left_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        right_poses=np.repeat(IDENTITY[None], 6, axis=0),
+        grippers=np.zeros((6, 2)),
+        stage_names=("insert",) * 6,
+        waypoint_steps={"branch_insert": 2, "branch_unload": 5},
+    )
+    receipts = iter(
+        (
+            {"passed": False, "collision_count": 1, "collision_steps": [4]},
+            {"passed": True, "collision_count": 0, "collision_steps": []},
+        )
+    )
+    monkeypatch.setattr(
+        clean_insertion,
+        "exact_body_collision_receipt",
+        lambda *args, **kwargs: next(receipts),
+    )
+
+    def correct(path, **kwargs):
+        corrected = path.copy()
+        corrected[0, 0] += 0.02
+        return corrected, {
+            "method": "test_correction",
+            "source_collision_steps": [0],
+            "correction_window": [0, 1],
+        }
+
+    monkeypatch.setattr(clean_insertion, "apply_branch_radial_clearance", correct)
+    corrected, receipt = repair_compensated_insertion_path(
+        trajectory,
+        completed_step=3,
+        right_contact_in_mug=IDENTITY,
+        tree_pose=IDENTITY,
+        mug_body_frame=IDENTITY,
+        mug_body_size=[0.08, 0.08, 0.10],
+        target_branch=object(),
+        target_assets={"mug": "mug", "mug_tree": "tree"},
+    )
+
+    assert receipt["passed"] is True
+    assert receipt["audit_end_step"] == 5
+    assert receipt["geometry_correction"]["future_start_step"] == 4
+    np.testing.assert_allclose(
+        corrected.right_poses[:4], trajectory.right_poses[:4]
+    )
+    assert corrected.right_poses[4, 0] == pytest.approx(0.02)
+    np.testing.assert_allclose(corrected.right_poses[5], trajectory.right_poses[5])
