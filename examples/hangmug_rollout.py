@@ -14,6 +14,13 @@ from hangmug_tree_tracking import ObservedTreePathTracker
 HANG_SUCCESS_HEIGHT_MARGIN_M = 0.005
 
 
+def _minimum_supported_mug_z(env: Any) -> float:
+    """Return a support height safely above the unchanged task threshold."""
+
+    return float(env.mug_init_z + 0.05 + HANG_SUCCESS_HEIGHT_MARGIN_M)
+
+
+
 @dataclass
 class HangMugRollout:
     samples: list[dict[str, Any]]
@@ -343,9 +350,7 @@ def execute_hangmug_rollout(
                     target_assets=target_assets, sample=samples[-1],
                     source_actions=source["actions"],
                     repair_prefix_steps=repair_prefix_steps,
-                    minimum_supported_mug_z=float(
-                        env.mug_init_z + 0.05 + HANG_SUCCESS_HEIGHT_MARGIN_M
-                    ),
+                    minimum_supported_mug_z=_minimum_supported_mug_z(env),
                     args=args,
                 )
                 trajectory = tail.trajectory
