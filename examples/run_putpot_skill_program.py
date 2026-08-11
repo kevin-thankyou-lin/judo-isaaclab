@@ -338,6 +338,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "the observed jaw midpoint is centered in the handle contact plane."
         ),
     )
+    parser.add_argument(
+        "--target-handle-local-contact-fraction-recenter",
+        action="store_true",
+        help=(
+            "Apply bounded handle-tangent feedback when a left pad first "
+            "contacts outside the robust handle-fraction margin."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -2071,6 +2079,13 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "depth-guarded intercept requires handle-local MPC acquisition"
         )
+    if (
+        args.target_handle_local_contact_fraction_recenter
+        and not args.target_handle_local_mpc_acquisition
+    ):
+        raise ValueError(
+            "contact-fraction recentering requires handle-local MPC acquisition"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -2907,6 +2922,7 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_latch_ready = False
         local_mpc_left_depth_guard_alignment_streak = 0
         local_mpc_left_depth_guard_released = False
+        local_mpc_left_contact_recenter_total_m = 0.0
         local_mpc_right_contact_window_step = 0
         local_mpc_right_robust_streak = 0
         local_mpc_right_latch_ready = False
@@ -2920,6 +2936,18 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_left_contact_prior = (
             None if left_handle_contact is None else left_handle_contact.copy()
         )
+        local_mpc_left_handle_tangent_extent_m = 0.0
+        if args.target_handle_local_contact_fraction_recenter:
+            left_handle_size = (
+                target_parts.negative_handle_size
+                if int(handle_grasp_geometry["left"]["handle_side"]) < 0
+                else target_parts.positive_handle_size
+            )
+            local_mpc_left_handle_tangent_extent_m = max(
+                float(left_handle_size[axis])
+                for axis in range(3)
+                if axis != target_parts.handle_axis
+            )
         if args.target_handle_local_mpc_acquisition:
             from judo_isaaclab.putpot_local_mpc import HandleLocalMpcConfig
 
@@ -3435,6 +3463,20 @@ def main(argv: list[str] | None = None) -> None:
                                     if active_arm == "left"
                                     else False
                                 ),
+                                contact_fraction_recenter=bool(
+                                    active_arm == "left"
+                                    and args.target_handle_local_contact_fraction_recenter
+                                ),
+                                active_handle_tangent_extent_m=(
+                                    local_mpc_left_handle_tangent_extent_m
+                                    if active_arm == "left"
+                                    else 0.0
+                                ),
+                                contact_recenter_total_m=(
+                                    local_mpc_left_contact_recenter_total_m
+                                    if active_arm == "left"
+                                    else 0.0
+                                ),
                                 config=local_mpc_config,
                             )
                             local_mpc_frame_receipts.append(
@@ -3468,6 +3510,9 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                                 local_mpc_left_depth_guard_released = (
                                     local_command.depth_guard_released
+                                )
+                                local_mpc_left_contact_recenter_total_m = (
+                                    local_command.contact_recenter_total_m
                                 )
                                 local_mpc_robust_streak = (
                                     local_command.robust_streak
@@ -5374,6 +5419,14 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "right_bootstrap_unchanged": True,
                     "inward_depth_suppressed_until_transverse_centering": True,
+                },
+                "contact_fraction_recenter": {
+                    "enabled_for_left_only": bool(
+                        args.target_handle_local_contact_fraction_recenter
+                    ),
+                    "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
+                    "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,
+                    "executed_total_m": local_mpc_left_contact_recenter_total_m,
                 },
                 "config": handle_local_mpc_config_receipt(local_mpc_config),
                 "frame_receipts": local_mpc_frame_receipts,

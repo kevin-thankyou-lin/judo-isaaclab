@@ -90,6 +90,41 @@ def test_hard_motion_and_pad_constraints_fail_closed_without_more_control():
     assert not edge.frame_receipt["hard_constraints"]["active_contact_pad_margin_valid"]
 
 
+def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=20,
+            active_finger_forces_n=[0.0, 2.0],
+            active_pad_fractions=[np.nan, -0.046],
+        ),
+        contact_fraction_recenter=True,
+        active_handle_tangent_extent_m=0.064,
+    )
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    assert not command.fail_closed
+    assert recenter["active"]
+    assert recenter["contact_fraction_delta"] == pytest.approx(0.146)
+    assert recenter["requested_translation_m"] == pytest.approx(0.009344)
+    assert recenter["executed_translation_m"] == pytest.approx(0.001)
+    assert command.contact_recenter_total_m == pytest.approx(0.001)
+    assert np.linalg.norm(
+        command.frame_receipt["executed_control"]["translation_world_m"]
+    ) == pytest.approx(0.001)
+
+    exhausted = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=21,
+            active_finger_forces_n=[0.0, 2.0],
+            active_pad_fractions=[np.nan, -0.046],
+        ),
+        contact_fraction_recenter=True,
+        active_handle_tangent_extent_m=0.064,
+        contact_recenter_total_m=0.012,
+    )
+    assert exhausted.fail_closed
+    assert exhausted.fail_reason == "active_contact_outside_pad_margin"
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None

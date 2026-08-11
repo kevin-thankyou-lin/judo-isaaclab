@@ -34,6 +34,8 @@ class HandleLocalMpcConfig:
     physical_contact_threshold_n: float = 0.1
     depth_guard_transverse_tolerance_m: float = 0.010
     depth_guard_release_steps: int = 3
+    maximum_contact_recenter_step_m: float = 0.001
+    maximum_contact_recenter_total_m: float = 0.012
 
     def __post_init__(self) -> None:
         if not 10 <= self.horizon_steps <= 20:
@@ -48,6 +50,8 @@ class HandleLocalMpcConfig:
             self.closure_rotation_tolerance_rad,
             self.physical_contact_threshold_n,
             self.depth_guard_transverse_tolerance_m,
+            self.maximum_contact_recenter_step_m,
+            self.maximum_contact_recenter_total_m,
         )
         if not np.all(np.isfinite(positive)) or any(value <= 0.0 for value in positive):
             raise ValueError("handle-local MPC positive bounds must be finite")
@@ -73,6 +77,7 @@ class HandleLocalMpcCommand:
     robust_latch_ready: bool
     depth_guard_alignment_streak: int
     depth_guard_released: bool
+    contact_recenter_total_m: float
     fail_closed: bool
     fail_reason: str | None
     frame_receipt: dict[str, Any]
@@ -231,6 +236,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         "executed_control",
         "hard_constraints",
         "contact_frame_guard",
+        "contact_fraction_recenter",
         "latch",
         "fail_closed",
         "fail_reason",
@@ -256,6 +262,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
     controls = receipt.get("executed_control", {})
     constraints = receipt.get("hard_constraints", {})
     contact_frame_guard = receipt.get("contact_frame_guard", {})
+    contact_fraction_recenter = receipt.get("contact_fraction_recenter", {})
     latch = receipt.get("latch", {})
     return bool(
         set(residuals)
@@ -302,6 +309,19 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "release_required_consecutive_frames",
             "released",
         }
+        and set(contact_fraction_recenter)
+        == {
+            "enabled",
+            "active",
+            "handle_tangent_world",
+            "handle_tangent_extent_m",
+            "contact_fraction_delta",
+            "requested_translation_m",
+            "executed_translation_m",
+            "total_translation_m",
+            "maximum_step_m",
+            "maximum_total_m",
+        }
         and set(latch)
         == {
             "active_force_and_margin",
@@ -341,11 +361,19 @@ def handle_local_mpc_step(
     depth_guarded_transverse_intercept: bool = False,
     depth_guard_alignment_streak: int = 0,
     depth_guard_released: bool = False,
+    contact_fraction_recenter: bool = False,
+    active_handle_tangent_extent_m: float = 0.0,
+    contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
 ) -> HandleLocalMpcCommand:
     """Plan and return the first bounded active-wrist and jaw control increment."""
 
-    if min(contact_window_step, robust_streak, depth_guard_alignment_streak) < 0:
+    if min(
+        contact_window_step,
+        robust_streak,
+        depth_guard_alignment_streak,
+        contact_recenter_total_m,
+    ) < 0:
         raise ValueError(
             "contact-window, robust, and depth-guard streaks must be nonnegative"
         )
@@ -383,6 +411,12 @@ def handle_local_mpc_step(
     )
     if not np.all(np.isfinite(scalars)):
         raise ValueError("pot displacement and jaw command must be finite")
+    if not np.isfinite(active_handle_tangent_extent_m) or (
+        contact_fraction_recenter and active_handle_tangent_extent_m <= 0.0
+    ):
+        raise ValueError(
+            "contact recentering requires a positive finite handle tangent extent"
+        )
 
     jaw_midpoint = np.mean(centers, axis=0)
     jaw_axis = _unit(centers[1] - centers[0], "jaw closing line")
@@ -474,15 +508,73 @@ def handle_local_mpc_step(
         and (not require_peer_latch or (peer_grasp and peer_robust))
     )
     next_streak = robust_streak + 1 if robust_frame else 0
+    handle_tangent_world = _unit(
+        np.cross(desired_pad_axis, desired_jaw_axis), "handle tangent"
+    )
+    contacting = forces >= config.physical_contact_threshold_n
+    contact_fraction_delta = 0.0
+    if np.any(contacting) and np.all(np.isfinite(fractions[contacting])):
+        fraction_corrections = []
+        for fraction in fractions[contacting]:
+            if fraction < config.minimum_pad_fraction_margin:
+                fraction_corrections.append(
+                    config.minimum_pad_fraction_margin - float(fraction)
+                )
+            elif fraction > 1.0 - config.minimum_pad_fraction_margin:
+                fraction_corrections.append(
+                    1.0 - config.minimum_pad_fraction_margin - float(fraction)
+                )
+        if fraction_corrections:
+            signs = np.sign(fraction_corrections)
+            if np.all(signs == signs[0]):
+                contact_fraction_delta = float(
+                    max(fraction_corrections, key=abs)
+                )
+    requested_recenter_translation_m = float(
+        contact_fraction_delta * active_handle_tangent_extent_m
+    )
+    remaining_recenter_m = max(
+        0.0,
+        config.maximum_contact_recenter_total_m - contact_recenter_total_m,
+    )
+    executed_recenter_translation_m = float(
+        np.clip(
+            requested_recenter_translation_m,
+            -min(config.maximum_contact_recenter_step_m, remaining_recenter_m),
+            min(config.maximum_contact_recenter_step_m, remaining_recenter_m),
+        )
+    )
+    contact_recenter_active = bool(
+        contact_fraction_recenter
+        and physical_contact_observed
+        and not active_margin_ok
+        and contact_fraction_delta != 0.0
+        and remaining_recenter_m > 0.0
+        and pot_motion_ok
+        and peer_margin_ok
+        and (
+            not depth_guarded_transverse_intercept
+            or next_depth_guard_released
+        )
+    )
+    next_contact_recenter_total_m = float(
+        contact_recenter_total_m
+        + (abs(executed_recenter_translation_m) if contact_recenter_active else 0.0)
+    )
     fail_reason = None
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
-    elif not active_margin_ok:
+    elif not active_margin_ok and not contact_recenter_active:
         fail_reason = "active_contact_outside_pad_margin"
     elif not peer_margin_ok:
         fail_reason = "peer_contact_outside_pad_margin"
     fail_closed = fail_reason is not None
 
+    if contact_recenter_active:
+        translation_increment = (
+            executed_recenter_translation_m * handle_tangent_world
+        )
+        rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
         translation_increment = np.zeros(3, dtype=np.float64)
         rotation_increment = np.zeros(3, dtype=np.float64)
@@ -501,6 +593,8 @@ def handle_local_mpc_step(
         if aligned_for_closure and not fail_closed and not robust_frame
         else 0.0
     )
+    if contact_recenter_active:
+        jaw_increment = 0.0
     target = wrist.copy()
     target[:3] += translation_increment
     target = _apply_axis_angle(target, rotation_increment)
@@ -589,6 +683,20 @@ def handle_local_mpc_step(
             "release_required_consecutive_frames": config.depth_guard_release_steps,
             "released": next_depth_guard_released,
         },
+        "contact_fraction_recenter": {
+            "enabled": bool(contact_fraction_recenter),
+            "active": contact_recenter_active,
+            "handle_tangent_world": handle_tangent_world.tolist(),
+            "handle_tangent_extent_m": float(active_handle_tangent_extent_m),
+            "contact_fraction_delta": contact_fraction_delta,
+            "requested_translation_m": requested_recenter_translation_m,
+            "executed_translation_m": (
+                executed_recenter_translation_m if contact_recenter_active else 0.0
+            ),
+            "total_translation_m": next_contact_recenter_total_m,
+            "maximum_step_m": config.maximum_contact_recenter_step_m,
+            "maximum_total_m": config.maximum_contact_recenter_total_m,
+        },
         "latch": {
             "active_force_and_margin": active_robust,
             "peer_force_and_margin": peer_robust,
@@ -611,6 +719,7 @@ def handle_local_mpc_step(
         robust_latch_ready=next_streak >= config.robust_latch_steps,
         depth_guard_alignment_streak=next_depth_guard_streak,
         depth_guard_released=next_depth_guard_released,
+        contact_recenter_total_m=next_contact_recenter_total_m,
         fail_closed=fail_closed,
         fail_reason=fail_reason,
         frame_receipt=receipt,
