@@ -172,7 +172,8 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
         "handover_confirm_steps": 20,
-        "handover_release_lift_m": 0.055,
+        "handover_post_release_lift_m": 0.055,
+        "handover_post_release_lift_steps": 30,
         "left_release_retreat_m": 0.03,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
@@ -186,7 +187,8 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     cursor = command.index("--left-release-retreat-m")
     assert float(command[cursor + 1]) == pytest.approx(0.03)
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
-    assert float(command[command.index("--handover-release-lift-m") + 1]) == 0.055
+    assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
+    assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
@@ -196,8 +198,14 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"handover_confirm_steps": 61}))
     with pytest.raises(ValueError, match="confirmation"):
         campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({"handover_release_lift_m": 0.081}))
-    with pytest.raises(ValueError, match="release lift"):
+    candidate.write_text(json.dumps({
+        "handover_post_release_lift_m": 0.081,
+        "handover_post_release_lift_steps": 30,
+    }))
+    with pytest.raises(ValueError, match="post-release lift"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_post_release_lift_m": 0.055}))
+    with pytest.raises(ValueError, match="distance and steps"):
         campaign._repair_strategy(2)
 
 

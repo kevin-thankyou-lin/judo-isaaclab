@@ -98,10 +98,16 @@ def _parser() -> argparse.Namespace:
         help="Bounded lateral retreat after the receiving grasp closes.",
     )
     parser.add_argument(
-        "--handover-release-lift-m",
+        "--handover-post-release-lift-m",
         type=float,
         default=0.0,
-        help="Bounded receiver lift distributed across the left-release motion.",
+        help="Bounded receiver lift after the contact-backed left release.",
+    )
+    parser.add_argument(
+        "--handover-post-release-lift-steps",
+        type=int,
+        default=0,
+        help="Rows for the contact-backed receiver lift after left release.",
     )
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--camera-width", type=int, default=640)
@@ -553,11 +559,19 @@ def _bounded_left_release_retreat(value: float) -> float:
     return retreat
 
 
-def _bounded_handover_release_lift(value: float) -> float:
+def _bounded_handover_post_release_lift(value: float) -> float:
     lift = float(value)
     if not np.isfinite(lift) or not 0.0 <= lift <= 0.08:
-        raise ValueError("handover release lift must be in [0, 0.08] m")
+        raise ValueError("handover post-release lift must be in [0, 0.08] m")
     return lift
+
+
+def _bounded_handover_post_release_lift_steps(value: int, lift_m: float) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 60:
+        raise ValueError("handover post-release lift steps must be in [0, 60]")
+    if bool(value) != bool(lift_m):
+        raise ValueError("handover post-release lift distance and steps must both be zero or positive")
+    return value
 
 
 def _semantic_waypoint_name(trajectory, step: int) -> str:
@@ -661,6 +675,33 @@ def _handover_boundary_receipt(sample) -> dict[str, object]:
         "stage": "handover",
         "checked_after_step": int(sample["step"]),
         "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _handover_lift_guard_receipt(sample, *, phase: str) -> dict[str, object]:
+    """Bind receiver lift entry to contact, then retain assist-backed support."""
+    checks = {
+        "pick_latched": bool(sample["stage1"]),
+        "right_assist_secure": bool(
+            sample["grasp_assist_engaged"].get("right", False)
+        ),
+    }
+    if phase == "entry":
+        checks["right_contact_secure"] = bool(sample["right_grasp"])
+    elif phase != "lift_row":
+        raise ValueError(f"unknown handover lift phase: {phase!r}")
+    return {
+        "stage": "handover_post_release_lift",
+        "phase": phase,
+        "checked_after_step": int(sample["step"]),
+        "checks": checks,
+        "diagnostics": {
+            "right_contact_raw": bool(sample["right_grasp"]),
+            "left_assist_engaged": bool(
+                sample["grasp_assist_engaged"].get("left", False)
+            ),
+        },
         "passed": all(checks.values()),
     }
 
@@ -931,12 +972,16 @@ def _build_skill(
 
     left_lift = held(pick_latch_mug_pose, left_contact)
     left_handover = held(target_handover_mug.root_pose, left_contact)
+    receiver_lift_m = _bounded_handover_post_release_lift(
+        args.handover_post_release_lift_m
+    )
+    receiver_lift_steps = _bounded_handover_post_release_lift_steps(
+        args.handover_post_release_lift_steps, receiver_lift_m
+    )
     left_release = left_handover.copy()
     left_release[1] += _bounded_left_release_retreat(args.left_release_retreat_m)
-    right_release = right_grasp.copy()
-    right_release[2] += _bounded_handover_release_lift(
-        args.handover_release_lift_m
-    )
+    receiver_lift = right_grasp.copy()
+    receiver_lift[2] += receiver_lift_m
     right_transport = held(transport_mug_pose, right_contact)
     right_approach = held(approach_mug_pose, right_contact)
     right_insert = held(final_mug.root_pose, right_contact)
@@ -965,7 +1010,8 @@ def _build_skill(
         ),
         right_grasp,
         left_release,
-        right_release=right_release,
+        receiver_lift=receiver_lift,
+        receiver_lift_steps=receiver_lift_steps,
         approach_steps=100,
         contact_settle_steps=args.handover_contact_settle_steps,
         confirm_steps=args.handover_confirm_steps,
@@ -1011,6 +1057,7 @@ def _sparse_joint_nominal(
         "right_grasp_settle": indices["dual_grasp"],
         "right_grasp": indices["dual_grasp"],
         "left_release": indices["handover"],
+        "handover_receiver_lift": indices["handover"],
         "handover_confirm": indices["handover"],
         "tree_transport": indices["tree_approach"],
         "branch_approach": indices["tree_approach"],
@@ -1068,7 +1115,12 @@ def main() -> None:
         raise ValueError("--handover-confirm-steps must be nonnegative")
     _bounded_handover_offset(args.handover_target_offset_m)
     _bounded_left_release_retreat(args.left_release_retreat_m)
-    _bounded_handover_release_lift(args.handover_release_lift_m)
+    post_release_lift = _bounded_handover_post_release_lift(
+        args.handover_post_release_lift_m
+    )
+    _bounded_handover_post_release_lift_steps(
+        args.handover_post_release_lift_steps, post_release_lift
+    )
     if args.reuse_source_pick_prefix and args.mode != "skill":
         raise ValueError("--reuse-source-pick-prefix requires --mode skill")
     _physics_device_receipt(
@@ -1239,6 +1291,8 @@ def main() -> None:
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
         trace_stages = []; trace_waypoints = []
         handover_boundary = None
+        handover_lift_boundary = None
+        handover_lift_rows = []
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
@@ -1276,6 +1330,16 @@ def main() -> None:
                     )
                 semantic_step = step - source_prefix_steps
                 if (
+                    "handover_receiver_lift" in trajectory.waypoint_steps
+                    and semantic_step
+                    == trajectory.waypoint_steps["left_release"] + 1
+                ):
+                    handover_lift_boundary = _handover_lift_guard_receipt(
+                        samples[-1], phase="entry"
+                    )
+                    if not handover_lift_boundary["passed"]:
+                        break
+                if (
                     semantic_step
                     == trajectory.waypoint_steps.get(
                         "handover_confirm",
@@ -1307,6 +1371,11 @@ def main() -> None:
             if semantic_step is not None:
                 _update_authored_assist_releases(env, trajectory, semantic_step)
             sample = _sample(env, step, stage, info)
+            stop_after_row = False
+            if waypoint == "handover_receiver_lift":
+                lift_row = _handover_lift_guard_receipt(sample, phase="lift_row")
+                handover_lift_rows.append(lift_row)
+                stop_after_row = not lift_row["passed"]
             semantic_statuses.append(hang_mug_status(env, info))
             demo_recorder.append(
                 action,
@@ -1383,6 +1452,8 @@ def main() -> None:
                 progress = {key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}
                 print("HANGMUG_PROGRESS=" + json.dumps(progress, sort_keys=True), flush=True)
                 print(f"STEP_PROGRESS step={step} stage={stage}", flush=True)
+            if stop_after_row:
+                break
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -1499,6 +1570,14 @@ def main() -> None:
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
+        if args.handover_post_release_lift_steps:
+            checks["handover_post_release_lift_passed"] = bool(
+                handover_lift_boundary
+                and handover_lift_boundary["passed"]
+                and len(handover_lift_rows)
+                == args.handover_post_release_lift_steps
+                and all(row["passed"] for row in handover_lift_rows)
+            )
         if trajectory is None:
             checks["executed_source_actions_exact"] = bool(executed_source_actions_exact)
         if source_prefix_steps:
@@ -1581,7 +1660,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_release_lift_m": _bounded_handover_release_lift(args.handover_release_lift_m), "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
             "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,
@@ -1589,10 +1668,37 @@ def main() -> None:
             "terminal_stability": terminal_stability,
             "semantic_stage_receipt": _semantic_stage_receipt(semantic_statuses),
             "stage_boundary": handover_boundary,
+            "handover_post_release_lift": {
+                "planned_steps": args.handover_post_release_lift_steps,
+                "entry": handover_lift_boundary,
+                "rows": handover_lift_rows,
+                "passed": bool(
+                    not args.handover_post_release_lift_steps
+                    or (
+                        handover_lift_boundary
+                        and handover_lift_boundary["passed"]
+                        and len(handover_lift_rows)
+                        == args.handover_post_release_lift_steps
+                        and all(row["passed"] for row in handover_lift_rows)
+                    )
+                ),
+            },
             "first_failed_semantic_stage": (
                 "handover"
-                if handover_boundary is not None
-                and not handover_boundary["passed"]
+                if (
+                    handover_boundary is not None
+                    and not handover_boundary["passed"]
+                )
+                or (
+                    args.handover_post_release_lift_steps
+                    and (
+                        handover_lift_boundary is None
+                        or not handover_lift_boundary["passed"]
+                        or len(handover_lift_rows)
+                        != args.handover_post_release_lift_steps
+                        or not all(row["passed"] for row in handover_lift_rows)
+                    )
+                )
                 else None
             ),
             "semantic_frames": {

@@ -170,6 +170,7 @@ def reanchor_physical_handover(
     pregrasp_end = steps["handover_pregrasp"]
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
+    lift_end = steps.get("handover_receiver_lift", release_end)
     hold_end = steps.get("handover_confirm", release_end)
     transport_end = steps["tree_transport"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
@@ -195,9 +196,17 @@ def reanchor_physical_handover(
     right[pregrasp_end + 1 : grasp_end + 1] = interpolate_poses(
         corrected_pregrasp, corrected_grasp, grasp_end - pregrasp_end
     )
-    right[grasp_end + 1 : hold_end + 1] = corrected_grasp
+    corrected_lift_right = transfer_pose(
+        right[lift_end], right[release_end], corrected_grasp
+    )
+    right[grasp_end + 1 : release_end + 1] = corrected_grasp
+    if lift_end > release_end:
+        right[release_end + 1 : lift_end + 1] = interpolate_poses(
+            corrected_grasp, corrected_lift_right, lift_end - release_end
+        )
+    right[lift_end + 1 : hold_end + 1] = corrected_lift_right
     right[hold_end + 1 : transport_end + 1] = interpolate_poses(
-        corrected_grasp,
+        corrected_lift_right,
         trajectory.right_poses[transport_end],
         transport_end - hold_end,
     )
@@ -246,6 +255,8 @@ def reanchor_right_grasp_from_observed_mug(
     approach_end = steps.get("right_grasp_settle", steps["right_grasp"])
     grasp_end = steps["right_grasp"]
     release_end = steps.get("handover_confirm", steps["left_release"])
+    left_release_end = steps["left_release"]
+    lift_end = steps.get("handover_receiver_lift", left_release_end)
     nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
     corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
@@ -253,7 +264,15 @@ def reanchor_right_grasp_from_observed_mug(
         observed_right_pose, corrected_grasp, approach_end - start + 1
     )
     right[approach_end + 1 : grasp_end + 1] = corrected_grasp
-    right[grasp_end + 1 : release_end + 1] = corrected_grasp
+    corrected_lift = transfer_pose(
+        right[lift_end], right[left_release_end], corrected_grasp
+    )
+    right[grasp_end + 1 : left_release_end + 1] = corrected_grasp
+    if lift_end > left_release_end:
+        right[left_release_end + 1 : lift_end + 1] = interpolate_poses(
+            corrected_grasp, corrected_lift, lift_end - left_release_end
+        )
+    right[lift_end + 1 : release_end + 1] = corrected_lift
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
@@ -383,7 +402,8 @@ class HangMugSkillProgram:
         right_grasp: Any,
         left_release: Any,
         *,
-        right_release: Any | None = None,
+        receiver_lift: Any | None = None,
+        receiver_lift_steps: int = 0,
         approach_steps: int,
         close_steps: int,
         release_steps: int,
@@ -420,9 +440,19 @@ class HangMugSkillProgram:
             "physical_handover",
             release_steps,
             left_pose=left_release,
-            right_pose=right_release,
             left_gripper=opened,
         )
+        if receiver_lift_steps < 0:
+            raise ValueError("receiver_lift_steps must be nonnegative")
+        if receiver_lift_steps:
+            if receiver_lift is None:
+                raise ValueError("receiver lift requires a right-wrist target")
+            self._append(
+                "handover_receiver_lift",
+                "physical_handover",
+                receiver_lift_steps,
+                right_pose=receiver_lift,
+            )
         if confirm_steps < 0:
             raise ValueError("confirm_steps must be nonnegative")
         if confirm_steps:

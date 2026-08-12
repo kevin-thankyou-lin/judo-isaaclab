@@ -26,6 +26,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
+    _handover_lift_guard_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
@@ -199,6 +200,40 @@ def test_handover_boundary_requires_latch_right_contact_and_assist_release():
         failed = _handover_boundary_receipt({**sample, **mutation})
         assert not failed["passed"]
         assert not failed["checks"][failed_check]
+
+
+def test_handover_lift_guard_requires_entry_contact_then_assist_only():
+    sample = {
+        "step": 449,
+        "stage1": True,
+        "right_grasp": True,
+        "grasp_assist_engaged": {"left": False, "right": True},
+    }
+    receipt = _handover_lift_guard_receipt(sample, phase="entry")
+    assert receipt["passed"]
+    assert receipt["checked_after_step"] == 449
+    assert receipt["phase"] == "entry"
+    assert receipt["diagnostics"] == {
+        "right_contact_raw": True,
+        "left_assist_engaged": False,
+    }
+    for mutation, failed_check in (
+        ({"stage1": False}, "pick_latched"),
+        ({"right_grasp": False}, "right_contact_secure"),
+        (
+            {"grasp_assist_engaged": {"left": False, "right": False}},
+            "right_assist_secure",
+        ),
+    ):
+        failed = _handover_lift_guard_receipt({**sample, **mutation}, phase="entry")
+        assert not failed["passed"]
+        assert not failed["checks"][failed_check]
+    raw_flicker = _handover_lift_guard_receipt(
+        {**sample, "right_grasp": False}, phase="lift_row"
+    )
+    assert raw_flicker["passed"]
+    assert not raw_flicker["diagnostics"]["right_contact_raw"]
+    assert "right_contact_secure" not in raw_flicker["checks"]
 
 
 def test_task2_target_assets_are_same_index_and_use_source_state_template(tmp_path):
@@ -716,16 +751,30 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
         approach_steps=1, close_steps=1, lift_steps=1,
     )
     grasp = _pose(0.3, -0.2, 1)
-    release_hold = _pose(0.3, -0.2, 1.055)
+    release_left = _pose(0.2, z=1)
+    lift_right = _pose(0.3, -0.2, 1.055)
     program.physical_handover(
-        _pose(z=1), _pose(0.3, -0.1, 1), grasp, _pose(0.2, z=1),
-        right_release=release_hold,
+        _pose(z=1), _pose(0.3, -0.1, 1), grasp, release_left,
+        receiver_lift=lift_right,
+        receiver_lift_steps=3,
         approach_steps=2, contact_settle_steps=3, close_steps=2,
         release_steps=2, confirm_steps=3,
     )
     trajectory = program.build()
+    legacy = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    legacy.semantic_left_grasp(
+        _pose(z=1), _pose(z=1), _pose(z=1),
+        approach_steps=1, close_steps=1, lift_steps=1,
+    )
+    legacy.physical_handover(
+        _pose(z=1), _pose(0.3, -0.1, 1), grasp, release_left,
+        approach_steps=2, contact_settle_steps=3, close_steps=2,
+        release_steps=2, confirm_steps=3,
+    )
+    legacy_trajectory = legacy.build()
     settle_end = trajectory.waypoint_steps["right_grasp_settle"]
     grasp_end = trajectory.waypoint_steps["right_grasp"]
+    lift_end = trajectory.waypoint_steps["handover_receiver_lift"]
     release_end = trajectory.waypoint_steps["left_release"]
     confirm_end = trajectory.waypoint_steps["handover_confirm"]
     assert trajectory.right_poses[settle_end] == pytest.approx(grasp)
@@ -734,15 +783,43 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     )
     assert trajectory.grippers[settle_end, 1] == pytest.approx(-0.0475)
     assert trajectory.grippers[grasp_end, 1] == pytest.approx(0.0)
-    release_rows = trajectory.right_poses[grasp_end + 1 : release_end + 1]
-    assert np.all(np.diff(release_rows[:, 2]) > 0)
-    assert release_rows[-1] == pytest.approx(release_hold)
-    assert confirm_end - release_end == 3
-    assert trajectory.left_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
-        np.repeat(trajectory.left_poses[release_end][None], 3, axis=0)
+    acquire = slice(grasp_end + 1, release_end + 1)
+    legacy_release = slice(
+        legacy_trajectory.waypoint_steps["right_grasp"] + 1,
+        legacy_trajectory.waypoint_steps["left_release"] + 1,
     )
-    assert trajectory.right_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
-        np.repeat(trajectory.right_poses[release_end][None], 3, axis=0)
+    assert trajectory.left_poses[acquire] == pytest.approx(
+        legacy_trajectory.left_poses[legacy_release]
+    )
+    assert trajectory.right_poses[acquire] == pytest.approx(
+        legacy_trajectory.right_poses[legacy_release]
+    )
+    assert trajectory.grippers[acquire] == pytest.approx(
+        legacy_trajectory.grippers[legacy_release]
+    )
+    receiver_lift = slice(release_end + 1, lift_end + 1)
+    assert trajectory.left_poses[receiver_lift] == pytest.approx(
+        np.repeat(release_left[None], 3, axis=0)
+    )
+    assert np.all(np.diff(trajectory.right_poses[receiver_lift, 2]) > 0)
+    assert trajectory.right_poses[lift_end] == pytest.approx(lift_right)
+    assert trajectory.grippers[receiver_lift] == pytest.approx(
+        np.repeat([[-0.0475, 0.0]], 3, axis=0)
+    )
+    assert trajectory.right_poses[lift_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(lift_right[None], confirm_end - lift_end, axis=0)
+    )
+    assert trajectory.grippers[lift_end + 1, 0] < 0.0
+    assert confirm_end - lift_end == 3
+    assert trajectory.left_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(
+            trajectory.left_poses[release_end][None],
+            confirm_end - release_end,
+            axis=0,
+        )
+    )
+    assert trajectory.right_poses[lift_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(trajectory.right_poses[lift_end][None], 3, axis=0)
     )
     assert trajectory.grippers[confirm_end] == pytest.approx([-0.0475, 0.0])
 
@@ -755,10 +832,12 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     assert adjusted.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
         np.repeat(corrected[None], grasp_end - settle_end, axis=0)
     )
-    assert adjusted.right_poses[grasp_end + 1 : confirm_end + 1] == pytest.approx(
-        np.repeat(corrected[None], confirm_end - grasp_end, axis=0)
+    expected_lift = corrected.copy()
+    expected_lift[2] += 0.055
+    assert adjusted.right_poses[lift_end] == pytest.approx(expected_lift)
+    assert adjusted.right_poses[lift_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(expected_lift[None], confirm_end - lift_end, axis=0)
     )
-
     class FakeActions:
         def __init__(self, value):
             self.value = value
@@ -807,3 +886,13 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     assert continued[0] == pytest.approx(
         0.5 * (source["actions"].value[7] + source["actions"].value[4])
     )
+
+
+def test_receiver_lift_requires_target_and_follows_release():
+    program = HangMugSkillProgram(_pose(), _pose())
+    with pytest.raises(ValueError, match="requires a right-wrist target"):
+        program.physical_handover(
+            _pose(), _pose(), _pose(), _pose(),
+            receiver_lift_steps=2,
+            approach_steps=1, close_steps=1, release_steps=1,
+        )

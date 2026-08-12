@@ -46,9 +46,13 @@ def test_left_release_retreat_is_bounded():
     with pytest.raises(ValueError, match=r"\[0.02, 0.12\]"):
         module._bounded_left_release_retreat(0.15)
 
-    assert module._bounded_handover_release_lift(0.055) == pytest.approx(0.055)
-    with pytest.raises(ValueError, match="release lift"):
-        module._bounded_handover_release_lift(0.081)
+    lift = module._bounded_handover_post_release_lift(0.055)
+    assert lift == pytest.approx(0.055)
+    assert module._bounded_handover_post_release_lift_steps(30, lift) == 30
+    with pytest.raises(ValueError, match="post-release lift"):
+        module._bounded_handover_post_release_lift(0.081)
+    with pytest.raises(ValueError, match="distance and steps"):
+        module._bounded_handover_post_release_lift_steps(0, lift)
 
 
 def test_semantic_waypoint_identity_uses_executed_row_endpoints():
