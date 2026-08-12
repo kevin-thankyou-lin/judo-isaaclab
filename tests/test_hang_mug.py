@@ -502,7 +502,7 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     )
     program.physical_handover(
         _pose(0.3), _pose(0.4, -0.2), _pose(0.4, -0.1), _pose(0.3, 0.2),
-        approach_steps=2, close_steps=2, release_steps=2,
+        approach_steps=2, close_steps=2, release_steps=2, confirm_steps=3,
     )
     program.handle_to_branch_insert(
         _pose(0.6, -0.1), _pose(0.7, -0.1), _pose(0.8, -0.1),
@@ -532,6 +532,7 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     )
     pregrasp_end = trajectory.waypoint_steps["handover_pregrasp"]
     release_end = trajectory.waypoint_steps["left_release"]
+    confirm_end = trajectory.waypoint_steps["handover_confirm"]
     assert adjusted.left_poses[: lift_end + 1] == pytest.approx(
         original_left[: lift_end + 1]
     )
@@ -541,6 +542,12 @@ def test_handover_reanchor_changes_only_handover_and_transport_entry():
     expected_release = original_left[release_end].copy()
     expected_release[:3] += observed_left[:3] - original_left[pregrasp_end, :3]
     assert adjusted.left_poses[release_end] == pytest.approx(expected_release)
+    assert adjusted.left_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(expected_release[None], confirm_end - release_end, axis=0)
+    )
+    assert adjusted.right_poses[grasp_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(adjusted.right_poses[grasp_end][None], confirm_end - grasp_end, axis=0)
+    )
     assert adjusted.grippers == pytest.approx(trajectory.grippers)
 
 
@@ -660,17 +667,27 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     program.physical_handover(
         _pose(z=1), _pose(0.3, -0.1, 1), grasp, _pose(0.2, z=1),
         approach_steps=2, contact_settle_steps=3, close_steps=2,
-        release_steps=2,
+        release_steps=2, confirm_steps=3,
     )
     trajectory = program.build()
     settle_end = trajectory.waypoint_steps["right_grasp_settle"]
     grasp_end = trajectory.waypoint_steps["right_grasp"]
+    release_end = trajectory.waypoint_steps["left_release"]
+    confirm_end = trajectory.waypoint_steps["handover_confirm"]
     assert trajectory.right_poses[settle_end] == pytest.approx(grasp)
     assert trajectory.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
         np.repeat(grasp[None], grasp_end - settle_end, axis=0)
     )
     assert trajectory.grippers[settle_end, 1] == pytest.approx(-0.0475)
     assert trajectory.grippers[grasp_end, 1] == pytest.approx(0.0)
+    assert confirm_end - release_end == 3
+    assert trajectory.left_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(trajectory.left_poses[release_end][None], 3, axis=0)
+    )
+    assert trajectory.right_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(trajectory.right_poses[release_end][None], 3, axis=0)
+    )
+    assert trajectory.grippers[confirm_end] == pytest.approx([-0.0475, 0.0])
 
     observed_mug = _pose(0.4, 0.2, 0.8)
     corrected = compose_pose(observed_mug, _pose(0.05, -0.02, 0.03))
@@ -680,6 +697,9 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     assert adjusted.right_poses[settle_end] == pytest.approx(corrected)
     assert adjusted.right_poses[settle_end + 1 : grasp_end + 1] == pytest.approx(
         np.repeat(corrected[None], grasp_end - settle_end, axis=0)
+    )
+    assert adjusted.right_poses[grasp_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(corrected[None], confirm_end - grasp_end, axis=0)
     )
 
     class FakeActions:

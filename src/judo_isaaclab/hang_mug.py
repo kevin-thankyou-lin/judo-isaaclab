@@ -170,6 +170,7 @@ def reanchor_physical_handover(
     pregrasp_end = steps["handover_pregrasp"]
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
+    hold_end = steps.get("handover_confirm", release_end)
     transport_end = steps["tree_transport"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
@@ -181,6 +182,7 @@ def reanchor_physical_handover(
     left[grasp_end + 1 : release_end + 1] = interpolate_poses(
         observed_left, corrected_release, release_end - grasp_end
     )
+    left[release_end + 1 : hold_end + 1] = corrected_release
     corrected_pregrasp = transfer_pose(
         right[pregrasp_end], nominal_mug_pose, observed_mug_pose
     )
@@ -193,11 +195,11 @@ def reanchor_physical_handover(
     right[pregrasp_end + 1 : grasp_end + 1] = interpolate_poses(
         corrected_pregrasp, corrected_grasp, grasp_end - pregrasp_end
     )
-    right[grasp_end + 1 : release_end + 1] = corrected_grasp
-    right[release_end + 1 : transport_end + 1] = interpolate_poses(
+    right[grasp_end + 1 : hold_end + 1] = corrected_grasp
+    right[hold_end + 1 : transport_end + 1] = interpolate_poses(
         corrected_grasp,
         trajectory.right_poses[transport_end],
-        transport_end - release_end,
+        transport_end - hold_end,
     )
     return SkillTrajectory(
         left_poses=left,
@@ -243,7 +245,7 @@ def reanchor_right_grasp_from_observed_mug(
     start = steps["handover_pregrasp"] + 1
     approach_end = steps.get("right_grasp_settle", steps["right_grasp"])
     grasp_end = steps["right_grasp"]
-    release_end = steps["left_release"]
+    release_end = steps.get("handover_confirm", steps["left_release"])
     nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
     corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
@@ -380,6 +382,7 @@ class HangMugSkillProgram:
         close_steps: int,
         release_steps: int,
         contact_settle_steps: int = 0,
+        confirm_steps: int = 0,
         closed: float = 0.0,
         opened: float = -0.0475,
     ) -> None:
@@ -413,6 +416,12 @@ class HangMugSkillProgram:
             left_pose=left_release,
             left_gripper=opened,
         )
+        if confirm_steps < 0:
+            raise ValueError("confirm_steps must be nonnegative")
+        if confirm_steps:
+            self._append(
+                "handover_confirm", "physical_handover", confirm_steps
+            )
 
     def handle_to_branch_insert(
         self,
