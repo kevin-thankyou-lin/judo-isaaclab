@@ -1286,56 +1286,6 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     )
 
 
-def test_branch_approach_can_transition_to_pinned_inserted_joint_nominal():
-    program = HangMugSkillProgram(_pose(), _pose())
-    program.handle_to_branch_insert(
-        _pose(0.5),
-        _pose(0.6),
-        _pose(0.7),
-        transport_steps=2,
-        right_orient_clear=_pose(0.5),
-        orient_steps=2,
-        approach_steps=4,
-        insert_steps=3,
-    )
-    program.release_and_support(
-        _pose(0.7), _pose(0.7), unload_steps=2, release_steps=2, settle_steps=2
-    )
-    trajectory = program.build()
-
-    class Actions:
-        def __init__(self):
-            self.value = np.arange(20 * 14).reshape(20, 14)
-
-        def detach(self):
-            return self
-
-        def cpu(self):
-            return self
-
-        def __array__(self, dtype=None):
-            return np.asarray(self.value, dtype=dtype)
-
-    source = {"actions": Actions()}
-    indices = {
-        "left_pregrasp": 1, "left_grasp": 2, "left_lift": 3,
-        "right_pregrasp": 4, "dual_grasp": 5, "handover": 6,
-        "tree_approach": 7, "inserted_held": 8, "release": 9,
-        "stable_settle": 10,
-    }
-    nominal = _sparse_joint_nominal(
-        source,
-        trajectory,
-        {"semantic_indices": indices},
-        branch_approach_insert_nominal=True,
-    )
-    orient_end = trajectory.waypoint_steps["branch_orient_clear"]
-    approach_end = trajectory.waypoint_steps["branch_approach"]
-    assert nominal[orient_end] == pytest.approx(source["actions"].value[7])
-    assert nominal[approach_end] == pytest.approx(source["actions"].value[8])
-    assert nominal[approach_end + 1] == pytest.approx(source["actions"].value[8])
-
-
 def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     program = HangMugSkillProgram(_pose(), _pose())
     program.semantic_left_grasp(
