@@ -147,15 +147,108 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
         (objects / kind / name).mkdir(parents=True)
     monkeypatch.setattr(campaign, "OBJECTS", objects)
     monkeypatch.setattr(campaign, "_steady_state_seconds", lambda: 211)
+    pick = campaign._repair_selection("pick", None)
     command = campaign._repair_command(
-        2, tmp_path / "repair", tmp_path / "classification/result.json", "pick"
+        2, tmp_path / "repair", tmp_path / "classification/result.json", pick
     )
     assert "--direct-replay-result" in command
     assert "--reuse-source-pick-prefix" not in command
+    handover_selection = campaign._repair_selection("handover", "pick")
     handover = campaign._repair_command(
-        2, tmp_path / "repair2", tmp_path / "classification/result.json", "handover"
+        2, tmp_path / "repair2", tmp_path / "classification/result.json",
+        handover_selection,
     )
     assert "--reuse-source-pick-prefix" in handover
+
+
+@pytest.mark.parametrize(
+    "failed,last_completed",
+    (
+        ("alignment", "handover"),
+        ("insertion_and_support", "alignment"),
+        ("release_and_hang", "insertion_and_support"),
+    ),
+)
+def test_later_stage_failure_uses_truthful_coarse_pick_boundary(
+    failed, last_completed, tmp_path, monkeypatch
+):
+    objects = tmp_path / "objects"
+    for kind, name in (
+        ("MugHangable", "mug_teacup_000002"),
+        ("ThreeLayerMugTree", "mug_tree_000002"),
+    ):
+        (objects / kind / name).mkdir(parents=True)
+    monkeypatch.setattr(campaign, "OBJECTS", objects)
+    monkeypatch.setattr(campaign, "_steady_state_seconds", lambda: 211)
+    selection = campaign._repair_selection(failed, last_completed)
+    assert selection == {
+        "requested_failed_stage": failed,
+        "requested_last_completed_stage": last_completed,
+        "actual_repair_boundary": "pick",
+        "coarse_fallback": True,
+    }
+    command = campaign._repair_command(
+        2, tmp_path / "repair", tmp_path / "classification/result.json", selection
+    )
+    assert "--reuse-source-pick-prefix" in command
+    assert "--direct-replay-result" in command
+
+
+def test_classification_binding_and_manifest_preserve_actual_boundary(
+    tmp_path, monkeypatch
+):
+    attempt = tmp_path / "classification"
+    attempt.mkdir()
+    (attempt / "classification_audit.json").write_text("audit")
+    classification = {
+        "first_failed_stage": "alignment",
+        "last_completed_stage": "handover",
+        "completed_stages": ["pick", "handover"],
+        "result_path": str(attempt / "result.json"),
+        "artifacts": {"result_sha256": "result"},
+    }
+    binding = campaign._classification_binding(attempt, classification)
+    assert binding["requested_failed_stage"] == "alignment"
+    assert binding["requested_last_completed_stage"] == "handover"
+    assert binding["actual_repair_boundary"] == "pick"
+    assert binding["coarse_fallback"] is True
+    assert "first_failed_stage" not in binding
+    objects = tmp_path / "objects"
+    for kind, name in (
+        ("MugHangable", "mug_teacup_000002"),
+        ("ThreeLayerMugTree", "mug_tree_000002"),
+    ):
+        (objects / kind / name).mkdir(parents=True)
+    monkeypatch.setattr(campaign, "OBJECTS", objects)
+    monkeypatch.setattr(campaign, "_sha256", lambda _path: "hash")
+    monkeypatch.setattr(campaign.subprocess, "check_output", lambda *_a, **_k: "head\n")
+    manifest = campaign._manifest(
+        2, tmp_path / "repair", ["command"], "ledger",
+        method="semantic_coarse_boundary_repair", classification=binding,
+    )
+    assert manifest["classification"] == binding
+    assert manifest["source_prefix_action_count"] == campaign.SOURCE_PREFIX_STEPS
+    assert manifest["method"] == "semantic_coarse_boundary_repair"
+
+
+def test_guard_lifecycle_requires_all_markers_and_live_zero_workers(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "_worker_pids", lambda: [])
+    (tmp_path / "replay.log").write_text("POST_RUN_ZERO_WORKER=PASS\n")
+    (tmp_path / "replay.log.exit").write_text("GUARDED_RUN_EXIT=0\n")
+    (tmp_path / "replay.log.stall").write_text(
+        "NO_STEP_PROGRESS_STALL_TRIGGERED=0\n"
+    )
+    assert campaign._guard_lifecycle(tmp_path)["post_run_zero_worker"] is True
+    (tmp_path / "replay.log.exit").unlink()
+    with pytest.raises(RuntimeError, match=r"missing=\['exit'\]"):
+        campaign._guard_lifecycle(tmp_path)
+    (tmp_path / "replay.log.exit").write_text("GUARDED_RUN_EXIT=1\n")
+    with pytest.raises(RuntimeError, match=r"missing=\['exit'\]"):
+        campaign._guard_lifecycle(tmp_path)
+    (tmp_path / "replay.log.exit").write_text("GUARDED_RUN_EXIT=0\n")
+    monkeypatch.setattr(campaign, "_worker_pids", lambda: [99])
+    with pytest.raises(RuntimeError, match=r"workers=\[99\]"):
+        campaign._guard_lifecycle(tmp_path)
 
 
 def _run_one_fixture(tmp_path, monkeypatch, classification):

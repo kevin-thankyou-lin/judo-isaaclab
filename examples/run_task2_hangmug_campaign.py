@@ -148,25 +148,44 @@ def _classification_command(index: int, attempt: Path) -> list[str]:
 
 
 def _repair_command(
-    index: int, attempt: Path, classification_result: Path, first_failed_stage: str
+    index: int, attempt: Path, classification_result: Path, selection: dict
 ) -> list[str]:
     workload = _common_workload(index, attempt)
-    repair = [
+    arguments = [
         "--mode", "skill",
         "--source-keyframes", str(KEYFRAMES),
         "--direct-replay-result", str(classification_result),
     ]
-    if first_failed_stage == "pick":
+    if selection["actual_repair_boundary"] == "reset":
         pass
-    elif first_failed_stage == "handover":
-        repair.extend(["--reuse-source-pick-prefix", "--handover-confirm-steps", "12"])
+    elif selection["actual_repair_boundary"] == "pick":
+        arguments.extend(["--reuse-source-pick-prefix", "--handover-confirm-steps", "12"])
     else:
-        raise RuntimeError(
-            f"no proven last-completed-boundary repair for {first_failed_stage!r}; "
-            "preserving classification and stopping before replaying good stages"
-        )
-    workload[workload.index("--device"):workload.index("--device")] = repair
+        raise RuntimeError(f"unsupported actual repair boundary: {selection}")
+    workload[workload.index("--device"):workload.index("--device")] = arguments
     return _guarded(attempt, workload)
+
+
+def _repair_selection(first_failed_stage: str, last_completed_stage: str | None) -> dict:
+    ordered = (
+        "pick", "handover", "alignment", "insertion_and_support", "release_and_hang"
+    )
+    if first_failed_stage not in ordered:
+        raise ValueError(f"unknown failed semantic stage: {first_failed_stage!r}")
+    if first_failed_stage == "pick":
+        boundary, coarse = "reset", False
+    elif first_failed_stage == "handover":
+        boundary, coarse = "pick", False
+    else:
+        # Pick is the latest currently proven executable resume boundary. Run
+        # one clean reset-to-finish suffix without claiming a later-stage resume.
+        boundary, coarse = "pick", True
+    return {
+        "requested_failed_stage": first_failed_stage,
+        "requested_last_completed_stage": last_completed_stage,
+        "actual_repair_boundary": boundary,
+        "coarse_fallback": coarse,
+    }
 
 
 def _worker_pids() -> list[int]:
@@ -187,6 +206,30 @@ def _require_zero_workers() -> None:
     workers = _worker_pids()
     if workers:
         raise RuntimeError(f"local Isaac worker gate failed: {workers}")
+
+
+def _guard_lifecycle(attempt: Path) -> dict:
+    required = {
+        "exit": (attempt / "replay.log.exit", "GUARDED_RUN_EXIT=0"),
+        "stall": (attempt / "replay.log.stall", "NO_STEP_PROGRESS_STALL_TRIGGERED=0"),
+        "post_run": (attempt / "replay.log", "POST_RUN_ZERO_WORKER=PASS"),
+    }
+    missing = []
+    for name, (path, marker) in required.items():
+        text = path.read_text(errors="replace") if path.is_file() else ""
+        if marker not in text.splitlines():
+            missing.append(name)
+    workers = _worker_pids()
+    if missing or workers:
+        raise RuntimeError(
+            f"guard lifecycle incomplete: missing={missing}, workers={workers}"
+        )
+    return {
+        "guarded_run_exit": 0,
+        "no_step_progress_stall_triggered": False,
+        "post_run_zero_worker": True,
+        "workers_at_audit": [],
+    }
 
 
 def _first_true(values: np.ndarray) -> int | None:
@@ -300,6 +343,7 @@ def _semantic_audit(demo: Path, assets: dict[str, Path], mug_init_z: float) -> d
 
 
 def independent_audit(index: int, attempt: Path) -> dict:
+    guard = _guard_lifecycle(attempt)
     result_path, trace_path = attempt / "result.json", attempt / "trace.npz"
     video_path, demo_path = attempt / "video.mp4", attempt / "demo.hdf5"
     manifest_path, log_path = attempt / "manifest.json", attempt / "replay.log"
@@ -346,13 +390,19 @@ def independent_audit(index: int, attempt: Path) -> dict:
         action_binding = len(actions) == len(source_actions) and np.array_equal(actions, source_actions)
         command = _classification_command(index, attempt)
     else:
-        failed_stage = manifest["classification"]["first_failed_stage"]
+        selection = {
+            name: manifest["classification"][name]
+            for name in (
+                "requested_failed_stage", "requested_last_completed_stage",
+                "actual_repair_boundary", "coarse_fallback",
+            )
+        }
         action_binding = (
-            failed_stage != "handover"
+            selection["actual_repair_boundary"] != "pick"
             or np.array_equal(actions[:SOURCE_PREFIX_STEPS], source_actions[:SOURCE_PREFIX_STEPS])
         )
         command = _repair_command(
-            index, attempt, Path(manifest["classification"]["result_path"]), failed_stage
+            index, attempt, Path(manifest["classification"]["result_path"]), selection
         )
     if not (
         source["file_sha256"] == SOURCE_SHA256
@@ -394,10 +444,16 @@ def independent_audit(index: int, attempt: Path) -> dict:
             "source_action_dataset": "actions",
             "source_actions_sha256": SOURCE_ACTIONS_SHA256,
             "source_prefix_action_count": (
-                SOURCE_PREFIX_STEPS if method != "direct_source_action_replay" and manifest["classification"]["first_failed_stage"] == "handover" else None
+                SOURCE_PREFIX_STEPS
+                if method != "direct_source_action_replay"
+                and manifest["classification"]["actual_repair_boundary"] == "pick"
+                else None
             ),
             "source_prefix_bit_exact": (
-                bool(action_binding) if method == "direct_source_action_replay" or manifest["classification"]["first_failed_stage"] == "handover" else None
+                bool(action_binding)
+                if method == "direct_source_action_replay"
+                or manifest["classification"]["actual_repair_boundary"] == "pick"
+                else None
             ),
             "target_state_template_actions_executed": False,
             "candidate_sampling": False,
@@ -430,15 +486,12 @@ def independent_audit(index: int, attempt: Path) -> dict:
         },
         "ordered_semantic_stages": semantic_audit["ordered_semantic_stages"],
         "contact_policy": semantic_audit["contact_policy"],
-        "guard": {
-            "exit_code": int((attempt / "replay.log.exit").read_text().split("GUARDED_RUN_EXIT=")[-1]),
-            "no_step_progress_stall_triggered": "=0" in (attempt / "replay.log.stall").read_text(),
-            "post_run_zero_worker": "POST_RUN_ZERO_WORKER=PASS" in log_path.read_text(),
-        },
+        "guard": guard,
     }
 
 
 def classification_audit(index: int, attempt: Path) -> dict:
+    guard = _guard_lifecycle(attempt)
     result = _load(attempt / "result.json")
     manifest = _load(attempt / "manifest.json")
     if (
@@ -500,6 +553,7 @@ def classification_audit(index: int, attempt: Path) -> dict:
         },
         "source_actions_exact": True,
         "video": video,
+        "guard": guard,
         "result_path": str(attempt / "result.json"),
     }
 
@@ -589,6 +643,20 @@ def _recover_audited_attempt(index: int) -> bool:
     return False
 
 
+def _classification_binding(attempt: Path, classification: dict) -> dict:
+    selection = _repair_selection(
+        classification["first_failed_stage"], classification["last_completed_stage"]
+    )
+    return {
+        "result_path": classification["result_path"],
+        "result_sha256": classification["artifacts"]["result_sha256"],
+        "audit_path": str(attempt / "classification_audit.json"),
+        "audit_sha256": _sha256(attempt / "classification_audit.json"),
+        "completed_stages": classification["completed_stages"],
+        **selection,
+    }
+
+
 def _manifest(
     index: int,
     attempt: Path,
@@ -611,7 +679,7 @@ def _manifest(
         "source_prefix_action_count": (
             SOURCE_PREFIX_STEPS
             if classification is not None
-            and classification["first_failed_stage"] == "handover"
+            and classification["actual_repair_boundary"] == "pick"
             else None
         ),
         "target_assets": {name: str(path) for name, path in _asset_pair(index).items()},
@@ -727,36 +795,22 @@ def run_one(index: int) -> None:
     failed_stage = classification["first_failed_stage"]
     repair_attempt = _attempt_directory(index, f"repair_{failed_stage}")
     repair_attempt.mkdir(parents=True, exist_ok=False)
-    classification_binding = {
-        "result_path": classification["result_path"],
-        "result_sha256": classification["artifacts"]["result_sha256"],
-        "audit_path": str(classification_attempt / "classification_audit.json"),
-        "audit_sha256": _sha256(classification_attempt / "classification_audit.json"),
-        "completed_stages": classification["completed_stages"],
-        "last_completed_stage": classification["last_completed_stage"],
-        "first_failed_stage": failed_stage,
-    }
-    try:
-        command = _repair_command(
-            index, repair_attempt, Path(classification["result_path"]), failed_stage
-        )
-    except BaseException as error:
-        _atomic_json(
-            repair_attempt / "manifest.json",
-            _manifest(
-                index, repair_attempt, [], ledger_sha256,
-                method="semantic_stage_local_repair",
-                classification=classification_binding,
-            ),
-            immutable=True,
-        )
-        _preserve_failure(index, repair_attempt, error=f"{type(error).__name__}: {error}")
-        raise
+    classification_binding = _classification_binding(
+        classification_attempt, classification
+    )
+    command = _repair_command(
+        index, repair_attempt, Path(classification["result_path"]),
+        classification_binding,
+    )
     _atomic_json(
         repair_attempt / "manifest.json",
         _manifest(
             index, repair_attempt, command, ledger_sha256,
-            method="semantic_stage_local_repair",
+            method=(
+                "semantic_coarse_boundary_repair"
+                if classification_binding["coarse_fallback"]
+                else "semantic_stage_boundary_repair"
+            ),
             classification=classification_binding,
         ),
         immutable=True,
