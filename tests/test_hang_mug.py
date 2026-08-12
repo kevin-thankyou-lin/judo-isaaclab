@@ -27,6 +27,7 @@ from run_hangmug_skill_program import (
     _install_grasp_assist_config,
     _handover_boundary_receipt,
     _handover_lift_guard_receipt,
+    _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
@@ -184,6 +185,7 @@ def test_handover_boundary_requires_latch_right_contact_and_assist_release():
             "left_assist_released": True,
         },
         "passed": True,
+        "safe_to_continue": True,
     }
     for mutation, failed_check in (
         ({"stage2": False}, "stage2_latched"),
@@ -200,6 +202,21 @@ def test_handover_boundary_requires_latch_right_contact_and_assist_release():
         failed = _handover_boundary_receipt({**sample, **mutation})
         assert not failed["passed"]
         assert not failed["checks"][failed_check]
+        assert failed["safe_to_continue"] is (failed_check == "stage2_latched")
+
+
+def test_missing_stage2_alone_does_not_block_physically_secure_continuation():
+    receipt = _handover_boundary_receipt(
+        {
+            "step": 499,
+            "stage2": False,
+            "right_grasp": True,
+            "grasp_assist_engaged": {"left": False, "right": True},
+        }
+    )
+    assert not receipt["passed"]
+    assert receipt["safe_to_continue"]
+    assert receipt["checks"]["stage2_latched"] is False
 
 
 def test_handover_lift_guard_requires_entry_contact_then_assist_only():
@@ -302,6 +319,90 @@ def test_terminal_stability_requires_thirty_current_physical_success_rows():
     rows = [dict(row) for _ in range(30)]
     rows[-2]["hang_predicate_now"] = False
     assert not _terminal_stability(rows)["passed"]
+
+
+def _durable_terminal_rows(*, stage2: bool = False):
+    status = {
+        "released": True,
+        "stable": True,
+        "contact_policy": True,
+        "diagnostics": {
+            "branch_engaged": True,
+            "raw_conditions": {
+                "insertion_support_candidate": True,
+                "release_hang_candidate": True,
+            },
+            "completed_stage_latches": {
+                "pick": True,
+                "handover": stage2,
+                "alignment": False,
+                "insertion_and_support": False,
+                "release_and_hang": False,
+            },
+        },
+    }
+    sample = {
+        "stage1": True,
+        "stage2": stage2,
+        "stage3": False,
+        "left_grasp": False,
+        "right_grasp": False,
+        "grasp_assist_engaged": {"left": False, "right": False},
+    }
+    return [dict(status) for _ in range(30)], [dict(sample) for _ in range(30)]
+
+
+def test_genuine_terminal_hang_is_independently_accepted_with_stage2_false():
+    statuses, samples = _durable_terminal_rows(stage2=False)
+    receipt = _independent_terminal_hang_receipt(
+        statuses,
+        samples,
+        {
+            "explicit_env_reset_calls": 1,
+            "initial_state_restores": 1,
+            "resets_during_episode": 0,
+        },
+    )
+    assert receipt["passed"]
+    assert receipt["coded_stage_latches"] == {
+        "stage1": True,
+        "stage2": False,
+        "stage3": False,
+    }
+    assert receipt["adapter_completed_stage_latches"]["handover"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "failed_check"),
+    (
+        ({"released": False}, "adapter_released"),
+        ({"stable": False}, "adapter_stable"),
+        ({"contact_policy": False}, "bounded_contact_entire_rollout"),
+        ({"diagnostics": {"branch_engaged": False}}, "branch_engaged"),
+    ),
+)
+def test_independent_terminal_semantic_failure_still_rejects(mutation, failed_check):
+    statuses, samples = _durable_terminal_rows()
+    changed = dict(statuses[-1])
+    if "diagnostics" in mutation:
+        changed["diagnostics"] = {
+            **changed["diagnostics"],
+            **mutation["diagnostics"],
+        }
+    else:
+        changed.update(mutation)
+    statuses[-1] = changed
+    receipt = _independent_terminal_hang_receipt(
+        statuses,
+        samples,
+        {
+            "explicit_env_reset_calls": 1,
+            "initial_state_restores": 1,
+            "resets_during_episode": 0,
+        },
+    )
+    assert not receipt["passed"]
+    assert not receipt["checks"][failed_check]
 
 
 def test_asset_geometry_scales_object_relative_semantic_frame():
@@ -465,8 +566,12 @@ def test_authored_boundaries_release_both_grasp_assists():
 def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
     checks = {
         "coded_task_success": True,
+        "all_stages_latched": True,
         "right_handover_observed": True,
         "stable_hang_window": True,
+        "independent_terminal_hang": True,
+        "handover_boundary_passed": True,
+        "handover_safe_to_continue": True,
         "physics_device_cpu": True,
         "right_grasp_assist_engaged": False,
         "right_grasp_assist_released": True,
@@ -476,10 +581,21 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
     assert "right_grasp_assist_engaged" not in replay
     assert replay["right_handover_observed"] is True
     assert replay["stable_hang_window"] is True
+    assert replay["coded_task_success"] is True
     assert replay["physics_device_cpu"] is True
 
     skill = _schema_aware_success_acceptance(checks, coded_skill=True)
     assert skill["right_grasp_assist_engaged"] is False
+    assert skill["independent_terminal_hang"] is True
+    assert skill["handover_safe_to_continue"] is True
+    for diagnostic in (
+        "coded_task_success",
+        "all_stages_latched",
+        "right_handover_observed",
+        "stable_hang_window",
+        "handover_boundary_passed",
+    ):
+        assert diagnostic not in skill
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():

@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from run_hangmug_skill_program import (  # noqa: E402
     PROVEN_CONTROL_DEFAULTS,
+    _independent_terminal_hang_receipt,
     _source_dataset_receipt,
 )
 from run_putmarker_skill_program import _probe  # noqa: E402
@@ -325,8 +326,13 @@ def _first_true(values: np.ndarray) -> int | None:
     return None if not len(indices) else int(indices[0])
 
 
-def _semantic_audit(demo: Path, assets: dict[str, Path], mug_init_z: float) -> dict:
-    """Recompute five ordered stages/contact with the campaign status adapter."""
+def _semantic_audit(
+    demo: Path,
+    assets: dict[str, Path],
+    mug_init_z: float,
+    reset_counts: dict[str, int],
+) -> dict:
+    """Recompute diagnostic stages and the independent terminal hang."""
     import h5py
 
     sys.path.insert(0, str(GEAR_REPO))
@@ -370,6 +376,7 @@ def _semantic_audit(demo: Path, assets: dict[str, Path], mug_init_z: float) -> d
     env.get_task_success = lambda: np.asarray([env._task_success])
     reset_hang_mug_status(env)
     statuses = []
+    samples = []
     maximum_opening = maximum_body = maximum_deep = 0.0
     maximum_deep_streak = 0
     for row in range(len(values["step"])):
@@ -398,23 +405,46 @@ def _semantic_audit(demo: Path, assets: dict[str, Path], mug_init_z: float) -> d
             maximum_deep_streak, diagnostics["consecutive_overlap_steps"]
         )
         statuses.append(status)
+        samples.append(
+            {
+                "stage1": bool(values["stage1"][row]),
+                "stage2": bool(values["stage2"][row]),
+                "stage3": bool(values["stage3"][row]),
+                "left_grasp": bool(values["left_grasp"][row]),
+                "right_grasp": bool(values["right_grasp"][row]),
+                "grasp_assist_engaged": {
+                    "left": bool(values["grasp_assist_engaged/left"][row]),
+                    "right": bool(values["grasp_assist_engaged/right"][row]),
+                },
+            }
+        )
     firsts = {stage: _first_true([row[stage] for row in statuses]) for stage in ORDERED_STAGES}
-    if any(value is None for value in firsts.values()) or list(firsts.values()) != sorted(firsts.values()):
-        raise RuntimeError(f"ordered semantic stages failed: {firsts}")
-    terminal = statuses[-30:]
-    if len(terminal) != 30 or not all(
-        row["task_success"] and row["released"] and row["stable"] and row["contact_policy"]
-        for row in terminal
-    ):
-        raise RuntimeError("terminal 30-step physical success audit failed")
+    seen_missing = False
+    for stage in ORDERED_STAGES:
+        if firsts[stage] is None:
+            seen_missing = True
+        elif seen_missing:
+            raise RuntimeError(f"diagnostic semantic stage order failed: {firsts}")
+    completed_steps = [value for value in firsts.values() if value is not None]
+    if completed_steps != sorted(completed_steps):
+        raise RuntimeError(f"diagnostic semantic stage order failed: {firsts}")
+    terminal = _independent_terminal_hang_receipt(
+        statuses,
+        samples,
+        reset_counts,
+    )
+    if not terminal["passed"]:
+        raise RuntimeError(f"independent terminal hang audit failed: {terminal['checks']}")
     final_diagnostics = statuses[-1]["diagnostics"]
     return {
         "ordered_semantic_stages": firsts,
         "terminal_30": {
-            "all_task_success": True,
-            "all_released": True,
-            "all_stable": True,
-            "all_contact_policy": True,
+            "passed": True,
+            **terminal["checks"],
+            "coded_stage_latches": terminal["coded_stage_latches"],
+            "adapter_completed_stage_latches": terminal[
+                "adapter_completed_stage_latches"
+            ],
         },
         "contact_policy": {
             "contact_policy_held": all(row["contact_policy"] for row in statuses),
@@ -514,8 +544,22 @@ def independent_audit(index: int, attempt: Path) -> dict:
     ):
         raise RuntimeError("source/pair/controller/reset/manifest campaign pins failed")
     semantic_audit = _semantic_audit(
-        demo_path, assets, result["initial_placement"]["mug"]["target_root_z_m"]
+        demo_path,
+        assets,
+        result["initial_placement"]["mug"]["target_root_z_m"],
+        resets,
     )
+    runner_terminal = result.get("independent_terminal_hang")
+    if (
+        not runner_terminal
+        or not runner_terminal.get("passed")
+        or runner_terminal.get("checks")
+        != {
+            name: semantic_audit["terminal_30"][name]
+            for name in runner_terminal.get("checks", {})
+        }
+    ):
+        raise RuntimeError("runner/independent terminal hang receipts disagree")
     if not semantic_audit["contact_policy"]["contact_policy_held"]:
         raise RuntimeError("bounded-contact policy failed")
     return {

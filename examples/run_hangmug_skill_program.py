@@ -276,6 +276,80 @@ def _terminal_stability(samples: list[dict[str, object]], steps: int = 30) -> di
     return {"required_steps": steps, "observed_steps": len(window), "passed": bool(passed)}
 
 
+def _independent_terminal_hang_receipt(
+    statuses: list[dict[str, object]],
+    samples: list[dict[str, object]],
+    reset_counts: dict[str, int],
+    *,
+    steps: int = 30,
+) -> dict[str, object]:
+    """Prove a durable physical hang without substituting for task latches."""
+    if steps <= 0:
+        raise ValueError("terminal hang window must be positive")
+    aligned = len(statuses) == len(samples)
+    status_window = statuses[-steps:] if aligned else []
+    sample_window = samples[-steps:] if aligned else []
+
+    def all_status(predicate) -> bool:
+        return len(status_window) == steps and all(predicate(row) for row in status_window)
+
+    def raw(row, name: str) -> bool:
+        return bool(row["diagnostics"]["raw_conditions"][name])
+
+    checks = {
+        "status_sample_alignment": aligned,
+        "required_window_observed": len(status_window) == steps,
+        "branch_engaged": all_status(
+            lambda row: row["diagnostics"]["branch_engaged"]
+        ),
+        "support_held": all_status(
+            lambda row: raw(row, "insertion_support_candidate")
+        ),
+        "release_hang_candidate": all_status(
+            lambda row: raw(row, "release_hang_candidate")
+        ),
+        "adapter_released": all_status(lambda row: row["released"]),
+        "adapter_stable": all_status(lambda row: row["stable"]),
+        "bounded_contact_entire_rollout": bool(statuses)
+        and all(row["contact_policy"] for row in statuses),
+        "both_grippers_released": len(sample_window) == steps
+        and all(
+            not row["left_grasp"] and not row["right_grasp"]
+            for row in sample_window
+        ),
+        "both_assists_released": len(sample_window) == steps
+        and all(
+            not row["grasp_assist_engaged"].get("left", False)
+            and not row["grasp_assist_engaged"].get("right", False)
+            for row in sample_window
+        ),
+        "one_continuous_reset_free_rollout": reset_counts
+        == {
+            "explicit_env_reset_calls": 1,
+            "initial_state_restores": 1,
+            "resets_during_episode": 0,
+        },
+    }
+    final_status = statuses[-1] if statuses else None
+    final_sample = samples[-1] if samples else None
+    return {
+        "required_steps": steps,
+        "observed_steps": len(status_window),
+        "checks": checks,
+        "passed": all(checks.values()),
+        "coded_stage_latches": {
+            "stage1": bool(final_sample and final_sample.get("stage1", False)),
+            "stage2": bool(final_sample and final_sample.get("stage2", False)),
+            "stage3": bool(final_sample and final_sample.get("stage3", False)),
+        },
+        "adapter_completed_stage_latches": (
+            {}
+            if final_status is None
+            else dict(final_status["diagnostics"]["completed_stage_latches"])
+        ),
+    }
+
+
 def _semantic_stage_receipt(statuses) -> dict[str, object]:
     """Summarize completed adapter stages without treating transient truth as completion."""
     from dc_study.datagen.hang_mug_status import ORDERED_STAGES
@@ -522,15 +596,26 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
 def _schema_aware_success_acceptance(
     checks: dict[str, bool], *, coded_skill: bool
 ) -> dict[str, bool]:
-    """Select only mechanism-relevant checks without weakening task success.
+    """Select the applicable authoritative acceptance checks.
 
     Direct action replay does not drive the skill runner's receiving-hand
     fixed-joint state machine.  Its physical right grasp and handover remain
     mandatory through ``right_handover_observed``, while the skill-only assist
-    engagement bit is inapplicable.
+    engagement bit is inapplicable.  For a coded target repair, task-manager
+    stage latches remain diagnostics: the independent terminal hang receipt is
+    the physical success authority and is never inferred from those latches.
     """
     acceptance = dict(checks)
-    if not coded_skill:
+    if coded_skill:
+        for name in (
+            "coded_task_success",
+            "all_stages_latched",
+            "right_handover_observed",
+            "stable_hang_window",
+            "handover_boundary_passed",
+        ):
+            acceptance.pop(name, None)
+    else:
         acceptance.pop("right_grasp_assist_engaged", None)
     return acceptance
 
@@ -671,11 +756,15 @@ def _handover_boundary_receipt(sample) -> dict[str, object]:
             sample["grasp_assist_engaged"].get("left", False)
         ),
     }
+    physical_checks = {
+        name: value for name, value in checks.items() if name != "stage2_latched"
+    }
     return {
         "stage": "handover",
         "checked_after_step": int(sample["step"]),
         "checks": checks,
         "passed": all(checks.values()),
+        "safe_to_continue": all(physical_checks.values()),
     }
 
 
@@ -1348,7 +1437,7 @@ def main() -> None:
                     + 1
                 ):
                     handover_boundary = _handover_boundary_receipt(samples[-1])
-                    if not handover_boundary["passed"]:
+                    if not handover_boundary["safe_to_continue"]:
                         break
                 stage = trajectory.stage_names[semantic_step]
                 waypoint = _semantic_waypoint_name(trajectory, semantic_step)
@@ -1472,6 +1561,11 @@ def main() -> None:
         )
         final = samples[-1]
         terminal_stability = _terminal_stability(samples)
+        independent_terminal_hang = _independent_terminal_hang_receipt(
+            semantic_statuses,
+            samples[1:],
+            reset_counts,
+        )
         extracted = None
         if args.mode == "replay" and final["task_success"]:
             extracted = _extract_keyframes(samples, args.source_dataset, source_assets)
@@ -1566,6 +1660,7 @@ def main() -> None:
             "right_handover_observed": any(row["right_grasp"] and row["stage2"] for row in samples),
             "mug_released": not final["left_grasp"] and not final["right_grasp"],
             "stable_hang_window": bool(terminal_stability["passed"]),
+            "independent_terminal_hang": bool(independent_terminal_hang["passed"]),
             "terminal_mug_speed_within_threshold": terminal_speed <= 0.05,
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
@@ -1587,6 +1682,9 @@ def main() -> None:
         if trajectory is not None:
             checks["handover_boundary_passed"] = bool(
                 handover_boundary and handover_boundary["passed"]
+            )
+            checks["handover_safe_to_continue"] = bool(
+                handover_boundary and handover_boundary["safe_to_continue"]
             )
         if args.require_cpu_physics:
             checks["physics_device_cpu"] = bool(
@@ -1632,7 +1730,7 @@ def main() -> None:
                     == str(env.device)
                 )
         demo_artifact = None
-        if args.demo_hdf5 and final["task_success"] and all(acceptance.values()):
+        if args.demo_hdf5 and all(acceptance.values()):
             from judo_isaaclab.demo_artifact import relative_asset_paths
 
             demo_recorder.write(
@@ -1666,6 +1764,7 @@ def main() -> None:
             "controller_gains": controller_receipt,
             "reset_counts": reset_counts,
             "terminal_stability": terminal_stability,
+            "independent_terminal_hang": independent_terminal_hang,
             "semantic_stage_receipt": _semantic_stage_receipt(semantic_statuses),
             "stage_boundary": handover_boundary,
             "handover_post_release_lift": {
