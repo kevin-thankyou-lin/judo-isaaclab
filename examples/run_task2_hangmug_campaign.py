@@ -916,16 +916,26 @@ def _first_missing(ledger: dict) -> int:
     return missing
 
 
-def _accept(index: int, attempt: Path, audit: dict, predecessor_sha256: str) -> str:
+def _accept(
+    index: int,
+    attempt: Path,
+    audit: dict,
+    predecessor_sha256: str,
+    *,
+    replace_existing: bool = False,
+) -> str:
     ledger_path = RESULTS / "ledger.json"
     if _sha256(ledger_path) != predecessor_sha256:
         raise RuntimeError("ledger changed during attempt; refusing atomic transition")
     ledger = _load(ledger_path)
     key = f"{index:06d}"
-    if key in ledger["pairs"]:
+    existing = ledger["pairs"].get(key)
+    if existing is not None and not replace_existing:
         raise RuntimeError(f"Pair {key} already has a ledger entry")
+    if existing is None and replace_existing:
+        raise RuntimeError(f"Pair {key} has no acceptance to supersede")
     hashes = audit["artifact_hashes"]
-    ledger["pairs"][key] = {
+    replacement = {
         "status": "accepted",
         "mug": f"MugHangable/mug_teacup_{key}",
         "mug_tree": f"ThreeLayerMugTree/mug_tree_{key}",
@@ -935,6 +945,14 @@ def _accept(index: int, attempt: Path, audit: dict, predecessor_sha256: str) -> 
         "demonstration_sha256": hashes["demo_hdf5_sha256"],
         "independent_audit_sha256": _sha256(attempt / "independent_audit.json"),
     }
+    if replace_existing:
+        history = list(existing.get("superseded_acceptances", ()))
+        history.append(
+            {name: value for name, value in existing.items()
+             if name != "superseded_acceptances"}
+        )
+        replacement["superseded_acceptances"] = history
+    ledger["pairs"][key] = replacement
     _atomic_json(ledger_path, ledger)
     return _sha256(ledger_path)
 
@@ -980,6 +998,7 @@ def _manifest(
     method: str,
     classification: dict | None = None,
     repair_strategy: dict | None = None,
+    ledger_transition: dict | None = None,
 ) -> dict:
     value = {
         "schema_version": 1,
@@ -1014,6 +1033,8 @@ def _manifest(
         value["classification"] = classification
     if repair_strategy:
         value["repair_strategy"] = repair_strategy
+    if ledger_transition is not None:
+        value["ledger_transition"] = ledger_transition
     return value
 
 
@@ -1057,11 +1078,20 @@ def _reusable_classification(index: int) -> tuple[Path, dict] | None:
     return None
 
 
-def _accept_attempt(index: int, attempt: Path, ledger_sha256: str) -> None:
+def _accept_attempt(
+    index: int,
+    attempt: Path,
+    ledger_sha256: str,
+    *,
+    replace_existing: bool = False,
+) -> None:
     try:
         audit = independent_audit(index, attempt)
         _atomic_json(attempt / "independent_audit.json", audit, immutable=True)
-        final_ledger_sha256 = _accept(index, attempt, audit, ledger_sha256)
+        final_ledger_sha256 = _accept(
+            index, attempt, audit, ledger_sha256,
+            replace_existing=replace_existing,
+        )
     except BaseException as error:
         if not (attempt / "driver_failure.json").exists():
             _preserve_failure(index, attempt, error=f"{type(error).__name__}: {error}")
@@ -1073,10 +1103,22 @@ def _accept_attempt(index: int, attempt: Path, ledger_sha256: str) -> None:
     )
 
 
-def run_one(index: int) -> None:
+def run_one(index: int, *, replace_existing: bool = False) -> None:
     _require_zero_workers()
     ledger_path = RESULTS / "ledger.json"
     ledger_sha256 = _sha256(ledger_path)
+    ledger = _load(ledger_path)
+    existing = ledger.get("pairs", {}).get(f"{index:06d}")
+    if replace_existing:
+        if existing is None:
+            raise RuntimeError(f"Pair {index:06d} has no acceptance to requalify")
+        _validate_accepted(index, existing)
+    elif existing is not None:
+        raise RuntimeError(f"Pair {index:06d} is already accepted")
+    ledger_transition = (
+        {"mode": "replace_superseded_acceptance", "previous_entry": existing}
+        if replace_existing else None
+    )
     reusable = _reusable_classification(index)
     if reusable is None:
         classification_attempt = _attempt_directory(index, "direct_source_classification")
@@ -1087,6 +1129,7 @@ def run_one(index: int) -> None:
             _manifest(
                 index, classification_attempt, command, ledger_sha256,
                 method="direct_source_action_replay",
+                ledger_transition=ledger_transition,
             ),
             immutable=True,
         )
@@ -1107,7 +1150,10 @@ def run_one(index: int) -> None:
     else:
         classification_attempt, classification = reusable
     if classification["status"] == "direct_success":
-        _accept_attempt(index, classification_attempt, ledger_sha256)
+        _accept_attempt(
+            index, classification_attempt, ledger_sha256,
+            replace_existing=replace_existing,
+        )
         return
     failed_stage = classification["first_failed_stage"]
     repair_attempt = _attempt_directory(index, f"repair_{failed_stage}")
@@ -1131,11 +1177,15 @@ def run_one(index: int) -> None:
             ),
             classification=classification_binding,
             repair_strategy=repair_strategy,
+            ledger_transition=ledger_transition,
         ),
         immutable=True,
     )
     _execute(index, repair_attempt, command)
-    _accept_attempt(index, repair_attempt, ledger_sha256)
+    _accept_attempt(
+        index, repair_attempt, ledger_sha256,
+        replace_existing=replace_existing,
+    )
 
 
 def _run_serial(indices) -> None:
@@ -1146,10 +1196,15 @@ def _run_serial(indices) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-new-pairs", type=int)
+    parser.add_argument("--requalify-pair", type=int)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.max_new_pairs is not None and args.max_new_pairs < 1:
         raise ValueError("--max-new-pairs must be positive")
+    if args.requalify_pair is not None and not 1 <= args.requalify_pair < 40:
+        raise ValueError("--requalify-pair must be in [1, 39]")
+    if args.requalify_pair is not None and args.max_new_pairs is not None:
+        raise ValueError("--requalify-pair and --max-new-pairs are mutually exclusive")
     os.chdir(REPO_ROOT)
     dirty = subprocess.run(["git", "diff", "--quiet"], cwd=REPO_ROOT).returncode
     staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO_ROOT).returncode
@@ -1161,6 +1216,9 @@ def main() -> None:
     for index in range(40):
         _asset_pair(index)
     ledger = _load(RESULTS / "ledger.json")
+    if args.requalify_pair is not None:
+        run_one(args.requalify_pair, replace_existing=True)
+        return
     start = _first_missing(ledger)
     while start < 40 and _recover_audited_attempt(start):
         ledger = _load(RESULTS / "ledger.json")

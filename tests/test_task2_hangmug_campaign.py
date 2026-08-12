@@ -122,6 +122,37 @@ def test_atomic_accept_requires_unchanged_ledger_and_writes_only_acceptance(tmp_
         campaign._accept(2, attempt, audit, before)
 
 
+def test_atomic_requalification_preserves_superseded_acceptance(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    old = {
+        "status": "accepted", "attempt": "attempt_001",
+        "result_sha256": "old-result", "video_sha256": "old-video",
+        "demonstration_sha256": "old-demo",
+        "independent_audit_sha256": "old-audit",
+    }
+    ledger_path = results / "ledger.json"
+    ledger_path.write_text(json.dumps({"pairs": {"000006": old}}))
+    attempt = results / "pairs/000006/attempt_024"
+    attempt.mkdir(parents=True)
+    (attempt / "independent_audit.json").write_text("new-audit")
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    audit = {"artifact_hashes": {
+        "result_sha256": "new-result", "video_sha256": "new-video",
+        "demo_hdf5_sha256": "new-demo",
+    }}
+    campaign._accept(
+        6, attempt, audit, _digest(ledger_path), replace_existing=True,
+    )
+    replacement = json.loads(ledger_path.read_text())["pairs"]["000006"]
+    assert replacement["attempt"] == "attempt_024"
+    assert replacement["superseded_acceptances"] == [old]
+    with pytest.raises(RuntimeError, match="no acceptance to supersede"):
+        campaign._accept(
+            7, attempt, audit, _digest(ledger_path), replace_existing=True,
+        )
+
+
 def test_first_true_is_fail_closed():
     assert campaign._first_true([False, True, True]) == 1
     assert campaign._first_true([False, False]) is None
@@ -437,9 +468,10 @@ def _run_one_fixture(tmp_path, monkeypatch, classification):
     monkeypatch.setattr(campaign, "_reusable_classification", lambda _index: None)
     monkeypatch.setattr(
         campaign, "_manifest",
-        lambda *_args, method, classification=None, repair_strategy=None: {
+        lambda *_args, method, classification=None, repair_strategy=None,
+        ledger_transition=None: {
             "method": method, "classification": classification,
-            "repair_strategy": repair_strategy,
+            "repair_strategy": repair_strategy, "ledger_transition": ledger_transition,
         },
     )
     events = []
@@ -460,7 +492,7 @@ def _run_one_fixture(tmp_path, monkeypatch, classification):
     )
     monkeypatch.setattr(
         campaign, "_accept_attempt",
-        lambda *_: events.append("accepted"),
+        lambda *_, **__: events.append("accepted"),
     )
     campaign.run_one(2)
     return events
