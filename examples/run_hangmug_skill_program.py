@@ -515,6 +515,26 @@ def _require_reusable_pick_boundary(sample) -> None:
         raise RuntimeError("source prefix did not preserve the completed Pick boundary")
 
 
+def _handover_boundary_receipt(sample) -> dict[str, object]:
+    """Check the live Handover postcondition before branch transport."""
+    checks = {
+        "stage2_latched": bool(sample["stage2"]),
+        "right_contact_secure": bool(sample["right_grasp"]),
+        "right_assist_secure": bool(
+            sample["grasp_assist_engaged"].get("right", False)
+        ),
+        "left_assist_released": not bool(
+            sample["grasp_assist_engaged"].get("left", False)
+        ),
+    }
+    return {
+        "stage": "handover",
+        "checked_after_step": int(sample["step"]),
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
     from run_putmarker_skill_program import _eef_pose
@@ -1067,6 +1087,7 @@ def main() -> None:
         for name, pose_key in (("mug", "mug_pose"), ("mug_tree", "tree_pose")):
             initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
+        handover_boundary = None
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
@@ -1101,6 +1122,13 @@ def main() -> None:
                         initial_action_index=source_prefix_steps - 1,
                     )
                 semantic_step = step - source_prefix_steps
+                if (
+                    semantic_step
+                    == trajectory.waypoint_steps["left_release"] + 1
+                ):
+                    handover_boundary = _handover_boundary_receipt(samples[-1])
+                    if not handover_boundary["passed"]:
+                        break
                 stage = trajectory.stage_names[semantic_step]
                 integrate = bool(
                     source_prefix_steps
@@ -1323,6 +1351,10 @@ def main() -> None:
             checks["reused_source_pick_prefix_exact"] = bool(
                 source_pick_prefix_exact
             )
+        if trajectory is not None:
+            checks["handover_boundary_passed"] = bool(
+                handover_boundary and handover_boundary["passed"]
+            )
         if args.require_cpu_physics:
             checks["physics_device_cpu"] = bool(
                 physics_device["passed"] and physics_device["actual"] == "cpu"
@@ -1401,6 +1433,13 @@ def main() -> None:
             "controller_gains": controller_receipt,
             "reset_counts": reset_counts,
             "terminal_stability": terminal_stability,
+            "stage_boundary": handover_boundary,
+            "first_failed_semantic_stage": (
+                "handover"
+                if handover_boundary is not None
+                and not handover_boundary["passed"]
+                else None
+            ),
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),
                 "target_mug": target_mug.root_pose.tolist(),

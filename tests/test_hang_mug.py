@@ -24,6 +24,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _direct_actions_exact,
     _install_grasp_assist_config,
+    _handover_boundary_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
@@ -132,6 +133,42 @@ def test_reusable_pick_boundary_requires_latch_and_only_left_assist():
         changed = {**sample, **mutation}
         with pytest.raises(RuntimeError, match="completed Pick"):
             _require_reusable_pick_boundary(changed)
+
+
+def test_handover_boundary_requires_latch_right_contact_and_assist_release():
+    sample = {
+        "step": 592,
+        "stage2": True,
+        "right_grasp": True,
+        "grasp_assist_engaged": {"left": False, "right": True},
+    }
+    receipt = _handover_boundary_receipt(sample)
+    assert receipt == {
+        "stage": "handover",
+        "checked_after_step": 592,
+        "checks": {
+            "stage2_latched": True,
+            "right_contact_secure": True,
+            "right_assist_secure": True,
+            "left_assist_released": True,
+        },
+        "passed": True,
+    }
+    for mutation, failed_check in (
+        ({"stage2": False}, "stage2_latched"),
+        ({"right_grasp": False}, "right_contact_secure"),
+        (
+            {"grasp_assist_engaged": {"left": False, "right": False}},
+            "right_assist_secure",
+        ),
+        (
+            {"grasp_assist_engaged": {"left": True, "right": True}},
+            "left_assist_released",
+        ),
+    ):
+        failed = _handover_boundary_receipt({**sample, **mutation})
+        assert not failed["passed"]
+        assert not failed["checks"][failed_check]
 
 
 def test_task2_target_assets_are_same_index_and_use_source_state_template(tmp_path):
