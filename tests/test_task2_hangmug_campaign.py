@@ -232,6 +232,21 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
     with pytest.raises(ValueError, match="support fraction"):
         campaign._repair_strategy(4)
 
+    candidate.write_text(json.dumps({"branch_support_seat_down_m": 0.01}))
+    strategy = campaign._repair_strategy(4)
+    assert strategy == {"branch_support_seat_down_m": 0.01}
+    command = campaign._repair_command(
+        4,
+        tmp_path / "attempt2",
+        tmp_path / "classification/result.json",
+        campaign._repair_selection("release_and_hang", "insertion_and_support"),
+        strategy,
+    )
+    assert command[command.index("--branch-support-seat-down-m") + 1] == "0.01"
+    candidate.write_text(json.dumps({"branch_support_seat_down_m": 0.031}))
+    with pytest.raises(ValueError, match="seat-down"):
+        campaign._repair_strategy(4)
+
 
 @pytest.mark.parametrize(
     "failed,last_completed",

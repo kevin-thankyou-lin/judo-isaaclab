@@ -19,6 +19,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
     _array_sha256,
@@ -443,7 +444,6 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             normalized_height=z / 2.0,
             azimuth_rad=0.0,
         )
-
     source_branch = branch(1.0, 1.0, 1.0)
     target_branch = branch(1.5, 1.5, 1.5)
     final, matched_source, matched_target = geometry_conditioned_hang_pose(
@@ -498,6 +498,15 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             (source_branch,), _pose(), (target_branch,),
             branch_support_fraction=0.24,
         )
+
+
+def test_branch_support_seating_changes_only_vertical_waypoint_translation():
+    pose = _pose(0.7, -0.2, 0.96)
+    seated = _branch_support_seated_pose(pose, 0.01)
+    assert seated == pytest.approx([0.7, -0.2, 0.95, *pose[3:]])
+    assert pose[2] == pytest.approx(0.96)
+    with pytest.raises(ValueError, match="seat-down"):
+        _branch_support_seated_pose(pose, 0.031)
 
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():

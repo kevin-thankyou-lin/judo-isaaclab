@@ -161,11 +161,12 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
-    if "branch_support_fraction" in strategy:
-        arguments.extend([
-            "--branch-support-fraction",
-            str(strategy["branch_support_fraction"]),
-        ])
+    for field, option in (
+        ("branch_support_fraction", "--branch-support-fraction"),
+        ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
+    ):
+        if field in strategy:
+            arguments.extend([option, str(strategy[field])])
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
@@ -189,7 +190,9 @@ def _repair_command(
                 str(strategy["handover_post_release_lift_steps"]),
             ])
     elif selection["actual_repair_boundary"] == "pick":
-        if set(strategy) - {"branch_support_fraction"}:
+        if set(strategy) - {
+            "branch_support_fraction", "branch_support_seat_down_m"
+        }:
             raise ValueError("pair repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
     else:
@@ -233,10 +236,14 @@ def _repair_strategy(index: int) -> dict:
         "handover_target_offset_m",
         "left_release_retreat_m",
         "branch_support_fraction",
+        "branch_support_seat_down_m",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
-    handover_fields = allowed - {"branch_support_fraction"}
+    late_support_fields = {
+        "branch_support_fraction", "branch_support_seat_down_m"
+    }
+    handover_fields = allowed - late_support_fields
     strategy = {}
     if "branch_support_fraction" in value:
         fraction = value["branch_support_fraction"]
@@ -248,6 +255,16 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch support fraction must be in [0.25, 0.75]")
         strategy["branch_support_fraction"] = float(fraction)
+    if "branch_support_seat_down_m" in value:
+        seat_down = value["branch_support_seat_down_m"]
+        if (
+            isinstance(seat_down, bool)
+            or not isinstance(seat_down, (int, float))
+            or not np.isfinite(seat_down)
+            or not 0.0 <= seat_down <= 0.03
+        ):
+            raise ValueError("branch support seat-down must be in [0, 0.03] m")
+        strategy["branch_support_seat_down_m"] = float(seat_down)
     if not (set(value) & handover_fields):
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
