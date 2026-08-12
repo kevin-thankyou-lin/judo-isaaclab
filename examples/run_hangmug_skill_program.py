@@ -511,11 +511,11 @@ def _schema_aware_success_acceptance(
 
 
 def _requires_observed_handover_reanchor(mug_parts) -> bool:
-    """Use the realized post-Pick carry pose for every valid mug geometry."""
+    """Use live handover feedback for mugs taller than both lateral spans."""
     size = np.asarray(mug_parts.body_size, dtype=np.float64)
     if size.shape != (3,) or np.any(size <= 0.0):
         raise ValueError("mug body size must contain three positive values")
-    return True
+    return bool(size[2] > max(size[0], size[1]))
 
 
 def _source_pick_prefix_steps(keyframes) -> int:

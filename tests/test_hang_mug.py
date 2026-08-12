@@ -446,11 +446,11 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
     assert skill["right_grasp_assist_engaged"] is False
 
 
-def test_observed_handover_reanchor_applies_to_all_valid_mug_geometries():
+def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
     assert _requires_observed_handover_reanchor(
         SimpleNamespace(body_size=np.asarray([0.08, 0.081, 0.107]))
     )
-    assert _requires_observed_handover_reanchor(
+    assert not _requires_observed_handover_reanchor(
         SimpleNamespace(body_size=np.asarray([0.088, 0.090, 0.077]))
     )
     with pytest.raises(ValueError, match="three positive"):

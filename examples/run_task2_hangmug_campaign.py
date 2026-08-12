@@ -158,7 +158,7 @@ def _repair_command(
         "--handover-confirm-steps", "12",
     ]
     if selection["actual_repair_boundary"] == "reset":
-        pass
+        arguments.extend(["--handover-contact-settle-steps", "30"])
     elif selection["actual_repair_boundary"] == "pick":
         arguments.append("--reuse-source-pick-prefix")
     else:
