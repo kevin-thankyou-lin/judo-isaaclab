@@ -19,12 +19,20 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
+    _array_sha256,
+    _direct_actions_exact,
     _install_grasp_assist_config,
+    _require_proven_control_defaults,
+    _resolve_target_assets,
     _requires_observed_handover_reanchor,
+    _source_dataset_receipt,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
     _select_grasp_assist_config,
+    _support_preserving_target_state,
+    _terminal_stability,
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
@@ -32,6 +40,123 @@ from run_hangmug_skill_program import (
 
 def _pose(x=0.0, y=0.0, z=0.0):
     return np.asarray([x, y, z, 1.0, 0.0, 0.0, 0.0])
+
+
+def _asset(tmp_path, relative, minimum):
+    path = tmp_path / relative
+    path.mkdir(parents=True)
+    (path / "asset_size.json").write_text(
+        __import__("json").dumps(
+            {"min": minimum, "max": [0.1, 0.1, 0.1], "size": {"x": 0.2, "y": 0.2, "z": 0.2}}
+        )
+    )
+    return str(path)
+
+
+def test_task2_source_receipt_binds_actions_and_never_processed_actions(tmp_path):
+    import h5py
+
+    path = tmp_path / "source.hdf5"
+    actions = np.arange(42, dtype=np.float32).reshape(3, 14)
+    with h5py.File(path, "w") as handle:
+        demo = handle.create_group("data/demo_0")
+        demo.attrs["num_samples"] = 3
+        demo.create_dataset("actions", data=actions)
+        demo.create_dataset("processed_actions", data=np.zeros((4, 14), dtype=np.float32))
+        demo.create_dataset("states/rigid_object/mug/root_pose", data=np.zeros((4, 7)))
+    receipt = _source_dataset_receipt(str(path), "demo_0", None)
+    assert receipt["action_dataset"] == "actions"
+    assert receipt["actions_sha256"] == _array_sha256(actions)
+    assert receipt["processed_actions_shape"] == [4, 14]
+    assert "not_executed" in receipt["processed_actions_role"]
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        _source_dataset_receipt(str(path), "demo_0", "0" * 64)
+
+    class TensorLike:
+        def __init__(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.value
+
+    assert _direct_actions_exact(list(actions), TensorLike(actions.copy()))
+    changed = actions.copy()
+    changed[1, 3] += 1
+    assert not _direct_actions_exact(list(actions), TensorLike(changed))
+
+
+def test_task2_target_assets_are_same_index_and_use_source_state_template(tmp_path):
+    root = tmp_path / "objects"
+    mug = _asset(root, "MugHangable/mug_teacup_000001", [-0.1, -0.1, -0.03])
+    tree = _asset(root, "ThreeLayerMugTree/mug_tree_000001", [-0.1, -0.1, -0.19])
+    args = SimpleNamespace(
+        target_mug_asset=mug,
+        target_tree_asset=tree,
+        target_dataset=None,
+        source_dataset="source.hdf5",
+        objects_root=str(root),
+    )
+    resolved, template = _resolve_target_assets(args, {})
+    assert resolved == {"mug": mug, "mug_tree": tree}
+    assert template == "source.hdf5"
+    args.target_tree_asset = _asset(
+        root, "ThreeLayerMugTree/mug_tree_000002", [-0.1, -0.1, -0.19]
+    )
+    with pytest.raises(ValueError, match="same index"):
+        _resolve_target_assets(args, {})
+
+
+def test_support_preserving_target_state_uses_authored_minimum(tmp_path):
+    source_mug = _asset(tmp_path, "MugHangable/mug_teacup_000000", [-0.1, -0.1, -0.0575])
+    target_mug = _asset(tmp_path, "MugHangable/mug_teacup_000001", [-0.1, -0.1, -0.0293])
+    source_tree = _asset(tmp_path, "ThreeLayerMugTree/mug_tree_000000", [-0.1, -0.1, -0.1962])
+    target_tree = _asset(tmp_path, "ThreeLayerMugTree/mug_tree_000001", [-0.1, -0.1, -0.1889])
+    template = {
+        "initial_state": {"rigid_object": {
+            "mug": {"root_pose": np.asarray([_pose(0.7, 0.15, 0.8075)])},
+            "mug_tree": {"root_pose": np.asarray([_pose(0.75, -0.3, 0.9462)])},
+        }},
+        "mug_pose": np.asarray([_pose(0.7, 0.15, 0.8075)]),
+        "tree_pose": np.asarray([_pose(0.75, -0.3, 0.9462)]),
+    }
+    target, receipt = _support_preserving_target_state(
+        template,
+        {"mug": source_mug, "mug_tree": source_tree},
+        {"mug": target_mug, "mug_tree": target_tree},
+    )
+    assert target["mug_pose"][0, :2] == pytest.approx([0.7, 0.15])
+    assert target["mug_pose"][0, 2] == pytest.approx(0.7793)
+    assert target["tree_pose"][0, 2] == pytest.approx(0.9389)
+    assert receipt["mug"]["preserved_support_z_m"] == pytest.approx(0.75)
+    assert template["mug_pose"][0, 2] == pytest.approx(0.8075)
+
+
+def test_proven_control_defaults_are_fail_closed():
+    args = SimpleNamespace(**PROVEN_CONTROL_DEFAULTS)
+    _require_proven_control_defaults(args)
+    args.damping = 0.046
+    with pytest.raises(ValueError, match="changes the proven default"):
+        _require_proven_control_defaults(args)
+
+
+def test_terminal_stability_requires_thirty_current_physical_success_rows():
+    row = {
+        "task_success": True,
+        "stage3": True,
+        "hang_predicate_now": True,
+        "left_grasp": False,
+        "right_grasp": False,
+    }
+    assert _terminal_stability([dict(row) for _ in range(30)])["passed"]
+    rows = [dict(row) for _ in range(30)]
+    rows[-2]["hang_predicate_now"] = False
+    assert not _terminal_stability(rows)["passed"]
 
 
 def test_asset_geometry_scales_object_relative_semantic_frame():

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import traceback
 
@@ -17,12 +18,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "examples"))
 
+PROVEN_CONTROL_DEFAULTS = {
+    "damping": 0.045,
+    "max_joint_delta": 0.16,
+    "max_position_step": 0.025,
+    "max_rotation_step": 0.16,
+}
+
 
 def _parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gear-repo", required=True)
     parser.add_argument("--source-dataset", required=True)
-    parser.add_argument("--target-dataset", required=True)
+    parser.add_argument("--target-dataset")
+    parser.add_argument("--target-mug-asset")
+    parser.add_argument("--target-tree-asset")
     parser.add_argument("--objects-root", required=True)
     parser.add_argument("--mode", choices=("replay", "skill"), required=True)
     parser.add_argument("--source-keyframes")
@@ -34,6 +44,8 @@ def _parser() -> argparse.Namespace:
         help="Accept a technically valid replay whether task success passes or fails.",
     )
     parser.add_argument("--episode", default="demo_0")
+    parser.add_argument("--expected-source-sha256")
+    parser.add_argument("--expected-controller-gains-sha256")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
         "--require-cpu-physics",
@@ -76,6 +88,160 @@ def _sha256(path: str | os.PathLike[str]) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _array_sha256(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode("ascii"))
+    digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path: str | os.PathLike[str], value: dict[str, object]) -> None:
+    destination = Path(path).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, destination)
+
+
+def _require_proven_control_defaults(args) -> None:
+    for name, expected in PROVEN_CONTROL_DEFAULTS.items():
+        actual = float(getattr(args, name))
+        if actual != expected:
+            raise ValueError(
+                f"{name}={actual} changes the proven default {expected}; "
+                "repair semantic waypoints or timing instead"
+            )
+
+
+def _source_dataset_receipt(
+    path: str, episode: str, expected_sha256: str | None
+) -> dict[str, object]:
+    """Bind the sole executable source to its HDF5 ``actions`` dataset."""
+    import h5py
+
+    file_sha256 = _sha256(path)
+    if expected_sha256 and file_sha256 != expected_sha256:
+        raise ValueError(
+            f"source dataset SHA256 mismatch: {file_sha256} != {expected_sha256}"
+        )
+    with h5py.File(path, "r") as handle:
+        group = handle[f"data/{episode}"]
+        actions = np.asarray(group["actions"])
+        if actions.ndim != 2 or actions.shape[1] != 14:
+            raise ValueError(f"source actions must have shape (N, 14), got {actions.shape}")
+        if int(group.attrs["num_samples"]) != len(actions):
+            raise ValueError("source num_samples does not match actions")
+        state_lengths: list[int] = []
+        group["states"].visititems(
+            lambda _, value: state_lengths.append(int(value.shape[0]))
+            if isinstance(value, h5py.Dataset)
+            else None
+        )
+        if not state_lengths or any(length != len(actions) + 1 for length in state_lengths):
+            raise ValueError("source states must contain exactly one more row than actions")
+        processed = group.get("processed_actions")
+        processed_shape = None if processed is None else list(processed.shape)
+    return {
+        "path": os.path.abspath(path),
+        "file_sha256": file_sha256,
+        "episode": episode,
+        "action_dataset": "actions",
+        "actions_shape": list(actions.shape),
+        "actions_dtype": str(actions.dtype),
+        "actions_sha256": _array_sha256(actions),
+        "processed_actions_shape": processed_shape,
+        "processed_actions_role": "state_aligned_analysis_metadata_not_executed",
+    }
+
+
+def _asset_index(path: str) -> int:
+    match = re.search(r"_(\d{6})$", Path(path).name)
+    if match is None:
+        raise ValueError(f"asset name lacks a six-digit pair index: {path}")
+    return int(match.group(1))
+
+
+def _resolve_target_assets(args, source_assets: dict[str, str]) -> tuple[dict[str, str], str]:
+    overrides = (args.target_mug_asset, args.target_tree_asset)
+    if any(overrides) and not all(overrides):
+        raise ValueError("--target-mug-asset and --target-tree-asset must be supplied together")
+    if all(overrides):
+        if args.target_dataset:
+            raise ValueError("asset overrides use the source as state template; omit --target-dataset")
+        root = Path(args.objects_root).resolve()
+        target = {
+            "mug": str(Path(args.target_mug_asset).resolve()),
+            "mug_tree": str(Path(args.target_tree_asset).resolve()),
+        }
+        for path in target.values():
+            Path(path).relative_to(root)
+            if not Path(path).is_dir():
+                raise FileNotFoundError(path)
+        if _asset_index(target["mug"]) != _asset_index(target["mug_tree"]):
+            raise ValueError("HangMug target assets must use the same index")
+        return target, args.source_dataset
+    if not args.target_dataset:
+        return dict(source_assets), args.source_dataset
+    return _dataset_assets(args.target_dataset, args.objects_root), args.target_dataset
+
+
+def _asset_min_z(path: str) -> float:
+    with open(Path(path) / "asset_size.json", encoding="utf-8") as stream:
+        value = np.asarray(json.load(stream)["min"], dtype=np.float64)
+    if value.shape != (3,) or not np.all(np.isfinite(value)):
+        raise ValueError(f"invalid asset bounds: {path}")
+    return float(value[2])
+
+
+def _support_preserving_target_state(
+    template: dict[str, object],
+    template_assets: dict[str, str],
+    target_assets: dict[str, str],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Copy initial state while keeping each upright object's bottom on its support."""
+    target = copy.deepcopy(template)
+    receipt: dict[str, object] = {}
+    pose_keys = {"mug": "mug_pose", "mug_tree": "tree_pose"}
+    for name, pose_key in pose_keys.items():
+        poses = np.array(template[pose_key], copy=True)
+        source_z = float(poses[0, 2])
+        support_z = source_z + _asset_min_z(template_assets[name])
+        target_z = support_z - _asset_min_z(target_assets[name])
+        poses[0, 2] = target_z
+        target[pose_key] = poses
+        root_pose = target["initial_state"]["rigid_object"][name]["root_pose"]
+        root_pose[..., 2] = target_z
+        receipt[name] = {
+            "source_root_z_m": source_z,
+            "target_root_z_m": target_z,
+            "translation_z_m": target_z - source_z,
+            "preserved_support_z_m": support_z,
+        }
+    return target, receipt
+
+
+def _terminal_stability(samples: list[dict[str, object]], steps: int = 30) -> dict[str, object]:
+    window = samples[-steps:]
+    passed = len(window) == steps and all(
+        row["task_success"]
+        and row["stage3"]
+        and row["hang_predicate_now"]
+        and not row["left_grasp"]
+        and not row["right_grasp"]
+        for row in window
+    )
+    return {"required_steps": steps, "observed_steps": len(window), "passed": bool(passed)}
+
+
+def _direct_actions_exact(executed: list[np.ndarray], source_actions) -> bool:
+    return np.array_equal(
+        np.asarray(executed, dtype=np.float32),
+        source_actions.detach().cpu().numpy(),
+    )
 
 
 def _physics_device_receipt(
@@ -686,25 +852,42 @@ def _frame(env, sample):
 
 def main() -> None:
     args = _parser()
+    _require_proven_control_defaults(args)
     _physics_device_receipt(
         args.device,
         require_cpu=args.require_cpu_physics,
     )
     if args.render and not args.video:
         raise ValueError("--render requires --video")
-    for path in (args.result_json, args.trace_npz, args.video, args.write_keyframes):
+    for path in (
+        args.result_json,
+        args.trace_npz,
+        args.video,
+        args.write_keyframes,
+        args.demo_hdf5,
+    ):
         if path and os.path.isfile(path):
             os.unlink(path)
     # Validate cheap dataset/asset provenance before the expensive app launch.
+    source_receipt = _source_dataset_receipt(
+        args.source_dataset, args.episode, args.expected_source_sha256
+    )
     source_assets = _dataset_assets(args.source_dataset, args.objects_root)
-    target_assets = _dataset_assets(args.target_dataset, args.objects_root)
+    target_assets, target_state_template = _resolve_target_assets(args, source_assets)
     sys.path.insert(0, os.path.abspath(args.gear_repo))
-    from isaaclab.app import AppLauncher
-
-    simulation_app = AppLauncher({"headless": True, "device": args.device, "enable_cameras": True}).app
-    env = encoder = None
+    simulation_app = env = encoder = None
     try:
+        from isaaclab.app import AppLauncher
+
+        simulation_app = AppLauncher(
+            {"headless": True, "device": args.device, "enable_cameras": True}
+        ).app
         import torch
+        from dc_study.datagen.controller_settings import (
+            compare_live_settings_to_spec,
+            read_live_controller_settings,
+        )
+        from dc_study.datagen.io import sha256_json
         from dc_study.utils.task_creation import create_task_environment
         from run_putmarker_skill_program import _Encoder, _asset_provenance, _eef_pose, _ik_action, _probe, _reset_scene_to_state
 
@@ -738,11 +921,35 @@ def main() -> None:
         grasp_assistance = _validate_datagen_grasp_assists(
             env, override["grasp_assistance_config"]
         )
+        configured_gains_start = env.robot.spec.controller_gains()
+        configured_gains_start_sha256 = sha256_json(configured_gains_start)
+        if (
+            args.expected_controller_gains_sha256
+            and configured_gains_start_sha256 != args.expected_controller_gains_sha256
+        ):
+            raise RuntimeError("configured controller gains do not match the campaign pin")
+        live_gains_start = read_live_controller_settings(env.scene)
+        live_gains_start_check = compare_live_settings_to_spec(
+            live_gains_start, configured_gains_start
+        )
+        if not live_gains_start_check["matches_configured_spec"]:
+            raise RuntimeError("live controller gains do not match the configured defaults")
+        reset_counts = {
+            "explicit_env_reset_calls": 0,
+            "initial_state_restores": 0,
+            "resets_during_episode": 0,
+        }
         env.reset(warm_up=False, seed=args.seed)
+        reset_counts["explicit_env_reset_calls"] += 1
         source = _load_dataset(args.source_dataset, args.episode, env.device)
-        target = _load_dataset(args.target_dataset, args.episode, env.device)
+        target = _load_dataset(target_state_template, args.episode, env.device)
+        template_assets = _dataset_assets(target_state_template, args.objects_root)
+        target, initial_placement = _support_preserving_target_state(
+            target, template_assets, target_assets
+        )
         env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
         _reset_scene_to_state(env.scene, target["initial_state"], env_ids)
+        reset_counts["initial_state_restores"] += 1
         env.sim.forward()
         env.reset_success_check(env_ids)
         source_mug = _geometry(source_assets["mug"], source["mug_pose"][0])
@@ -784,6 +991,8 @@ def main() -> None:
         demo_recorder = DemonstrationRecorder()
         demo_recorder.start(env.scene.get_state(is_relative=False))
         samples = [_sample(env, -1, "reset")]
+        for name, pose_key in (("mug", "mug_pose"), ("mug_tree", "tree_pose")):
+            initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; frame_stats = []
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
@@ -880,7 +1089,9 @@ def main() -> None:
             if encoder is not None:
                 frame = _frame(env, sample); encoder.write(frame); frame_stats.append((float(frame.mean()), float(frame.std())))
             if (step + 1) % 50 == 0 or sample["task_success"]:
-                print("HANGMUG_PROGRESS=" + json.dumps({key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}, sort_keys=True), flush=True)
+                progress = {key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}
+                print("HANGMUG_PROGRESS=" + json.dumps(progress, sort_keys=True), flush=True)
+                print(f"STEP_PROGRESS step={step} stage={stage}", flush=True)
         if encoder is not None:
             encoder.close(); encoder = None
         Path(args.trace_npz).parent.mkdir(parents=True, exist_ok=True)
@@ -898,6 +1109,7 @@ def main() -> None:
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),
         )
         final = samples[-1]
+        terminal_stability = _terminal_stability(samples)
         extracted = None
         if args.mode == "replay" and final["task_success"]:
             extracted = _extract_keyframes(samples, args.source_dataset, source_assets)
@@ -914,10 +1126,44 @@ def main() -> None:
             with open(args.direct_replay_result, encoding="utf-8") as stream:
                 direct_replay = json.load(stream)
         terminal_speed = float(np.linalg.norm(final["mug_velocity"][:3]))
+        executed_source_actions_exact = (
+            _direct_actions_exact(actions, source["actions"])
+            if trajectory is None
+            else None
+        )
+        configured_gains_end = env.robot.spec.controller_gains()
+        live_gains_end = read_live_controller_settings(env.scene)
+        live_gains_end_check = compare_live_settings_to_spec(
+            live_gains_end, configured_gains_end
+        )
+        controller_receipt = {
+            "expected_configured_sha256": args.expected_controller_gains_sha256,
+            "starting_configured_sha256": configured_gains_start_sha256,
+            "ending_configured_sha256": sha256_json(configured_gains_end),
+            "starting_live_sha256": sha256_json(live_gains_start),
+            "ending_live_sha256": sha256_json(live_gains_end),
+            "starting_live_matches_configured": live_gains_start_check,
+            "ending_live_matches_configured": live_gains_end_check,
+        }
         checks = {
-            "one_reset": True,
-            "zero_inter_stage_resets": True,
-            "real_target_assets": target_assets == _dataset_assets(args.target_dataset, args.objects_root),
+            "one_reset": reset_counts["explicit_env_reset_calls"] == 1,
+            "zero_inter_stage_resets": reset_counts["resets_during_episode"] == 0,
+            "real_target_assets": all(Path(path).is_dir() for path in target_assets.values()),
+            "configured_controller_matches_expected": (
+                args.expected_controller_gains_sha256 is None
+                or configured_gains_start_sha256 == args.expected_controller_gains_sha256
+            ),
+            "configured_controller_unchanged": configured_gains_end == configured_gains_start,
+            "live_controller_unchanged": live_gains_end == live_gains_start,
+            "starting_live_controller_matches_spec": bool(
+                live_gains_start_check["matches_configured_spec"]
+            ),
+            "ending_live_controller_matches_spec": bool(
+                live_gains_end_check["matches_configured_spec"]
+            ),
+            "single_source_action_dataset": source_receipt["action_dataset"] == "actions",
+            "source_dataset_unchanged": _sha256(args.source_dataset)
+            == source_receipt["file_sha256"],
             "contact_backed_grasps_only": True,
             "datagen_grasp_assist_configured": bool(env.grasp_assists),
             "left_grasp_assist_engaged": any(
@@ -937,11 +1183,13 @@ def main() -> None:
             "left_pick_observed": any(row["left_grasp"] and row["stage1"] for row in samples),
             "right_handover_observed": any(row["right_grasp"] and row["stage2"] for row in samples),
             "mug_released": not final["left_grasp"] and not final["right_grasp"],
-            "stable_hang_window": bool(final["hang_predicate_now"]),
+            "stable_hang_window": bool(terminal_stability["passed"]),
             "terminal_mug_speed_within_threshold": terminal_speed <= 0.05,
             "h264_nonempty": video is None or (video["codec"] == "h264" and video["size_bytes"] > 0 and video["frame_count"] == len(frame_stats)),
             "fully_decodable": video is None or video["full_decode_returncode"] == 0,
         }
+        if trajectory is None:
+            checks["executed_source_actions_exact"] = bool(executed_source_actions_exact)
         if args.require_cpu_physics:
             checks["physics_device_cpu"] = bool(
                 physics_device["passed"] and physics_device["actual"] == "cpu"
@@ -954,17 +1202,27 @@ def main() -> None:
                 for name in (
                     "one_reset", "zero_inter_stage_resets", "real_target_assets",
                     "contact_backed_grasps_only", "datagen_grasp_assist_configured",
+                    "configured_controller_matches_expected",
+                    "configured_controller_unchanged", "live_controller_unchanged",
+                    "starting_live_controller_matches_spec",
+                    "ending_live_controller_matches_spec",
+                    "single_source_action_dataset", "source_dataset_unchanged",
+                    "executed_source_actions_exact",
                     "h264_nonempty", "fully_decodable",
                 )
             }
         elif args.expect_failure:
-            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
+            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "configured_controller_matches_expected", "configured_controller_unchanged", "live_controller_unchanged", "starting_live_controller_matches_spec", "ending_live_controller_matches_spec", "single_source_action_dataset", "source_dataset_unchanged", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
+            if trajectory is None:
+                acceptance["executed_source_actions_exact"] = checks[
+                    "executed_source_actions_exact"
+                ]
             acceptance["expected_coded_task_failure"] = not final["task_success"]
         else:
             acceptance = _schema_aware_success_acceptance(
                 checks, coded_skill=trajectory is not None
             )
-            if direct_replay is not None and _sha256(args.source_dataset) != _sha256(args.target_dataset):
+            if direct_replay is not None and target_assets != source_assets:
                 acceptance = dict(acceptance)
                 acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
                 acceptance["direct_replay_grasp_assistance_matched"] = (
@@ -989,15 +1247,21 @@ def main() -> None:
                     "candidate_sampling": False,
                     "grasp_assistance": grasp_assistance,
                     "source_dataset_sha256": _sha256(args.source_dataset),
-                    "target_dataset_sha256": _sha256(args.target_dataset),
+                    "target_state_template_sha256": _sha256(target_state_template),
+                    "source_action_dataset": "actions",
+                    "source_actions_sha256": source_receipt["actions_sha256"],
                 },
             )
             demo_artifact = {"path": os.path.abspath(args.demo_hdf5), "sha256": _sha256(args.demo_hdf5)}
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": 1, "inter_stage_resets": 0, "teleports_after_reset": 0, "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
-            "provenance": {"source_dataset": {"path": os.path.abspath(args.source_dataset), "sha256": _sha256(args.source_dataset)}, "target_dataset": {"path": os.path.abspath(args.target_dataset), "sha256": _sha256(args.target_dataset)}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
+            "initial_placement": initial_placement,
+            "controller_gains": controller_receipt,
+            "reset_counts": reset_counts,
+            "terminal_stability": terminal_stability,
             "semantic_frames": {
                 "source_mug": source_mug.root_pose.tolist(),
                 "target_mug": target_mug.root_pose.tolist(),
@@ -1021,12 +1285,29 @@ def main() -> None:
             "task_override": override,
         }
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
-        with open(args.result_json, "w", encoding="utf-8") as stream:
-            json.dump(result, stream, indent=2, sort_keys=True)
+        _write_json_atomic(args.result_json, result)
         print("HANGMUG_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
         if result["status"] != "passed":
             raise RuntimeError(f"acceptance checks failed: {acceptance}")
-    except BaseException:
+    except BaseException as error:
+        if not os.path.isfile(args.result_json):
+            _write_json_atomic(
+                args.result_json,
+                {
+                    "status": "failed",
+                    "error": f"{type(error).__name__}: {error}",
+                    "provenance": {
+                        "source_dataset": source_receipt,
+                        "target_state_template": os.path.abspath(target_state_template),
+                        "target_assets": target_assets,
+                    },
+                },
+            )
+        print(
+            f"HANGMUG_RUN_FAILED artifact={os.path.abspath(args.result_json)} "
+            f"error={type(error).__name__}: {error}",
+            flush=True,
+        )
         traceback.print_exc()
         raise
     finally:
@@ -1034,7 +1315,9 @@ def main() -> None:
             encoder.close()
         if env is not None:
             env.close()
-        simulation_app.close()
+        if simulation_app is not None:
+            print("ISAAC_SHUTDOWN_BEGIN", flush=True)
+            simulation_app.close()
 
 
 if __name__ == "__main__":
