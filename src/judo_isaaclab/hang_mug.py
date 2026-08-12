@@ -246,6 +246,20 @@ def ensure_pick_latch_clearance(
     return handover
 
 
+def transfer_handover_contact_by_handle_frame(
+    source_mug_pose: Any,
+    target_mug_pose: Any,
+    source_handle_hole_frame: Any,
+    target_handle_hole_frame: Any,
+    source_right_eef_pose: Any,
+) -> np.ndarray:
+    """Preserve the demonstrated receiver pose in the authored handle frame."""
+
+    source_handle = compose_pose(source_mug_pose, source_handle_hole_frame)
+    target_handle = compose_pose(target_mug_pose, target_handle_hole_frame)
+    return transfer_pose(source_right_eef_pose, source_handle, target_handle)
+
+
 def reanchor_right_grasp_from_observed_mug(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,

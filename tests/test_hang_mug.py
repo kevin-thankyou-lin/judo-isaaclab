@@ -15,9 +15,10 @@ from judo_isaaclab.hang_mug import (
     reanchor_branch_transport_contact,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
+    transfer_handover_contact_by_handle_frame,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
-from judo_isaaclab.put_marker import compose_pose, quaternion_rotate
+from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
@@ -46,6 +47,28 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_handover_contact_transfer_preserves_authored_handle_frame_relation():
+    source_mug = _pose(0.4, 0.1, 0.9)
+    target_mug = _pose(0.7, -0.2, 0.8)
+    source_handle = _pose(0.03, 0.0, 0.01)
+    target_handle = _pose(0.06, 0.0, -0.02)
+    source_eef = compose_pose(
+        compose_pose(source_mug, source_handle), _pose(-0.09, -0.02, 0.14)
+    )
+
+    transferred = transfer_handover_contact_by_handle_frame(
+        source_mug, target_mug, source_handle, target_handle, source_eef
+    )
+
+    source_relation = compose_pose(
+        inverse_pose(compose_pose(source_mug, source_handle)), source_eef
+    )
+    target_relation = compose_pose(
+        inverse_pose(compose_pose(target_mug, target_handle)), transferred
+    )
+    np.testing.assert_allclose(target_relation, source_relation, atol=1.0e-9)
 
 
 def test_semantic_stage_receipt_stops_at_first_incomplete_completed_stage(monkeypatch):

@@ -165,6 +165,8 @@ def _repair_command(
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
         ])
+    if strategy.get("handover_handle_frame_transfer"):
+        arguments.append("--handover-handle-frame-transfer")
     for field, option in (
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
@@ -238,6 +240,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
+        "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
         "branch_support_fraction",
@@ -250,6 +253,13 @@ def _repair_strategy(index: int) -> dict:
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
+    if "handover_handle_frame_transfer" in value:
+        enabled = value["handover_handle_frame_transfer"]
+        if enabled is not True:
+            raise ValueError(
+                "handover handle-frame transfer must be true when selected"
+            )
+        strategy["handover_handle_frame_transfer"] = True
     if "pick_lift_margin_m" in value:
         margin = value["pick_lift_margin_m"]
         if (
