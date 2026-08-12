@@ -153,12 +153,14 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     )
     assert "--direct-replay-result" in command
     assert "--reuse-source-pick-prefix" not in command
+    assert command[command.index("--handover-confirm-steps") + 1] == "12"
     handover_selection = campaign._repair_selection("handover", "pick")
     handover = campaign._repair_command(
         2, tmp_path / "repair2", tmp_path / "classification/result.json",
         handover_selection,
     )
     assert "--reuse-source-pick-prefix" in handover
+    assert handover[handover.index("--handover-confirm-steps") + 1] == "12"
 
 
 @pytest.mark.parametrize(

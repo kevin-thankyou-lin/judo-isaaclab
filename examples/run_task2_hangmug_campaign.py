@@ -155,11 +155,12 @@ def _repair_command(
         "--mode", "skill",
         "--source-keyframes", str(KEYFRAMES),
         "--direct-replay-result", str(classification_result),
+        "--handover-confirm-steps", "12",
     ]
     if selection["actual_repair_boundary"] == "reset":
         pass
     elif selection["actual_repair_boundary"] == "pick":
-        arguments.extend(["--reuse-source-pick-prefix", "--handover-confirm-steps", "12"])
+        arguments.append("--reuse-source-pick-prefix")
     else:
         raise RuntimeError(f"unsupported actual repair boundary: {selection}")
     workload[workload.index("--device"):workload.index("--device")] = arguments
