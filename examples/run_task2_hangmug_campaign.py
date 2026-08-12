@@ -148,8 +148,10 @@ def _classification_command(index: int, attempt: Path) -> list[str]:
 
 
 def _repair_command(
-    index: int, attempt: Path, classification_result: Path, selection: dict
+    index: int, attempt: Path, classification_result: Path, selection: dict,
+    strategy: dict | None = None,
 ) -> list[str]:
+    strategy = strategy or {}
     workload = _common_workload(index, attempt)
     arguments = [
         "--mode", "skill",
@@ -158,8 +160,18 @@ def _repair_command(
         "--handover-confirm-steps", "12",
     ]
     if selection["actual_repair_boundary"] == "reset":
-        arguments.extend(["--handover-contact-settle-steps", "30"])
+        arguments.extend([
+            "--handover-contact-settle-steps",
+            str(strategy.get("handover_contact_settle_steps", 30)),
+        ])
+        if "handover_target_offset_m" in strategy:
+            arguments.extend([
+                "--handover-target-offset-m",
+                *map(str, strategy["handover_target_offset_m"]),
+            ])
     elif selection["actual_repair_boundary"] == "pick":
+        if strategy:
+            raise ValueError("pair repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
     else:
         raise RuntimeError(f"unsupported actual repair boundary: {selection}")
@@ -186,6 +198,26 @@ def _repair_selection(first_failed_stage: str, last_completed_stage: str | None)
         "requested_last_completed_stage": last_completed_stage,
         "actual_repair_boundary": boundary,
         "coarse_fallback": coarse,
+    }
+
+
+def _repair_strategy(index: int) -> dict:
+    path = RESULTS / "pairs" / f"{index:06d}" / "repair_candidate.json"
+    if not path.is_file():
+        return {}
+    value = _load(path)
+    allowed = {"handover_contact_settle_steps", "handover_target_offset_m"}
+    if set(value) - allowed:
+        raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
+    settle = value.get("handover_contact_settle_steps", 30)
+    offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
+    if not isinstance(settle, int) or not 0 <= settle <= 60:
+        raise ValueError("handover contact settle must be an integer in [0, 60]")
+    if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
+        raise ValueError("handover target offset must be three finite values within 4 cm")
+    return {
+        "handover_contact_settle_steps": settle,
+        "handover_target_offset_m": offset.tolist(),
     }
 
 
@@ -403,7 +435,8 @@ def independent_audit(index: int, attempt: Path) -> dict:
             or np.array_equal(actions[:SOURCE_PREFIX_STEPS], source_actions[:SOURCE_PREFIX_STEPS])
         )
         command = _repair_command(
-            index, attempt, Path(manifest["classification"]["result_path"]), selection
+            index, attempt, Path(manifest["classification"]["result_path"]), selection,
+            manifest.get("repair_strategy"),
         )
     if not (
         source["file_sha256"] == SOURCE_SHA256
@@ -666,6 +699,7 @@ def _manifest(
     *,
     method: str,
     classification: dict | None = None,
+    repair_strategy: dict | None = None,
 ) -> dict:
     value = {
         "schema_version": 1,
@@ -698,6 +732,8 @@ def _manifest(
     }
     if classification is not None:
         value["classification"] = classification
+    if repair_strategy:
+        value["repair_strategy"] = repair_strategy
     return value
 
 
@@ -799,9 +835,10 @@ def run_one(index: int) -> None:
     classification_binding = _classification_binding(
         classification_attempt, classification
     )
+    repair_strategy = _repair_strategy(index)
     command = _repair_command(
         index, repair_attempt, Path(classification["result_path"]),
-        classification_binding,
+        classification_binding, repair_strategy,
     )
     _atomic_json(
         repair_attempt / "manifest.json",
@@ -813,6 +850,7 @@ def run_one(index: int) -> None:
                 else "semantic_stage_boundary_repair"
             ),
             classification=classification_binding,
+            repair_strategy=repair_strategy,
         ),
         immutable=True,
     )

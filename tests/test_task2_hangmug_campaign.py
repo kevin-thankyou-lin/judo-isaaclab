@@ -165,6 +165,31 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     assert "--handover-contact-settle-steps" not in handover
 
 
+def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000002/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(json.dumps({
+        "handover_contact_settle_steps": 30,
+        "handover_target_offset_m": [-0.0146, 0.019, -0.0134],
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    strategy = campaign._repair_strategy(2)
+    selection = campaign._repair_selection("pick", None)
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    command = campaign._repair_command(
+        2, tmp_path / "attempt", tmp_path / "result.json", selection, strategy
+    )
+    cursor = command.index("--handover-target-offset-m")
+    assert [float(value) for value in command[cursor + 1 : cursor + 4]] == pytest.approx(
+        strategy["handover_target_offset_m"]
+    )
+    candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
+    with pytest.raises(ValueError, match="within 4 cm"):
+        campaign._repair_strategy(2)
+
+
 @pytest.mark.parametrize(
     "failed,last_completed",
     (
@@ -229,10 +254,12 @@ def test_classification_binding_and_manifest_preserve_actual_boundary(
     manifest = campaign._manifest(
         2, tmp_path / "repair", ["command"], "ledger",
         method="semantic_coarse_boundary_repair", classification=binding,
+        repair_strategy={"handover_contact_settle_steps": 30},
     )
     assert manifest["classification"] == binding
     assert manifest["source_prefix_action_count"] == campaign.SOURCE_PREFIX_STEPS
     assert manifest["method"] == "semantic_coarse_boundary_repair"
+    assert manifest["repair_strategy"] == {"handover_contact_settle_steps": 30}
 
 
 def test_guard_lifecycle_requires_all_markers_and_live_zero_workers(tmp_path, monkeypatch):
@@ -264,8 +291,9 @@ def _run_one_fixture(tmp_path, monkeypatch, classification):
     monkeypatch.setattr(campaign, "_reusable_classification", lambda _index: None)
     monkeypatch.setattr(
         campaign, "_manifest",
-        lambda *_args, method, classification=None: {
-            "method": method, "classification": classification
+        lambda *_args, method, classification=None, repair_strategy=None: {
+            "method": method, "classification": classification,
+            "repair_strategy": repair_strategy,
         },
     )
     events = []

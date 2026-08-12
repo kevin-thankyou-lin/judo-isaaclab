@@ -22,6 +22,7 @@ from run_hangmug_skill_program import (
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
     _array_sha256,
+    _bounded_handover_offset,
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
@@ -457,6 +458,16 @@ def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
         _requires_observed_handover_reanchor(
             SimpleNamespace(body_size=np.asarray([0.08, -0.01, 0.10]))
         )
+
+
+def test_handover_translation_offset_is_bounded_and_finite():
+    assert _bounded_handover_offset([0.01, -0.02, 0.01]) == pytest.approx(
+        [0.01, -0.02, 0.01]
+    )
+    with pytest.raises(ValueError, match="three finite"):
+        _bounded_handover_offset([0.0, np.nan, 0.0])
+    with pytest.raises(ValueError, match="exceeds 4 cm"):
+        _bounded_handover_offset([0.041, 0.0, 0.0])
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():
