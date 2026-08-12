@@ -521,6 +521,30 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     deeper_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), deeper_support)
     assert deeper_handle_world[:3] == pytest.approx(deeper_branch_world[:3])
     assert deeper_handle_world[3:] == pytest.approx(target_handle_world[3:])
+    alternate, _, alternate_target = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (branch(-1.0, 0.3, 0.8), source_branch),
+        _pose(2.0, 3.0, 0.0),
+        (branch(-1.0, 0.4, 0.9), target_branch),
+        target_branch_rank=0,
+    )
+    assert alternate_target is not target_branch
+    alternate_handle = compose_pose(alternate, target_parts.handle_hole_frame)
+    alternate_support = alternate_target.frame.copy()
+    alternate_support[:3] = 0.5 * (
+        alternate_target.inner_point + alternate_target.tip_point
+    )
+    assert alternate_handle[:3] == pytest.approx(
+        compose_pose(_pose(2.0, 3.0, 0.0), alternate_support)[:3]
+    )
+    with pytest.raises(ValueError, match="outside the inferred branch set"):
+        geometry_conditioned_hang_pose(
+            _pose(), _pose(), source_parts, target_parts,
+            (source_branch,), _pose(), (target_branch,), target_branch_rank=1,
+        )
     with pytest.raises(ValueError, match="support fraction"):
         geometry_conditioned_hang_pose(
             _pose(), _pose(), source_parts, target_parts,

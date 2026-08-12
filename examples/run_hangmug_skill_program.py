@@ -91,6 +91,11 @@ def _parser() -> argparse.Namespace:
         help="Bounded vertical seating offset applied before branch release.",
     )
     parser.add_argument(
+        "--target-branch-rank",
+        type=int,
+        help="Optional canonical inferred-branch rank for a geometry-screened repair.",
+    )
+    parser.add_argument(
         "--handover-contact-settle-steps",
         type=int,
         default=0,
@@ -1253,6 +1258,7 @@ def _build_skill(
         branch_support_fraction=_bounded_branch_support_fraction(
             args.branch_support_fraction
         ),
+        target_branch_rank=args.target_branch_rank,
     )
     final_mug_pose = _branch_support_seated_pose(
         final_mug_pose, args.branch_support_seat_down_m
@@ -2159,6 +2165,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["target_branch_rank"] = (
+            args.target_branch_rank
         )
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         _write_json_atomic(args.result_json, result)

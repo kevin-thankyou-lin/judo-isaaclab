@@ -171,6 +171,7 @@ def _repair_command(
         ("branch_orient_steps", "--branch-orient-steps"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
+        ("target_branch_rank", "--target-branch-rank"),
     ):
         if field in strategy:
             arguments.extend([option, str(strategy[field])])
@@ -273,11 +274,13 @@ def _repair_strategy(index: int) -> dict:
         "branch_orient_steps",
         "branch_support_fraction",
         "branch_support_seat_down_m",
+        "target_branch_rank",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
-        "branch_orient_steps", "branch_support_fraction", "branch_support_seat_down_m"
+        "branch_orient_steps", "branch_support_fraction", "branch_support_seat_down_m",
+        "target_branch_rank",
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
@@ -307,6 +310,11 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch orient steps must be in [0, 90]")
         strategy["branch_orient_steps"] = branch_orient_steps
+    if "target_branch_rank" in value:
+        rank = value["target_branch_rank"]
+        if isinstance(rank, bool) or not isinstance(rank, int) or not 0 <= rank < 6:
+            raise ValueError("target branch rank must be in [0, 5]")
+        strategy["target_branch_rank"] = rank
     if "branch_support_fraction" in value:
         fraction = value["branch_support_fraction"]
         if (
