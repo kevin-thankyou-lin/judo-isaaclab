@@ -209,6 +209,30 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
 
 
+def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000004/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(json.dumps({"branch_support_fraction": 0.35}))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    strategy = campaign._repair_strategy(4)
+    assert strategy == {"branch_support_fraction": 0.35}
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    command = campaign._repair_command(
+        4,
+        tmp_path / "attempt",
+        tmp_path / "classification/result.json",
+        campaign._repair_selection("handover", "pick"),
+        strategy,
+    )
+    assert "--reuse-source-pick-prefix" in command
+    assert command[command.index("--branch-support-fraction") + 1] == "0.35"
+    candidate.write_text(json.dumps({"branch_support_fraction": 0.2}))
+    with pytest.raises(ValueError, match="support fraction"):
+        campaign._repair_strategy(4)
+
+
 @pytest.mark.parametrize(
     "failed,last_completed",
     (

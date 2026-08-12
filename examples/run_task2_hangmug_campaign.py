@@ -161,6 +161,11 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
+    if "branch_support_fraction" in strategy:
+        arguments.extend([
+            "--branch-support-fraction",
+            str(strategy["branch_support_fraction"]),
+        ])
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
@@ -184,7 +189,7 @@ def _repair_command(
                 str(strategy["handover_post_release_lift_steps"]),
             ])
     elif selection["actual_repair_boundary"] == "pick":
-        if strategy:
+        if set(strategy) - {"branch_support_fraction"}:
             raise ValueError("pair repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
     else:
@@ -227,9 +232,24 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "left_release_retreat_m",
+        "branch_support_fraction",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
+    handover_fields = allowed - {"branch_support_fraction"}
+    strategy = {}
+    if "branch_support_fraction" in value:
+        fraction = value["branch_support_fraction"]
+        if (
+            isinstance(fraction, bool)
+            or not isinstance(fraction, (int, float))
+            or not np.isfinite(fraction)
+            or not 0.25 <= fraction <= 0.75
+        ):
+            raise ValueError("branch support fraction must be in [0.25, 0.75]")
+        strategy["branch_support_fraction"] = float(fraction)
+    if not (set(value) & handover_fields):
+        return strategy
     settle = value.get("handover_contact_settle_steps", 30)
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
@@ -257,13 +277,13 @@ def _repair_strategy(index: int) -> dict:
         )
     if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset must be three finite values within 4 cm")
-    strategy = {
+    strategy.update({
         "handover_contact_settle_steps": settle,
         "handover_confirm_steps": confirm,
         "handover_post_release_lift_m": float(post_release_lift),
         "handover_post_release_lift_steps": post_release_steps,
         "handover_target_offset_m": offset.tolist(),
-    }
+    })
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (

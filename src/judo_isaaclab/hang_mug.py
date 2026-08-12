@@ -58,8 +58,17 @@ def geometry_conditioned_hang_pose(
     source_branches: Any,
     target_tree_pose: Any,
     target_branches: Any,
+    *,
+    branch_support_fraction: float = 0.5,
 ) -> tuple[np.ndarray, Any, Any]:
     """Map a verified handle-on-branch relationship through measured parts."""
+
+    branch_support_fraction = float(branch_support_fraction)
+    if (
+        not np.isfinite(branch_support_fraction)
+        or not 0.25 <= branch_support_fraction <= 0.75
+    ):
+        raise ValueError("branch support fraction must be finite and in [0.25, 0.75]")
 
     from .semantic_parts import closest_branch, corresponding_branch
 
@@ -119,16 +128,15 @@ def geometry_conditioned_hang_pose(
         (handle_x, branch_tangent_world, handle_z)
     )
     target_handle_world[3:] = pose_from_matrix(aligned_handle_matrix)[3:]
-    # Seat the authored target handle-hole center at the middle of the detected
-    # branch segment after aligning the opening axis.  The extraction frame is
-    # intentionally near the tip for branch identification and approach, but
-    # a long branch with a narrow handle can slide free from that shallow
-    # location after release.  The segment midpoint is a geometry-only support
-    # location with branch material on both sides; it uses no asset ID or
-    # sampled candidate.
+    # Seat the authored target handle-hole center at a bounded fraction of the
+    # detected branch segment after aligning the opening axis.  The midpoint is
+    # the default; preserved rollout evidence may propose a deeper data-only
+    # fraction when release slides toward the tip.
     target_support_local = target_branch.frame.copy()
-    target_support_local[:3] = 0.5 * (
-        target_branch.inner_point + target_branch.tip_point
+    target_support_local[:3] = (
+        target_branch.inner_point
+        + branch_support_fraction
+        * (target_branch.tip_point - target_branch.inner_point)
     )
     target_support_world = compose_pose(target_tree_pose, target_support_local)
     target_handle_world[:3] = target_support_world[:3]

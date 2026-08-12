@@ -474,6 +474,31 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     )
     assert handle_hole_axis == pytest.approx(branch_tangent)
 
+    deeper, _, _ = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (branch(-1.0, 0.3, 0.8), source_branch),
+        _pose(2.0, 3.0, 0.0),
+        (branch(-1.0, 0.4, 0.9), target_branch),
+        branch_support_fraction=0.35,
+    )
+    deeper_handle_world = compose_pose(deeper, target_parts.handle_hole_frame)
+    deeper_support = target_branch.frame.copy()
+    deeper_support[:3] = target_branch.inner_point + 0.35 * (
+        target_branch.tip_point - target_branch.inner_point
+    )
+    deeper_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), deeper_support)
+    assert deeper_handle_world[:3] == pytest.approx(deeper_branch_world[:3])
+    assert deeper_handle_world[3:] == pytest.approx(target_handle_world[3:])
+    with pytest.raises(ValueError, match="support fraction"):
+        geometry_conditioned_hang_pose(
+            _pose(), _pose(), source_parts, target_parts,
+            (source_branch,), _pose(), (target_branch,),
+            branch_support_fraction=0.24,
+        )
+
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():
     FixedJointGraspAssist = type("FixedJointGraspAssist", (), {})
