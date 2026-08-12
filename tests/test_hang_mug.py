@@ -28,6 +28,7 @@ from run_hangmug_skill_program import (
     _install_grasp_assist_config,
     _handover_boundary_receipt,
     _handover_lift_guard_receipt,
+    _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
@@ -782,6 +783,29 @@ def test_pick_clearance_uses_measured_mug_height():
     adjusted = ensure_pick_latch_clearance(shallow, initial, 0.07)
     assert adjusted[:2] == pytest.approx(shallow[:2])
     assert adjusted[2] == pytest.approx(0.92)
+    with_margin = ensure_pick_latch_clearance(
+        shallow, initial, 0.07, pick_threshold_m=0.06
+    )
+    assert with_margin[2] == pytest.approx(adjusted[2] + 0.01)
+
+
+def test_pick_boundary_requires_latched_contact_backed_left_hold():
+    sample = {
+        "step": 219,
+        "stage1": True,
+        "left_grasp": True,
+        "grasp_assist_engaged": {"left": True, "right": False},
+    }
+    assert _pick_boundary_receipt(sample)["passed"] is True
+    for mutation in (
+        {"stage1": False},
+        {"left_grasp": False},
+        {"grasp_assist_engaged": {"left": False, "right": False}},
+        {"grasp_assist_engaged": {"left": True, "right": True}},
+    ):
+        receipt = _pick_boundary_receipt({**sample, **mutation})
+        assert receipt["passed"] is False
+        assert receipt["safe_to_continue"] is False
 
 
 def test_branch_transport_reanchors_observed_right_contact():

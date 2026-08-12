@@ -175,6 +175,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
         "left_release_retreat_m": 0.03,
+        "pick_lift_margin_m": 0.01,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -186,6 +187,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     cursor = command.index("--left-release-retreat-m")
     assert float(command[cursor + 1]) == pytest.approx(0.03)
+    assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
@@ -207,6 +209,25 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"handover_post_release_lift_m": 0.055}))
     with pytest.raises(ValueError, match="distance and steps"):
         campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"pick_lift_margin_m": 0.031}))
+    with pytest.raises(ValueError, match="pick lift margin"):
+        campaign._repair_strategy(2)
+
+
+def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    strategy = {"pick_lift_margin_m": 0.01}
+    reset = campaign._repair_command(
+        6, tmp_path / "reset", tmp_path / "classification.json",
+        campaign._repair_selection("pick", None), strategy,
+    )
+    assert reset[reset.index("--pick-lift-margin-m") + 1] == "0.01"
+    with pytest.raises(ValueError, match="valid only from reset"):
+        campaign._repair_command(
+            6, tmp_path / "prefix", tmp_path / "classification.json",
+            campaign._repair_selection("handover", "pick"), strategy,
+        )
 
 
 def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):

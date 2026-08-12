@@ -73,6 +73,12 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--max-rotation-step", type=float, default=0.16)
     parser.add_argument("--insert-clearance-m", type=float, default=0.08)
     parser.add_argument(
+        "--pick-lift-margin-m",
+        type=float,
+        default=0.0,
+        help="Bounded extra clearance above the unchanged 5 cm Pick threshold.",
+    )
+    parser.add_argument(
         "--branch-support-fraction",
         type=float,
         default=0.5,
@@ -656,6 +662,13 @@ def _bounded_branch_support_fraction(value: float) -> float:
     return fraction
 
 
+def _bounded_pick_lift_margin(value: float) -> float:
+    margin = float(value)
+    if not np.isfinite(margin) or not 0.0 <= margin <= 0.03:
+        raise ValueError("pick lift margin must be finite and in [0, 0.03] m")
+    return margin
+
+
 def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
     pose = np.asarray(value, dtype=np.float64)
     if pose.shape != (7,) or not np.all(np.isfinite(pose)):
@@ -780,6 +793,27 @@ def _require_reusable_pick_boundary(sample) -> None:
     right_assist = sample["grasp_assist_engaged"].get("right", False)
     if not sample["stage1"] or sample["stage2"] or not left_assist or right_assist:
         raise RuntimeError("source prefix did not preserve the completed Pick boundary")
+
+
+def _pick_boundary_receipt(sample) -> dict[str, object]:
+    """Require the completed Pick postcondition before any Handover motion."""
+    checks = {
+        "stage1_latched": bool(sample["stage1"]),
+        "left_contact_secure": bool(sample["left_grasp"]),
+        "left_assist_secure": bool(
+            sample["grasp_assist_engaged"].get("left", False)
+        ),
+        "right_assist_clear": not bool(
+            sample["grasp_assist_engaged"].get("right", False)
+        ),
+    }
+    return {
+        "stage": "pick",
+        "checked_after_step": int(sample["step"]),
+        "checks": checks,
+        "passed": all(checks.values()),
+        "safe_to_continue": all(checks.values()),
+    }
 
 
 def _handover_boundary_receipt(sample) -> dict[str, object]:
@@ -1050,6 +1084,7 @@ def _build_skill(
         target_handover_body,
         target_initial_body,
         target_parts.body_size[2],
+        pick_threshold_m=0.05 + _bounded_pick_lift_margin(args.pick_lift_margin_m),
     )
     target_handover_mug = RigidAssetGeometry(
         compose_pose(target_handover_body, inverse_pose(target_parts.body_frame)),
@@ -1425,6 +1460,7 @@ def main() -> None:
             initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
         trace_stages = []; trace_waypoints = []
+        pick_boundary = None
         handover_boundary = None
         handover_lift_boundary = None
         handover_lift_rows = []
@@ -1444,6 +1480,7 @@ def main() -> None:
                 semantic_step = None
             else:
                 if source_prefix_steps and joint_nominal is None:
+                    pick_boundary = _pick_boundary_receipt(samples[-1])
                     _require_reusable_pick_boundary(samples[-1])
                     from judo_isaaclab.hang_mug import reanchor_physical_handover
 
@@ -1464,6 +1501,13 @@ def main() -> None:
                         initial_action_index=source_prefix_steps - 1,
                     )
                 semantic_step = step - source_prefix_steps
+                if (
+                    "left_lift" in trajectory.waypoint_steps
+                    and semantic_step == trajectory.waypoint_steps["left_lift"] + 1
+                ):
+                    pick_boundary = _pick_boundary_receipt(samples[-1])
+                    if not pick_boundary["safe_to_continue"]:
+                        break
                 if (
                     "handover_receiver_lift" in trajectory.waypoint_steps
                     and semantic_step
@@ -1726,6 +1770,9 @@ def main() -> None:
                 source_pick_prefix_exact
             )
         if trajectory is not None:
+            checks["pick_boundary_passed"] = bool(
+                pick_boundary and pick_boundary["passed"]
+            )
             checks["handover_boundary_passed"] = bool(
                 handover_boundary and handover_boundary["passed"]
             )
@@ -1804,7 +1851,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_lift_margin_m": _bounded_pick_lift_margin(args.pick_lift_margin_m), "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
             "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,
@@ -1812,7 +1859,8 @@ def main() -> None:
             "terminal_stability": terminal_stability,
             "independent_terminal_hang": independent_terminal_hang,
             "semantic_stage_receipt": _semantic_stage_receipt(semantic_statuses),
-            "stage_boundary": handover_boundary,
+            "stage_boundary": handover_boundary or pick_boundary,
+            "pick_boundary": pick_boundary,
             "handover_post_release_lift": {
                 "planned_steps": args.handover_post_release_lift_steps,
                 "entry": handover_lift_boundary,
@@ -1829,7 +1877,9 @@ def main() -> None:
                 ),
             },
             "first_failed_semantic_stage": (
-                "handover"
+                "pick"
+                if pick_boundary is not None and not pick_boundary["passed"]
+                else "handover"
                 if (
                     handover_boundary is not None
                     and not handover_boundary["passed"]

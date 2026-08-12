@@ -161,6 +161,10 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
+    if "pick_lift_margin_m" in strategy:
+        arguments.extend([
+            "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
+        ])
     for field, option in (
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
@@ -235,6 +239,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "left_release_retreat_m",
+        "pick_lift_margin_m",
         "branch_support_fraction",
         "branch_support_seat_down_m",
     }
@@ -243,8 +248,18 @@ def _repair_strategy(index: int) -> dict:
     late_support_fields = {
         "branch_support_fraction", "branch_support_seat_down_m"
     }
-    handover_fields = allowed - late_support_fields
+    handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
+    if "pick_lift_margin_m" in value:
+        margin = value["pick_lift_margin_m"]
+        if (
+            isinstance(margin, bool)
+            or not isinstance(margin, (int, float))
+            or not np.isfinite(margin)
+            or not 0.0 <= margin <= 0.03
+        ):
+            raise ValueError("pick lift margin must be in [0, 0.03] m")
+        strategy["pick_lift_margin_m"] = float(margin)
     if "branch_support_fraction" in value:
         fraction = value["branch_support_fraction"]
         if (
