@@ -37,6 +37,14 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("replay", "skill"), required=True)
     parser.add_argument("--source-keyframes")
     parser.add_argument("--write-keyframes")
+    parser.add_argument(
+        "--reuse-source-pick-prefix",
+        action="store_true",
+        help=(
+            "Replay source actions through the right-pregrasp keyframe, then "
+            "repair only the handover-and-hang suffix."
+        ),
+    )
     parser.add_argument("--expect-failure", action="store_true")
     parser.add_argument(
         "--classification-run",
@@ -466,6 +474,47 @@ def _requires_observed_handover_reanchor(mug_parts) -> bool:
     return bool(size[2] > max(size[0], size[1]))
 
 
+def _source_pick_prefix_steps(keyframes) -> int:
+    """Return the exact source-action prefix ending at right pregrasp."""
+    frame = keyframes["frames"]["right_pregrasp"]
+    action_index = int(frame["action_index"])
+    if action_index < 0 or int(frame["sample_index"]) != action_index + 1:
+        raise ValueError("right-pregrasp keyframe is not aligned to source actions")
+    if not frame["stage1"] or frame["stage2"] or not frame["left_grasp"]:
+        raise ValueError("source right-pregrasp is not a completed Pick boundary")
+    return action_index + 1
+
+
+def _trajectory_after(trajectory, waypoint: str):
+    """Slice a planned skill after a completed waypoint and rebase its indices."""
+    from judo_isaaclab.put_marker import SkillTrajectory
+
+    if waypoint not in trajectory.waypoint_steps:
+        raise ValueError(f"trajectory is missing {waypoint} waypoint")
+    start = trajectory.waypoint_steps[waypoint] + 1
+    if start >= trajectory.steps:
+        raise ValueError(f"trajectory has no suffix after {waypoint}")
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses[start:].copy(),
+        right_poses=trajectory.right_poses[start:].copy(),
+        grippers=trajectory.grippers[start:].copy(),
+        stage_names=trajectory.stage_names[start:],
+        waypoint_steps={
+            name: end - start
+            for name, end in trajectory.waypoint_steps.items()
+            if end >= start
+        },
+    )
+
+
+def _require_reusable_pick_boundary(sample) -> None:
+    """Fail closed unless the live source prefix still holds a completed Pick."""
+    left_assist = sample["grasp_assist_engaged"].get("left", False)
+    right_assist = sample["grasp_assist_engaged"].get("right", False)
+    if not sample["stage1"] or sample["stage2"] or not left_assist or right_assist:
+        raise RuntimeError("source prefix did not preserve the completed Pick boundary")
+
+
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
     from run_putmarker_skill_program import _eef_pose
@@ -792,7 +841,9 @@ def _build_skill(
     )
 
 
-def _sparse_joint_nominal(source, trajectory, keyframes):
+def _sparse_joint_nominal(
+    source, trajectory, keyframes, *, initial_action_index: int = 0
+):
     actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
     indices = keyframes["semantic_indices"]
     mapping = {
@@ -811,7 +862,9 @@ def _sparse_joint_nominal(source, trajectory, keyframes):
         "stable_support": indices["stable_settle"],
     }
     parts = []
-    previous = actions[0]
+    if not 0 <= initial_action_index < len(actions):
+        raise ValueError("initial action index is outside the source action dataset")
+    previous = actions[initial_action_index]
     previous_cursor = 0
     for name, cursor in trajectory.waypoint_steps.items():
         target = actions[min(mapping[name], len(actions) - 1)]
@@ -853,6 +906,8 @@ def _frame(env, sample):
 def main() -> None:
     args = _parser()
     _require_proven_control_defaults(args)
+    if args.reuse_source_pick_prefix and args.mode != "skill":
+        raise ValueError("--reuse-source-pick-prefix requires --mode skill")
     _physics_device_receipt(
         args.device,
         require_cpu=args.require_cpu_physics,
@@ -980,12 +1035,30 @@ def main() -> None:
             )
             if keyframes is not None else (None, None, None, None, None, None)
         )
-        joint_nominal = _sparse_joint_nominal(source, trajectory, keyframes) if trajectory is not None else None
+        source_prefix_steps = (
+            _source_pick_prefix_steps(keyframes)
+            if trajectory is not None and args.reuse_source_pick_prefix
+            else 0
+        )
+        if source_prefix_steps > len(source["actions"]):
+            raise ValueError("source Pick prefix exceeds the source action dataset")
+        joint_nominal = (
+            _sparse_joint_nominal(source, trajectory, keyframes)
+            if trajectory is not None and not source_prefix_steps
+            else None
+        )
         observed_handover_reanchor = bool(
             trajectory is not None
-            and _requires_observed_handover_reanchor(target_parts)
+            and (
+                source_prefix_steps
+                or _requires_observed_handover_reanchor(target_parts)
+            )
         )
-        total_steps = trajectory.steps if trajectory is not None else len(source["actions"])
+        total_steps = (
+            source_prefix_steps + _trajectory_after(trajectory, "left_lift").steps
+            if source_prefix_steps
+            else trajectory.steps if trajectory is not None else len(source["actions"])
+        )
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
         demo_recorder = DemonstrationRecorder()
@@ -993,7 +1066,7 @@ def main() -> None:
         samples = [_sample(env, -1, "reset")]
         for name, pose_key in (("mug", "mug_pose"), ("mug_tree", "tree_pose")):
             initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
-        actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; frame_stats = []
+        actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
@@ -1001,23 +1074,52 @@ def main() -> None:
             if trajectory is None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
+                semantic_step = None
+            elif step < source_prefix_steps:
+                action = source["actions"][step : step + 1]
+                stage = "exact_source_pick_prefix"
+                semantic_step = None
             else:
-                stage = trajectory.stage_names[step]
-                integrate = step > trajectory.waypoint_steps["left_grasp"]
+                if source_prefix_steps and joint_nominal is None:
+                    _require_reusable_pick_boundary(samples[-1])
+                    from judo_isaaclab.hang_mug import reanchor_physical_handover
+
+                    trajectory = _trajectory_after(
+                        reanchor_physical_handover(
+                            trajectory,
+                            nominal_handover_mug,
+                            samples[-1]["mug_pose"],
+                            samples[-1]["left_eef_pose"],
+                            samples[-1]["right_eef_pose"],
+                        ),
+                        "left_lift",
+                    )
+                    joint_nominal = _sparse_joint_nominal(
+                        source,
+                        trajectory,
+                        keyframes,
+                        initial_action_index=source_prefix_steps - 1,
+                    )
+                semantic_step = step - source_prefix_steps
+                stage = trajectory.stage_names[semantic_step]
+                integrate = bool(
+                    source_prefix_steps
+                    or semantic_step > trajectory.waypoint_steps["left_grasp"]
+                )
                 action = _ik_action(
                     env,
-                    trajectory.left_poses[step],
-                    trajectory.right_poses[step],
-                    trajectory.grippers[step],
-                    joint_nominal[step],
+                    trajectory.left_poses[semantic_step],
+                    trajectory.right_poses[semantic_step],
+                    trajectory.grippers[semantic_step],
+                    joint_nominal[semantic_step],
                     args,
                     integrate_left_ik=integrate,
                     integrate_right_ik=integrate,
                 )
-                desired_left.append(trajectory.left_poses[step]); desired_right.append(trajectory.right_poses[step])
+                desired_left.append(trajectory.left_poses[semantic_step]); desired_right.append(trajectory.right_poses[semantic_step])
             observation, _, _, _, info = env.step(action)
-            if trajectory is not None:
-                _update_authored_assist_releases(env, trajectory, step)
+            if semantic_step is not None:
+                _update_authored_assist_releases(env, trajectory, semantic_step)
             sample = _sample(env, step, stage, info)
             demo_recorder.append(
                 action,
@@ -1027,9 +1129,14 @@ def main() -> None:
             )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            if semantic_step is not None:
+                semantic_left_eef.append(sample["left_eef_pose"])
+                semantic_right_eef.append(sample["right_eef_pose"])
             if (
                 observed_handover_reanchor
-                and step == trajectory.waypoint_steps["left_lift"]
+                and semantic_step is not None
+                and "left_lift" in trajectory.waypoint_steps
+                and semantic_step == trajectory.waypoint_steps["left_lift"]
                 and sample["left_grasp"]
             ):
                 from judo_isaaclab.hang_mug import reanchor_physical_handover
@@ -1043,8 +1150,10 @@ def main() -> None:
                 )
             if (
                 observed_handover_reanchor
-                and step == trajectory.waypoint_steps["handover_pregrasp"]
-                and sample["left_grasp"]
+                and semantic_step is not None
+                and semantic_step == trajectory.waypoint_steps["handover_pregrasp"]
+                and sample["stage1"]
+                and sample["grasp_assist_engaged"].get("left", False)
             ):
                 from judo_isaaclab.hang_mug import (
                     reanchor_right_grasp_from_observed_mug,
@@ -1063,8 +1172,8 @@ def main() -> None:
                 "branch_insert",
                 "branch_unload",
             )
-            if trajectory is not None and any(
-                step == trajectory.waypoint_steps[name]
+            if semantic_step is not None and any(
+                semantic_step == trajectory.waypoint_steps[name]
                 for name in reanchor_waypoints
             ) and sample["right_grasp"]:
                 from judo_isaaclab.hang_mug import reanchor_branch_transport_contact
@@ -1073,7 +1182,7 @@ def main() -> None:
                 completed_waypoint = next(
                     name
                     for name in reanchor_waypoints
-                    if step == trajectory.waypoint_steps[name]
+                    if semantic_step == trajectory.waypoint_steps[name]
                 )
                 trajectory = reanchor_branch_transport_contact(
                     trajectory,
@@ -1120,7 +1229,19 @@ def main() -> None:
         video = _probe(args.video) if args.render else None
         desired_error = []
         if trajectory is not None:
-            desired_error = [max(np.linalg.norm(np.asarray(left_eef[i])[:3] - trajectory.left_poses[i, :3]), np.linalg.norm(np.asarray(right_eef[i])[:3] - trajectory.right_poses[i, :3])) for i in range(len(left_eef))]
+            desired_error = [
+                max(
+                    np.linalg.norm(np.asarray(actual_left)[:3] - target_left[:3]),
+                    np.linalg.norm(np.asarray(actual_right)[:3] - target_right[:3]),
+                )
+                for actual_left, actual_right, target_left, target_right in zip(
+                    semantic_left_eef,
+                    semantic_right_eef,
+                    desired_left,
+                    desired_right,
+                    strict=True,
+                )
+            ]
         direct_replay = None
         if args.direct_replay_result:
             with open(args.direct_replay_result, encoding="utf-8") as stream:
@@ -1129,6 +1250,14 @@ def main() -> None:
         executed_source_actions_exact = (
             _direct_actions_exact(actions, source["actions"])
             if trajectory is None
+            else None
+        )
+        source_pick_prefix_exact = (
+            _direct_actions_exact(
+                actions[:source_prefix_steps],
+                source["actions"][:source_prefix_steps],
+            )
+            if source_prefix_steps
             else None
         )
         configured_gains_end = env.robot.spec.controller_gains()
@@ -1190,6 +1319,10 @@ def main() -> None:
         }
         if trajectory is None:
             checks["executed_source_actions_exact"] = bool(executed_source_actions_exact)
+        if source_prefix_steps:
+            checks["reused_source_pick_prefix_exact"] = bool(
+                source_pick_prefix_exact
+            )
         if args.require_cpu_physics:
             checks["physics_device_cpu"] = bool(
                 physics_device["passed"] and physics_device["actual"] == "cpu"
@@ -1243,7 +1376,13 @@ def main() -> None:
                 success=True,
                 metadata={
                     "task": "HangMugOnTree-v0",
-                    "controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_skill",
+                    "controller": (
+                        "direct_source_action_replay"
+                        if trajectory is None
+                        else "source_pick_prefix_then_deterministic_semantic_skill"
+                        if source_prefix_steps
+                        else "deterministic_semantic_skill"
+                    ),
                     "candidate_sampling": False,
                     "grasp_assistance": grasp_assistance,
                     "source_dataset_sha256": _sha256(args.source_dataset),
@@ -1256,7 +1395,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": True}},
             "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,

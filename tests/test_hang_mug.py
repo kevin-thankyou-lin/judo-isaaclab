@@ -27,12 +27,15 @@ from run_hangmug_skill_program import (
     _require_proven_control_defaults,
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
+    _require_reusable_pick_boundary,
+    _source_pick_prefix_steps,
     _source_dataset_receipt,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
     _select_grasp_assist_config,
     _support_preserving_target_state,
     _terminal_stability,
+    _trajectory_after,
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
@@ -89,6 +92,46 @@ def test_task2_source_receipt_binds_actions_and_never_processed_actions(tmp_path
     changed = actions.copy()
     changed[1, 3] += 1
     assert not _direct_actions_exact(list(actions), TensorLike(changed))
+
+
+def test_source_pick_prefix_is_exactly_aligned_and_physically_completed():
+    keyframes = {
+        "frames": {
+            "right_pregrasp": {
+                "sample_index": 393,
+                "action_index": 392,
+                "stage1": True,
+                "stage2": False,
+                "left_grasp": True,
+            }
+        }
+    }
+    assert _source_pick_prefix_steps(keyframes) == 393
+    keyframes["frames"]["right_pregrasp"]["sample_index"] = 394
+    with pytest.raises(ValueError, match="not aligned"):
+        _source_pick_prefix_steps(keyframes)
+    keyframes["frames"]["right_pregrasp"]["sample_index"] = 393
+    keyframes["frames"]["right_pregrasp"]["stage1"] = False
+    with pytest.raises(ValueError, match="completed Pick"):
+        _source_pick_prefix_steps(keyframes)
+
+
+def test_reusable_pick_boundary_requires_latch_and_only_left_assist():
+    sample = {
+        "stage1": True,
+        "stage2": False,
+        "grasp_assist_engaged": {"left": True, "right": False},
+    }
+    _require_reusable_pick_boundary(sample)
+    for mutation in (
+        {"stage1": False},
+        {"stage2": True},
+        {"grasp_assist_engaged": {"left": False, "right": False}},
+        {"grasp_assist_engaged": {"left": True, "right": True}},
+    ):
+        changed = {**sample, **mutation}
+        with pytest.raises(RuntimeError, match="completed Pick"):
+            _require_reusable_pick_boundary(changed)
 
 
 def test_task2_target_assets_are_same_index_and_use_source_state_template(tmp_path):
@@ -633,3 +676,20 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     )
     assert nominal.shape == (trajectory.steps, 14)
     assert nominal[settle_end] == pytest.approx(source["actions"].value[5])
+
+    suffix = _trajectory_after(trajectory, "left_lift")
+    assert suffix.steps == trajectory.steps - (
+        trajectory.waypoint_steps["left_lift"] + 1
+    )
+    assert "left_lift" not in suffix.waypoint_steps
+    assert suffix.waypoint_steps["handover_pregrasp"] == 1
+    assert suffix.grippers[0] == pytest.approx([0.0, -0.0475])
+    continued = _sparse_joint_nominal(
+        source,
+        suffix,
+        {"semantic_indices": indices},
+        initial_action_index=7,
+    )
+    assert continued[0] == pytest.approx(
+        0.5 * (source["actions"].value[7] + source["actions"].value[4])
+    )
