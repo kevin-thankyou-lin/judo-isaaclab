@@ -157,7 +157,8 @@ def _repair_command(
         "--mode", "skill",
         "--source-keyframes", str(KEYFRAMES),
         "--direct-replay-result", str(classification_result),
-        "--handover-confirm-steps", "12",
+        "--handover-confirm-steps",
+        str(strategy.get("handover_confirm_steps", 12)),
     ]
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
@@ -213,19 +214,24 @@ def _repair_strategy(index: int) -> dict:
     value = _load(path)
     allowed = {
         "handover_contact_settle_steps",
+        "handover_confirm_steps",
         "handover_target_offset_m",
         "left_release_retreat_m",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     settle = value.get("handover_contact_settle_steps", 30)
+    confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
+    if not isinstance(confirm, int) or not 0 <= confirm <= 60:
+        raise ValueError("handover confirmation must be an integer in [0, 60]")
     if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset must be three finite values within 4 cm")
     strategy = {
         "handover_contact_settle_steps": settle,
+        "handover_confirm_steps": confirm,
         "handover_target_offset_m": offset.tolist(),
     }
     if "left_release_retreat_m" in value:

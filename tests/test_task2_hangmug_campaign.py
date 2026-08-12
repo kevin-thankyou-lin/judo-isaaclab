@@ -171,6 +171,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.parent.mkdir(parents=True)
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
+        "handover_confirm_steps": 20,
         "left_release_retreat_m": 0.03,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
@@ -183,11 +184,15 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     cursor = command.index("--left-release-retreat-m")
     assert float(command[cursor + 1]) == pytest.approx(0.03)
+    assert command[command.index("--handover-confirm-steps") + 1] == "20"
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"left_release_retreat_m": 0.01}))
     with pytest.raises(ValueError, match=r"\[0.02, 0.12\]"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_confirm_steps": 61}))
+    with pytest.raises(ValueError, match="confirmation"):
         campaign._repair_strategy(2)
 
 
