@@ -71,6 +71,7 @@ def test_semantic_waypoint_identity_uses_executed_row_endpoints():
 def test_branch_reanchor_waits_for_confirmation_when_present():
     module = _module()
 
+    assert module._branch_reanchor_waypoints(None) == ()
     assert module._branch_reanchor_waypoints(
         SimpleNamespace(waypoint_steps={"left_release": 10, "handover_confirm": 20})
     )[:2] == ("handover_confirm", "tree_transport")

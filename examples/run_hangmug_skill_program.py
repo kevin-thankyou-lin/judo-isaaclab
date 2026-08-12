@@ -667,6 +667,8 @@ def _semantic_waypoint_name(trajectory, step: int) -> str:
 
 
 def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
+    if trajectory is None:
+        return ()
     handover_boundary = (
         "handover_confirm"
         if "handover_confirm" in trajectory.waypoint_steps
