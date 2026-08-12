@@ -184,6 +184,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
+        "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
         "target_branch_rank": 0,
     }))
@@ -201,6 +202,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
+    assert float(command[command.index("--branch-roll-offset-rad") + 1]) == pytest.approx(
+        0.5235987755982988
+    )
     assert float(command[command.index("--branch-support-fraction") + 1]) == 0.75
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
@@ -261,6 +265,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"insert_clearance_m": 0.02}))
     with pytest.raises(ValueError, match="insert clearance"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"branch_roll_offset_rad": 3.141592653589793}))
+    with pytest.raises(ValueError, match="branch roll offset"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"target_branch_rank": 6}))
     with pytest.raises(ValueError, match="target branch rank"):

@@ -60,6 +60,7 @@ def geometry_conditioned_hang_pose(
     target_branches: Any,
     *,
     branch_support_fraction: float = 0.5,
+    branch_roll_offset_rad: float = 0.0,
     target_branch_rank: int | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
     """Map a verified handle-on-branch relationship through measured parts."""
@@ -70,6 +71,9 @@ def geometry_conditioned_hang_pose(
         or not 0.25 <= branch_support_fraction <= 0.75
     ):
         raise ValueError("branch support fraction must be finite and in [0.25, 0.75]")
+    branch_roll_offset_rad = float(branch_roll_offset_rad)
+    if not np.isfinite(branch_roll_offset_rad) or abs(branch_roll_offset_rad) > np.pi / 2:
+        raise ValueError("branch roll offset must be finite and within 90 degrees")
 
     from .semantic_parts import closest_branch, corresponding_branch
 
@@ -139,6 +143,14 @@ def geometry_conditioned_hang_pose(
         (handle_x, branch_tangent_world, handle_z)
     )
     target_handle_world[3:] = pose_from_matrix(aligned_handle_matrix)[3:]
+    if branch_roll_offset_rad:
+        from .put_marker import quaternion_multiply
+
+        half = 0.5 * branch_roll_offset_rad
+        target_handle_world[3:] = quaternion_multiply(
+            target_handle_world[3:],
+            np.asarray([np.cos(half), 0.0, np.sin(half), 0.0]),
+        )
     # Seat the authored target handle-hole center at a bounded fraction of the
     # detected branch segment after aligning the opening axis.  The midpoint is
     # the default; preserved rollout evidence may propose a deeper data-only

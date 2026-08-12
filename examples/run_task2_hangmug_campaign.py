@@ -170,6 +170,7 @@ def _repair_command(
     for field, option in (
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
+        ("branch_roll_offset_rad", "--branch-roll-offset-rad"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
         ("target_branch_rank", "--target-branch-rank"),
@@ -274,6 +275,7 @@ def _repair_strategy(index: int) -> dict:
         "pick_lift_margin_m",
         "branch_orient_steps",
         "insert_clearance_m",
+        "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
         "target_branch_rank",
@@ -281,8 +283,8 @@ def _repair_strategy(index: int) -> dict:
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
-        "branch_orient_steps", "insert_clearance_m", "branch_support_fraction",
-        "branch_support_seat_down_m", "target_branch_rank",
+        "branch_orient_steps", "insert_clearance_m", "branch_roll_offset_rad",
+        "branch_support_fraction", "branch_support_seat_down_m", "target_branch_rank",
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
@@ -322,6 +324,16 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("insert clearance must be in [0.03, 0.10] m")
         strategy["insert_clearance_m"] = float(clearance)
+    if "branch_roll_offset_rad" in value:
+        roll = value["branch_roll_offset_rad"]
+        if (
+            isinstance(roll, bool)
+            or not isinstance(roll, (int, float))
+            or not np.isfinite(roll)
+            or abs(roll) > np.pi / 2
+        ):
+            raise ValueError("branch roll offset must be within 90 degrees")
+        strategy["branch_roll_offset_rad"] = float(roll)
     if "target_branch_rank" in value:
         rank = value["target_branch_rank"]
         if isinstance(rank, bool) or not isinstance(rank, int) or not 0 <= rank < 6:

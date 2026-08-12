@@ -521,6 +521,24 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     deeper_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), deeper_support)
     assert deeper_handle_world[:3] == pytest.approx(deeper_branch_world[:3])
     assert deeper_handle_world[3:] == pytest.approx(target_handle_world[3:])
+    rolled, _, _ = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (branch(-1.0, 0.3, 0.8), source_branch),
+        _pose(2.0, 3.0, 0.0),
+        (branch(-1.0, 0.4, 0.9), target_branch),
+        branch_roll_offset_rad=np.pi / 6,
+    )
+    rolled_handle = compose_pose(rolled, target_parts.handle_hole_frame)
+    assert rolled_handle[:3] == pytest.approx(target_handle_world[:3])
+    assert quaternion_rotate(rolled_handle[3:], [0.0, 1.0, 0.0]) == pytest.approx(
+        branch_tangent
+    )
+    assert quaternion_rotate(rolled_handle[3:], [1.0, 0.0, 0.0]) != pytest.approx(
+        quaternion_rotate(target_handle_world[3:], [1.0, 0.0, 0.0])
+    )
     alternate, _, alternate_target = geometry_conditioned_hang_pose(
         _pose(1.0, 0.02, 1.03),
         _pose(),
@@ -550,6 +568,12 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             _pose(), _pose(), source_parts, target_parts,
             (source_branch,), _pose(), (target_branch,),
             branch_support_fraction=0.24,
+        )
+    with pytest.raises(ValueError, match="roll offset"):
+        geometry_conditioned_hang_pose(
+            _pose(), _pose(), source_parts, target_parts,
+            (source_branch,), _pose(), (target_branch,),
+            branch_roll_offset_rad=np.pi,
         )
 
 

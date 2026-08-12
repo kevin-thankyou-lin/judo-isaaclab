@@ -85,6 +85,12 @@ def _parser() -> argparse.Namespace:
         help="Bounded root-to-tip fraction used to seat the handle on the branch.",
     )
     parser.add_argument(
+        "--branch-roll-offset-rad",
+        type=float,
+        default=0.0,
+        help="Bounded mug roll about the selected authored branch axis.",
+    )
+    parser.add_argument(
         "--branch-support-seat-down-m",
         type=float,
         default=0.0,
@@ -1258,6 +1264,7 @@ def _build_skill(
         branch_support_fraction=_bounded_branch_support_fraction(
             args.branch_support_fraction
         ),
+        branch_roll_offset_rad=args.branch_roll_offset_rad,
         target_branch_rank=args.target_branch_rank,
     )
     final_mug_pose = _branch_support_seated_pose(
@@ -1457,6 +1464,11 @@ def main() -> None:
     if args.handover_straddle_local_x_m and not args.handover_orient_steps:
         raise ValueError("handover local straddle correction requires orient-first descent")
     _bounded_branch_support_fraction(args.branch_support_fraction)
+    if (
+        not np.isfinite(args.branch_roll_offset_rad)
+        or abs(args.branch_roll_offset_rad) > np.pi / 2
+    ):
+        raise ValueError("--branch-roll-offset-rad must be within 90 degrees")
     _bounded_branch_support_seat_down(args.branch_support_seat_down_m)
     _bounded_left_release_retreat(args.left_release_retreat_m)
     post_release_lift = _bounded_handover_post_release_lift(
@@ -2165,6 +2177,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
+            args.branch_roll_offset_rad
         )
         result["protocol"]["parameters"]["target_branch_rank"] = (
             args.target_branch_rank
