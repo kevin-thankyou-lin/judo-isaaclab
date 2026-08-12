@@ -9,6 +9,19 @@ import subprocess
 import sys
 
 
+def _grasp_assist_errors(result: dict) -> list[str]:
+    checks = result.get("checks", result.get("acceptance_checks", {}))
+    errors = []
+    for name in ("datagen_grasp_assist_configured", "left_grasp_assist_engaged"):
+        if checks.get(name) is not True:
+            errors.append(f"missing grasp-assist evidence: {name}")
+    if result.get("terminal", {}).get("task_success") is True:
+        for arm in ("left", "right"):
+            if checks.get(f"{arm}_grasp_assist_released") is not True:
+                errors.append(f"{arm} grasp assist remained engaged at terminal")
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True)
@@ -46,15 +59,7 @@ def main() -> None:
         grasp_assistance = result.get("protocol", {}).get("grasp_assistance", "")
         if not str(grasp_assistance).startswith("task_config:"):
             errors.append("canonical task-configured grasp assistance was not used")
-        for name in (
-            "datagen_grasp_assist_configured",
-            "left_grasp_assist_engaged",
-        ):
-            if checks.get(name) is not True:
-                errors.append(f"missing grasp-assist evidence: {name}")
-        if result.get("terminal", {}).get("task_success") is True:
-            if checks.get("left_grasp_assist_released") is not True:
-                errors.append("left grasp assist remained engaged after handover")
+        errors.extend(_grasp_assist_errors(result))
         if result.get("protocol", {}).get("candidate_sampling") is not False:
             errors.append("candidate sampling was not disabled")
         if not result.get("protocol", {}).get("physics_device_actual"):
