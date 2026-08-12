@@ -193,6 +193,12 @@ def _repair_command(
                 "--handover-target-local-pitch-rad",
                 str(strategy["handover_target_local_pitch_rad"]),
             ])
+        for field, option in (
+            ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
+            ("handover_orient_steps", "--handover-orient-steps"),
+        ):
+            if field in strategy:
+                arguments.extend([option, str(strategy[field])])
         if "left_release_retreat_m" in strategy:
             arguments.extend([
                 "--left-release-retreat-m",
@@ -252,6 +258,8 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "handover_target_local_pitch_rad",
+        "handover_orient_clearance_m",
+        "handover_orient_steps",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
@@ -309,6 +317,8 @@ def _repair_strategy(index: int) -> dict:
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
+    orient_clearance = value.get("handover_orient_clearance_m", 0.0)
+    orient_steps = value.get("handover_orient_steps", 0)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
@@ -342,6 +352,19 @@ def _repair_strategy(index: int) -> dict:
         or abs(pitch) > np.pi / 4.0
     ):
         raise ValueError("handover target local pitch must be within 45 degrees")
+    if (
+        isinstance(orient_clearance, bool)
+        or not isinstance(orient_clearance, (int, float))
+        or not np.isfinite(orient_clearance)
+        or not 0.0 <= orient_clearance <= 0.12
+        or isinstance(orient_steps, bool)
+        or not isinstance(orient_steps, int)
+        or not 0 <= orient_steps <= 60
+        or bool(orient_clearance) != bool(orient_steps)
+    ):
+        raise ValueError(
+            "handover orient clearance and steps must both be zero or bounded positive values"
+        )
     strategy.update({
         "handover_contact_settle_steps": settle,
         "handover_contact_acquire_steps": acquire,
@@ -352,6 +375,9 @@ def _repair_strategy(index: int) -> dict:
     })
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
+    if orient_steps:
+        strategy["handover_orient_clearance_m"] = float(orient_clearance)
+        strategy["handover_orient_steps"] = orient_steps
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (

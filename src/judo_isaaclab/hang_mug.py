@@ -176,6 +176,8 @@ def reanchor_physical_handover(
     steps = trajectory.waypoint_steps
     start = steps["left_lift"] + 1
     pregrasp_end = steps["handover_pregrasp"]
+    orient_end = steps.get("handover_orient_clear", pregrasp_end)
+    settle_end = steps.get("right_grasp_settle", orient_end)
     grasp_end = steps["right_grasp"]
     release_end = steps["left_release"]
     lift_end = steps.get("handover_receiver_lift", release_end)
@@ -201,9 +203,21 @@ def reanchor_physical_handover(
     right[start : pregrasp_end + 1] = interpolate_poses(
         observed_right_pose, corrected_pregrasp, pregrasp_end - start + 1
     )
-    right[pregrasp_end + 1 : grasp_end + 1] = interpolate_poses(
-        corrected_pregrasp, corrected_grasp, grasp_end - pregrasp_end
-    )
+    if "handover_orient_clear" in steps:
+        corrected_orient = transfer_pose(
+            right[orient_end], nominal_mug_pose, observed_mug_pose
+        )
+        right[pregrasp_end + 1 : orient_end + 1] = interpolate_poses(
+            corrected_pregrasp, corrected_orient, orient_end - pregrasp_end
+        )
+        right[orient_end + 1 : settle_end + 1] = interpolate_poses(
+            corrected_orient, corrected_grasp, settle_end - orient_end
+        )
+        right[settle_end + 1 : grasp_end + 1] = corrected_grasp
+    else:
+        right[pregrasp_end + 1 : grasp_end + 1] = interpolate_poses(
+            corrected_pregrasp, corrected_grasp, grasp_end - pregrasp_end
+        )
     corrected_lift_right = transfer_pose(
         right[lift_end], right[release_end], corrected_grasp
     )
@@ -282,9 +296,21 @@ def reanchor_right_grasp_from_observed_mug(
     nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
     corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    right[start : approach_end + 1] = interpolate_poses(
-        observed_right_pose, corrected_grasp, approach_end - start + 1
-    )
+    if "handover_orient_clear" in steps:
+        orient_end = steps["handover_orient_clear"]
+        corrected_clear = transfer_pose(
+            right[orient_end], right[grasp_end], corrected_grasp
+        )
+        right[start : orient_end + 1] = interpolate_poses(
+            observed_right_pose, corrected_clear, orient_end - start + 1
+        )
+        right[orient_end + 1 : approach_end + 1] = interpolate_poses(
+            corrected_clear, corrected_grasp, approach_end - orient_end
+        )
+    else:
+        right[start : approach_end + 1] = interpolate_poses(
+            observed_right_pose, corrected_grasp, approach_end - start + 1
+        )
     right[approach_end + 1 : grasp_end + 1] = corrected_grasp
     corrected_lift = transfer_pose(
         right[lift_end], right[left_release_end], corrected_grasp
@@ -536,6 +562,8 @@ class HangMugSkillProgram:
         *,
         receiver_lift: Any | None = None,
         receiver_lift_steps: int = 0,
+        right_orient_clear: Any | None = None,
+        orient_steps: int = 0,
         approach_steps: int,
         close_steps: int,
         release_steps: int,
@@ -552,6 +580,19 @@ class HangMugSkillProgram:
             left_pose=left_anchor,
             right_pose=right_pregrasp,
         )
+        if orient_steps < 0:
+            raise ValueError("orient_steps must be nonnegative")
+        if bool(orient_steps) != (right_orient_clear is not None):
+            raise ValueError("clear orientation target and steps must be selected together")
+        if orient_steps and not contact_settle_steps:
+            raise ValueError("clear orientation requires an open descent segment")
+        if orient_steps:
+            self._append(
+                "handover_orient_clear",
+                "physical_handover",
+                orient_steps,
+                right_pose=right_orient_clear,
+            )
         if contact_settle_steps < 0:
             raise ValueError("contact_settle_steps must be nonnegative")
         if contact_settle_steps:

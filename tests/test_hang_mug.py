@@ -699,6 +699,88 @@ def test_handover_local_pitch_rotates_only_receiver_orientation():
         _handover_target_with_local_pitch(pose, np.pi / 4.0 + 1.0e-6)
 
 
+def test_pitched_receiver_orients_clear_then_descends_open_before_close():
+    clear = _pose(0.4, -0.1, 1.0)
+    oriented_clear = _handover_target_with_local_pitch(clear, np.pi / 4.0)
+    grasp = oriented_clear.copy()
+    grasp[2] -= 0.08
+    program = HangMugSkillProgram(_pose(), _pose(0.0, -0.5, 0.9))
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(0.4, 0.1, 0.9),
+        clear,
+        grasp,
+        _pose(0.4, 0.2, 0.9),
+        right_orient_clear=oriented_clear,
+        orient_steps=3,
+        approach_steps=4,
+        contact_settle_steps=4,
+        close_steps=2,
+        release_steps=2,
+    )
+    program.handle_to_branch_insert(
+        grasp, grasp, grasp, transport_steps=1, approach_steps=1, insert_steps=1
+    )
+    trajectory = program.build()
+    pre = trajectory.waypoint_steps["handover_pregrasp"]
+    orient = trajectory.waypoint_steps["handover_orient_clear"]
+    descend = trajectory.waypoint_steps["right_grasp_settle"]
+    close = trajectory.waypoint_steps["right_grasp"]
+
+    np.testing.assert_allclose(
+        trajectory.right_poses[pre + 1 : orient + 1, :3],
+        np.repeat(clear[None, :3], orient - pre, axis=0),
+    )
+    assert np.all(np.diff(trajectory.right_poses[orient + 1 : descend + 1, 2]) < 0)
+    np.testing.assert_allclose(
+        trajectory.right_poses[orient + 1 : descend + 1, 3:],
+        np.repeat(oriented_clear[None, 3:], descend - orient, axis=0),
+    )
+    np.testing.assert_allclose(
+        trajectory.grippers[: descend + 1, 1], -0.0475
+    )
+    assert trajectory.grippers[close, 1] == pytest.approx(0.0)
+
+    nominal_mug = _pose(0.5, 0.0, 0.8)
+    observed_mug = _pose(0.52, 0.0, 0.8)
+    adjusted = reanchor_physical_handover(
+        trajectory,
+        nominal_mug,
+        observed_mug,
+        _pose(0.4, 0.1, 0.9),
+        _pose(0.2, -0.2, 1.0),
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[orient, :3] - adjusted.right_poses[descend, :3],
+        [0.0, 0.0, 0.08],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[orient, 3:], adjusted.right_poses[descend, 3:]
+    )
+    contact = compose_pose(inverse_pose(nominal_mug), grasp)
+    readjusted = reanchor_right_grasp_from_observed_mug(
+        adjusted, contact, _pose(0.53, 0.0, 0.8), adjusted.right_poses[pre]
+    )
+    np.testing.assert_allclose(
+        readjusted.right_poses[orient, :3]
+        - readjusted.right_poses[descend, :3],
+        [0.0, 0.0, 0.08],
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        readjusted.right_poses[orient, 3:], readjusted.right_poses[descend, 3:]
+    )
+
+    with pytest.raises(ValueError, match="open descent"):
+        HangMugSkillProgram(_pose(), _pose()).physical_handover(
+            _pose(), clear, grasp, _pose(), right_orient_clear=oriented_clear,
+            orient_steps=2, approach_steps=2, close_steps=2, release_steps=2,
+        )
+
+
 def test_hangmug_program_is_one_continuous_named_rollout():
     program = HangMugSkillProgram(_pose(), _pose(0.0, -1.0, 0.0))
     left_observer = _pose(0.4, 0.3, 0.4)
