@@ -1111,7 +1111,8 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     mug = _pose(0.5, 0.0, 0.8)
     nominal_contact = _pose(-0.1, -0.02, 0.1)
     desired_right = compose_pose(mug, nominal_contact)
-    translation = np.asarray([0.012, -0.018, 0.002])
+    # Preserved Pair 6 Attempt 12 residual: 30.212 mm, safely below 35 mm.
+    translation = np.asarray([0.0285902692, 0.0069545818, -0.0068566126])
     observed_right = desired_right.copy()
     observed_right[:3] += translation
     observed_left = _pose(0.4, 0.1, 0.8)
@@ -1137,6 +1138,7 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     assert adjusted.grippers[release_end, 0] < 0.0
     assert receipt["world_translation_m"] == pytest.approx(translation)
     assert receipt["translation_norm_m"] == pytest.approx(np.linalg.norm(translation))
+    assert receipt["maximum_translation_m"] == pytest.approx(0.035)
     assert receipt["rotation_error_rad"] == pytest.approx(0.0)
     assert receipt["orientation_unchanged"] is True
 
@@ -1177,7 +1179,7 @@ def test_contact_acquire_rejects_unbounded_live_residual():
     )
     with pytest.raises(RuntimeError, match="exceeds"):
         reanchor_handover_contact_acquire(
-            program.build(), _pose(), _pose(), _pose(), _pose(0.031)
+            program.build(), _pose(), _pose(), _pose(), _pose(0.036)
         )
 
 

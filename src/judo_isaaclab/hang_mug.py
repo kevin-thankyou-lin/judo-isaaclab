@@ -311,7 +311,7 @@ def reanchor_handover_contact_acquire(
     observed_left_pose: Any,
     observed_right_pose: Any,
     *,
-    maximum_translation_m: float = 0.03,
+    maximum_translation_m: float = 0.035,
     maximum_rotation_error_rad: float = 0.12,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Move the left-held mug into a closed, stationary receiver.
@@ -330,8 +330,8 @@ def reanchor_handover_contact_acquire(
     if missing:
         raise ValueError(f"handover trajectory is missing waypoints: {missing}")
     limit = float(maximum_translation_m)
-    if not np.isfinite(limit) or not 0.0 < limit <= 0.03:
-        raise ValueError("maximum contact-acquire translation must be in (0, 0.03] m")
+    if not np.isfinite(limit) or not 0.0 < limit <= 0.035:
+        raise ValueError("maximum contact-acquire translation must be in (0, 0.035] m")
     rotation_limit = float(maximum_rotation_error_rad)
     if not np.isfinite(rotation_limit) or not 0.0 < rotation_limit <= 0.2:
         raise ValueError("maximum contact-acquire rotation error must be in (0, 0.2] rad")
