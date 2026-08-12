@@ -383,6 +383,7 @@ class HangMugSkillProgram:
         right_grasp: Any,
         left_release: Any,
         *,
+        right_release: Any | None = None,
         approach_steps: int,
         close_steps: int,
         release_steps: int,
@@ -419,6 +420,7 @@ class HangMugSkillProgram:
             "physical_handover",
             release_steps,
             left_pose=left_release,
+            right_pose=right_release,
             left_gripper=opened,
         )
         if confirm_steps < 0:

@@ -175,6 +175,11 @@ def _repair_command(
                 "--left-release-retreat-m",
                 str(strategy["left_release_retreat_m"]),
             ])
+        if "handover_release_lift_m" in strategy:
+            arguments.extend([
+                "--handover-release-lift-m",
+                str(strategy["handover_release_lift_m"]),
+            ])
     elif selection["actual_repair_boundary"] == "pick":
         if strategy:
             raise ValueError("pair repair strategy is valid only from reset")
@@ -215,6 +220,7 @@ def _repair_strategy(index: int) -> dict:
     allowed = {
         "handover_contact_settle_steps",
         "handover_confirm_steps",
+        "handover_release_lift_m",
         "handover_target_offset_m",
         "left_release_retreat_m",
     }
@@ -227,11 +233,20 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
+    release_lift = value.get("handover_release_lift_m", 0.0)
+    if (
+        isinstance(release_lift, bool)
+        or not isinstance(release_lift, (int, float))
+        or not np.isfinite(release_lift)
+        or not 0.0 <= release_lift <= 0.08
+    ):
+        raise ValueError("handover release lift must be in [0, 0.08] m")
     if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset must be three finite values within 4 cm")
     strategy = {
         "handover_contact_settle_steps": settle,
         "handover_confirm_steps": confirm,
+        "handover_release_lift_m": float(release_lift),
         "handover_target_offset_m": offset.tolist(),
     }
     if "left_release_retreat_m" in value:

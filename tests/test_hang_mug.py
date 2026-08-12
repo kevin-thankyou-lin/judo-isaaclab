@@ -716,8 +716,10 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
         approach_steps=1, close_steps=1, lift_steps=1,
     )
     grasp = _pose(0.3, -0.2, 1)
+    release_hold = _pose(0.3, -0.2, 1.055)
     program.physical_handover(
         _pose(z=1), _pose(0.3, -0.1, 1), grasp, _pose(0.2, z=1),
+        right_release=release_hold,
         approach_steps=2, contact_settle_steps=3, close_steps=2,
         release_steps=2, confirm_steps=3,
     )
@@ -732,6 +734,9 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     )
     assert trajectory.grippers[settle_end, 1] == pytest.approx(-0.0475)
     assert trajectory.grippers[grasp_end, 1] == pytest.approx(0.0)
+    release_rows = trajectory.right_poses[grasp_end + 1 : release_end + 1]
+    assert np.all(np.diff(release_rows[:, 2]) > 0)
+    assert release_rows[-1] == pytest.approx(release_hold)
     assert confirm_end - release_end == 3
     assert trajectory.left_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
         np.repeat(trajectory.left_poses[release_end][None], 3, axis=0)
