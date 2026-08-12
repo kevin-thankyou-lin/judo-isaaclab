@@ -1234,7 +1234,7 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     assert adjusted.grippers[release_end, 0] < 0.0
     assert receipt["world_translation_m"] == pytest.approx(translation)
     assert receipt["translation_norm_m"] == pytest.approx(np.linalg.norm(translation))
-    assert receipt["maximum_translation_m"] == pytest.approx(0.035)
+    assert receipt["maximum_translation_m"] == pytest.approx(0.04)
     assert receipt["rotation_error_rad"] == pytest.approx(0.0)
     assert receipt["orientation_unchanged"] is True
 
@@ -1273,9 +1273,13 @@ def test_contact_acquire_rejects_unbounded_live_residual():
         contact_acquire_steps=2,
         release_steps=1,
     )
+    _, receipt = reanchor_handover_contact_acquire(
+        program.build(), _pose(), _pose(), _pose(), _pose(0.035514)
+    )
+    assert receipt["translation_norm_m"] == pytest.approx(0.035514)
     with pytest.raises(RuntimeError, match="exceeds"):
         reanchor_handover_contact_acquire(
-            program.build(), _pose(), _pose(), _pose(), _pose(0.036)
+            program.build(), _pose(), _pose(), _pose(), _pose(0.040001)
         )
 
 
