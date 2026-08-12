@@ -150,6 +150,11 @@ def _parser() -> argparse.Namespace:
         help="Rows used to orient the held mug at the clear transport pose.",
     )
     parser.add_argument(
+        "--branch-approach-insert-nominal",
+        action="store_true",
+        help="Transition to the pinned inserted-held joint nominal during branch approach.",
+    )
+    parser.add_argument(
         "--handover-confirm-steps",
         type=int,
         default=0,
@@ -1361,7 +1366,12 @@ def _build_skill(
 
 
 def _sparse_joint_nominal(
-    source, trajectory, keyframes, *, initial_action_index: int = 0
+    source,
+    trajectory,
+    keyframes,
+    *,
+    initial_action_index: int = 0,
+    branch_approach_insert_nominal: bool = False,
 ):
     actions = np.asarray(source["actions"].detach().cpu(), dtype=np.float64)
     indices = keyframes["semantic_indices"]
@@ -1379,7 +1389,11 @@ def _sparse_joint_nominal(
         "handover_confirm": indices["handover"],
         "tree_transport": indices["tree_approach"],
         "branch_orient_clear": indices["tree_approach"],
-        "branch_approach": indices["tree_approach"],
+        "branch_approach": indices[
+            "inserted_held"
+            if branch_approach_insert_nominal
+            else "tree_approach"
+        ],
         "branch_insert": indices["inserted_held"],
         "branch_unload": indices["inserted_held"],
         "right_release": indices["release"],
@@ -1608,7 +1622,12 @@ def main() -> None:
         if source_prefix_steps > len(source["actions"]):
             raise ValueError("source Pick prefix exceeds the source action dataset")
         joint_nominal = (
-            _sparse_joint_nominal(source, trajectory, keyframes)
+            _sparse_joint_nominal(
+                source,
+                trajectory,
+                keyframes,
+                branch_approach_insert_nominal=args.branch_approach_insert_nominal,
+            )
             if trajectory is not None and not source_prefix_steps
             else None
         )
@@ -1678,6 +1697,9 @@ def main() -> None:
                         trajectory,
                         keyframes,
                         initial_action_index=source_prefix_steps - 1,
+                        branch_approach_insert_nominal=(
+                            args.branch_approach_insert_nominal
+                        ),
                     )
                 semantic_step = step - source_prefix_steps
                 if (
@@ -2165,6 +2187,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["branch_approach_insert_nominal"] = bool(
+            args.branch_approach_insert_nominal
         )
         result["protocol"]["parameters"]["target_branch_rank"] = (
             args.target_branch_rank

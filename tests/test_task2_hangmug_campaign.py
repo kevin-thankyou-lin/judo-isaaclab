@@ -183,6 +183,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_orient_steps": 30,
         "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
+        "branch_approach_insert_nominal": True,
         "target_branch_rank": 0,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
@@ -198,6 +199,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
+    assert "--branch-approach-insert-nominal" in command
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
@@ -254,6 +256,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"branch_orient_steps": 91}))
     with pytest.raises(ValueError, match="branch orient steps"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"branch_approach_insert_nominal": False}))
+    with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"target_branch_rank": 6}))
     with pytest.raises(ValueError, match="target branch rank"):

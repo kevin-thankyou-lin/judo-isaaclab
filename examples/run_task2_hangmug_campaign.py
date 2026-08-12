@@ -167,6 +167,8 @@ def _repair_command(
         ])
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
+    if strategy.get("branch_approach_insert_nominal"):
+        arguments.append("--branch-approach-insert-nominal")
     for field, option in (
         ("branch_orient_steps", "--branch-orient-steps"),
         ("branch_support_fraction", "--branch-support-fraction"),
@@ -272,6 +274,7 @@ def _repair_strategy(index: int) -> dict:
         "left_release_retreat_m",
         "pick_lift_margin_m",
         "branch_orient_steps",
+        "branch_approach_insert_nominal",
         "branch_support_fraction",
         "branch_support_seat_down_m",
         "target_branch_rank",
@@ -279,8 +282,8 @@ def _repair_strategy(index: int) -> dict:
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
-        "branch_orient_steps", "branch_support_fraction", "branch_support_seat_down_m",
-        "target_branch_rank",
+        "branch_orient_steps", "branch_approach_insert_nominal",
+        "branch_support_fraction", "branch_support_seat_down_m", "target_branch_rank",
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
@@ -310,6 +313,13 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch orient steps must be in [0, 90]")
         strategy["branch_orient_steps"] = branch_orient_steps
+    if "branch_approach_insert_nominal" in value:
+        enabled = value["branch_approach_insert_nominal"]
+        if enabled is not True:
+            raise ValueError(
+                "branch approach inserted nominal must be true when selected"
+            )
+        strategy["branch_approach_insert_nominal"] = True
     if "target_branch_rank" in value:
         rank = value["target_branch_rank"]
         if isinstance(rank, bool) or not isinstance(rank, int) or not 0 <= rank < 6:
