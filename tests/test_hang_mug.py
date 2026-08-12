@@ -663,6 +663,10 @@ def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
     assert not _requires_observed_handover_reanchor(
         SimpleNamespace(body_size=np.asarray([0.088, 0.090, 0.077]))
     )
+    assert _requires_observed_handover_reanchor(
+        SimpleNamespace(body_size=np.asarray([0.088, 0.090, 0.077])),
+        handle_frame_transfer=True,
+    )
     with pytest.raises(ValueError, match="three positive"):
         _requires_observed_handover_reanchor(
             SimpleNamespace(body_size=np.asarray([0.08, -0.01, 0.10]))

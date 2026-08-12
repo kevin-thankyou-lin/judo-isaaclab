@@ -643,12 +643,14 @@ def _schema_aware_success_acceptance(
     return acceptance
 
 
-def _requires_observed_handover_reanchor(mug_parts) -> bool:
+def _requires_observed_handover_reanchor(
+    mug_parts, *, handle_frame_transfer: bool = False
+) -> bool:
     """Use live handover feedback for mugs taller than both lateral spans."""
     size = np.asarray(mug_parts.body_size, dtype=np.float64)
     if size.shape != (3,) or np.any(size <= 0.0):
         raise ValueError("mug body size must contain three positive values")
-    return bool(size[2] > max(size[0], size[1]))
+    return bool(handle_frame_transfer or size[2] > max(size[0], size[1]))
 
 
 def _bounded_handover_offset(value) -> np.ndarray:
@@ -1457,7 +1459,10 @@ def main() -> None:
             trajectory is not None
             and (
                 source_prefix_steps
-                or _requires_observed_handover_reanchor(target_parts)
+                or _requires_observed_handover_reanchor(
+                    target_parts,
+                    handle_frame_transfer=args.handover_handle_frame_transfer,
+                )
             )
         )
         total_steps = (
