@@ -1,0 +1,229 @@
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
+
+import run_task2_hangmug_campaign as campaign
+
+
+def _digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def test_same_index_assets_and_proven_command_are_pinned(tmp_path, monkeypatch):
+    objects = tmp_path / "objects"
+    for kind, name in (
+        ("MugHangable", "mug_teacup_000002"),
+        ("ThreeLayerMugTree", "mug_tree_000002"),
+    ):
+        (objects / kind / name).mkdir(parents=True)
+    monkeypatch.setattr(campaign, "OBJECTS", objects)
+    monkeypatch.setattr(campaign, "_steady_state_seconds", lambda: 211)
+    attempt = Path("results/task2/pairs/000002/attempt_001_direct_source_classification")
+    command = campaign._classification_command(2, attempt)
+    assert str(objects / "MugHangable/mug_teacup_000002") in command
+    assert str(objects / "ThreeLayerMugTree/mug_tree_000002") in command
+    assert command.count(str(campaign.SOURCE)) == 1
+    assert "processed_actions" not in command
+    assert "--classification-run" in command
+    assert command[command.index("--mode") + 1] == "replay"
+    assert command[command.index("--device") + 1] == "cpu"
+    assert command[command.index("--expected-controller-gains-sha256") + 1] == campaign.CONTROLLER_SHA256
+    for name in campaign.PROVEN_CONTROL_DEFAULTS:
+        assert f"--{name.replace('_', '-')}" not in command
+
+
+def test_missing_or_cross_index_asset_fails_before_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "OBJECTS", tmp_path)
+    (tmp_path / "MugHangable/mug_teacup_000003").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError, match="000003"):
+        campaign._asset_pair(3)
+
+
+def test_atomic_immutable_receipt_never_overwrites(tmp_path):
+    path = tmp_path / "manifest.json"
+    campaign._atomic_json(path, {"value": 1}, immutable=True)
+    with pytest.raises(FileExistsError):
+        campaign._atomic_json(path, {"value": 2}, immutable=True)
+    assert json.loads(path.read_text()) == {"value": 1}
+
+
+def test_resume_skips_only_hash_valid_contiguous_acceptances(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    source = results / "source"
+    source.mkdir(parents=True)
+    artifacts = {}
+    for name in ("result", "video", "demonstration"):
+        path = source / name
+        path.write_text(name)
+        artifacts[name] = {"path": str(path), "sha256": _digest(path)}
+    (source / "accepted_source.json").write_text(json.dumps({"artifacts": artifacts}))
+    pair = results / "pairs/000001/attempt_004"
+    pair.mkdir(parents=True)
+    files = {
+        "result_sha256": pair / "result.json",
+        "video_sha256": pair / "skill.mp4",
+        "demonstration_sha256": pair / "demo.hdf5",
+        "independent_audit_sha256": pair / "independent_audit.json",
+    }
+    for path in files.values():
+        path.write_text(path.name)
+    ledger = {"pairs": {
+        "000000": {"status": "accepted", **{name: artifacts[name.removesuffix("_sha256")]["sha256"] for name in ("result_sha256", "video_sha256", "demonstration_sha256")}},
+        "000001": {"status": "accepted", "attempt": "attempt_004", **{name: _digest(path) for name, path in files.items()}},
+    }}
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    assert campaign._first_missing(ledger) == 2
+    ledger["pairs"]["000001"]["video_sha256"] = "0" * 64
+    with pytest.raises(RuntimeError, match="ledger/artifact"):
+        campaign._first_missing(ledger)
+
+
+def test_resume_rejects_accepted_gap(monkeypatch):
+    monkeypatch.setattr(campaign, "_validate_accepted", lambda *_: None)
+    ledger = {"pairs": {
+        "000000": {"status": "accepted"},
+        "000002": {"status": "accepted"},
+    }}
+    with pytest.raises(RuntimeError, match="past missing Pair 000001"):
+        campaign._first_missing(ledger)
+
+
+def test_atomic_accept_requires_unchanged_ledger_and_writes_only_acceptance(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    ledger_path = results / "ledger.json"
+    ledger_path.write_text(json.dumps({"pairs": {"000000": {"status": "accepted"}}}))
+    attempt = results / "pairs/000001/attempt_001"
+    attempt.mkdir(parents=True)
+    (attempt / "independent_audit.json").write_text("audit")
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    before = _digest(ledger_path)
+    audit = {"artifact_hashes": {
+        "result_sha256": "r", "video_sha256": "v", "demo_hdf5_sha256": "d"
+    }}
+    after = campaign._accept(1, attempt, audit, before)
+    assert after == _digest(ledger_path)
+    assert json.loads(ledger_path.read_text())["pairs"]["000001"] == {
+        "status": "accepted",
+        "mug": "MugHangable/mug_teacup_000001",
+        "mug_tree": "ThreeLayerMugTree/mug_tree_000001",
+        "attempt": "attempt_001",
+        "result_sha256": "r",
+        "video_sha256": "v",
+        "demonstration_sha256": "d",
+        "independent_audit_sha256": _digest(attempt / "independent_audit.json"),
+    }
+    with pytest.raises(RuntimeError, match="ledger changed"):
+        campaign._accept(2, attempt, audit, before)
+
+
+def test_first_true_is_fail_closed():
+    assert campaign._first_true([False, True, True]) == 1
+    assert campaign._first_true([False, False]) is None
+
+
+def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch):
+    proc = tmp_path / "123"
+    proc.mkdir()
+    (proc / "comm").write_text("python\n")
+    (proc / "cmdline").write_bytes(b"python\0examples/run_hangmug_skill_program.py\0")
+    monkeypatch.setattr(campaign.Path, "glob", lambda _self, _pattern: [proc])
+    assert campaign._worker_pids() == [123]
+    (proc / "cmdline").write_bytes(b"codex\0prompt mentions run_hangmug_skill_program.py\0")
+    assert campaign._worker_pids() == []
+
+
+def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch):
+    objects = tmp_path / "objects"
+    for kind, name in (
+        ("MugHangable", "mug_teacup_000002"),
+        ("ThreeLayerMugTree", "mug_tree_000002"),
+    ):
+        (objects / kind / name).mkdir(parents=True)
+    monkeypatch.setattr(campaign, "OBJECTS", objects)
+    monkeypatch.setattr(campaign, "_steady_state_seconds", lambda: 211)
+    command = campaign._repair_command(
+        2, tmp_path / "repair", tmp_path / "classification/result.json", "pick"
+    )
+    assert "--direct-replay-result" in command
+    assert "--reuse-source-pick-prefix" not in command
+    handover = campaign._repair_command(
+        2, tmp_path / "repair2", tmp_path / "classification/result.json", "handover"
+    )
+    assert "--reuse-source-pick-prefix" in handover
+
+
+def _run_one_fixture(tmp_path, monkeypatch, classification):
+    results = tmp_path / "task2"
+    results.mkdir()
+    (results / "ledger.json").write_text(json.dumps({"pairs": {}}))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(campaign, "_require_zero_workers", lambda: None)
+    monkeypatch.setattr(campaign, "_reusable_classification", lambda _index: None)
+    monkeypatch.setattr(
+        campaign, "_manifest",
+        lambda *_args, method, classification=None: {
+            "method": method, "classification": classification
+        },
+    )
+    events = []
+    monkeypatch.setattr(
+        campaign, "_classification_command", lambda *_: ["classification"]
+    )
+    monkeypatch.setattr(
+        campaign, "_repair_command",
+        lambda *_args: events.append("repair_command") or ["repair"],
+    )
+    def execute(_index, attempt, command):
+        events.append(command[0])
+        (attempt / "result.json").write_text("{}")
+    monkeypatch.setattr(campaign, "_execute", execute)
+    monkeypatch.setattr(
+        campaign, "classification_audit",
+        lambda *_: events.append("classification_audit") or classification,
+    )
+    monkeypatch.setattr(
+        campaign, "_accept_attempt",
+        lambda *_: events.append("accepted"),
+    )
+    campaign.run_one(2)
+    return events
+
+
+def test_classification_precedes_repair(tmp_path, monkeypatch):
+    result = {
+        "status": "repair_required", "first_failed_stage": "handover",
+        "last_completed_stage": "pick", "completed_stages": ["pick"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+
+
+def test_direct_success_skips_repair(tmp_path, monkeypatch):
+    result = {
+        "status": "direct_success", "first_failed_stage": None,
+        "last_completed_stage": "release_and_hang",
+        "completed_stages": ["pick", "handover", "alignment", "insertion_and_support", "release_and_hang"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+    assert events == ["classification", "classification_audit", "accepted"]
+
+
+def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
+    seen = []
+    def fail(index):
+        seen.append(index)
+        raise RuntimeError("not accepted")
+    monkeypatch.setattr(campaign, "run_one", fail)
+    with pytest.raises(RuntimeError, match="not accepted"):
+        campaign._run_serial([2, 3, 4])
+    assert seen == [2]

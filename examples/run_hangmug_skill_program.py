@@ -251,6 +251,44 @@ def _terminal_stability(samples: list[dict[str, object]], steps: int = 30) -> di
     return {"required_steps": steps, "observed_steps": len(window), "passed": bool(passed)}
 
 
+def _semantic_stage_receipt(statuses) -> dict[str, object]:
+    """Summarize completed adapter stages without treating transient truth as completion."""
+    from dc_study.datagen.hang_mug_status import ORDERED_STAGES
+
+    first_steps = {}
+    for stage in ORDERED_STAGES:
+        first_steps[stage] = next(
+            (step for step, status in enumerate(statuses) if status[stage]), None
+        )
+    completed = []
+    for stage in ORDERED_STAGES:
+        if first_steps[stage] is None:
+            break
+        completed.append(stage)
+    first_failed = None if len(completed) == len(ORDERED_STAGES) else ORDERED_STAGES[len(completed)]
+    final = statuses[-1] if statuses else None
+    diagnostics = {} if final is None else final["diagnostics"]
+    return {
+        "ordered_stages": list(ORDERED_STAGES),
+        "first_completed_steps": first_steps,
+        "completed_stages": completed,
+        "last_completed_stage": completed[-1] if completed else None,
+        "first_failed_stage": first_failed,
+        "terminal_checks": {
+            name: bool(final and final[name])
+            for name in ("task_success", "released", "stable", "contact_policy")
+        },
+        "contact_policy": {
+            "selected_branch": diagnostics.get("selected_branch"),
+            "failure_reason": diagnostics.get("failure_reason"),
+            "failure_step": diagnostics.get("failure_step"),
+            "deepest_overlap_m": diagnostics.get("deepest_overlap_m"),
+            "consecutive_overlap_steps": diagnostics.get("consecutive_overlap_steps"),
+            "fallen": diagnostics.get("fallen"),
+        },
+    }
+
+
 def _direct_actions_exact(executed: list[np.ndarray], source_actions) -> bool:
     return np.array_equal(
         np.asarray(executed, dtype=np.float32),
@@ -1037,6 +1075,12 @@ def main() -> None:
         reset_counts["initial_state_restores"] += 1
         env.sim.forward()
         env.reset_success_check(env_ids)
+        from dc_study.datagen.hang_mug_status import (
+            hang_mug_status,
+            reset_hang_mug_status,
+        )
+
+        reset_hang_mug_status(env)
         source_mug = _geometry(source_assets["mug"], source["mug_pose"][0])
         target_mug = _geometry(target_assets["mug"], target["mug_pose"][0])
         source_tree = _geometry(source_assets["mug_tree"], source["tree_pose"][0])
@@ -1094,6 +1138,7 @@ def main() -> None:
         demo_recorder = DemonstrationRecorder()
         demo_recorder.start(env.scene.get_state(is_relative=False))
         samples = [_sample(env, -1, "reset")]
+        semantic_statuses = []
         for name, pose_key in (("mug", "mug_pose"), ("mug_tree", "tree_pose")):
             initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
@@ -1163,6 +1208,7 @@ def main() -> None:
             if semantic_step is not None:
                 _update_authored_assist_releases(env, trajectory, semantic_step)
             sample = _sample(env, step, stage, info)
+            semantic_statuses.append(hang_mug_status(env, info))
             demo_recorder.append(
                 action,
                 env.scene.get_state(is_relative=False),
@@ -1447,6 +1493,7 @@ def main() -> None:
             "controller_gains": controller_receipt,
             "reset_counts": reset_counts,
             "terminal_stability": terminal_stability,
+            "semantic_stage_receipt": _semantic_stage_receipt(semantic_statuses),
             "stage_boundary": handover_boundary,
             "first_failed_semantic_stage": (
                 "handover"

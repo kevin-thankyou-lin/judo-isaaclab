@@ -33,6 +33,7 @@ from run_hangmug_skill_program import (
     _source_dataset_receipt,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
+    _semantic_stage_receipt,
     _select_grasp_assist_config,
     _support_preserving_target_state,
     _terminal_stability,
@@ -40,6 +41,34 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_semantic_stage_receipt_stops_at_first_incomplete_completed_stage(monkeypatch):
+    monkeypatch.setattr(
+        "dc_study.datagen.hang_mug_status.ORDERED_STAGES",
+        ("pick", "handover", "alignment", "insertion_and_support", "release_and_hang"),
+    )
+    diagnostics = {
+        "selected_branch": None,
+        "failure_reason": None,
+        "failure_step": None,
+        "deepest_overlap_m": 0.0,
+        "consecutive_overlap_steps": 0,
+        "fallen": False,
+    }
+    base = {
+        "pick": False, "handover": False, "alignment": False,
+        "insertion_and_support": False, "release_and_hang": False,
+        "task_success": False, "released": False, "stable": False,
+        "contact_policy": True, "diagnostics": diagnostics,
+    }
+    statuses = [dict(base), {**base, "pick": True}, {**base, "pick": True, "alignment": True}]
+    receipt = _semantic_stage_receipt(statuses)
+    assert receipt["completed_stages"] == ["pick"]
+    assert receipt["last_completed_stage"] == "pick"
+    assert receipt["first_failed_stage"] == "handover"
+    assert receipt["first_completed_steps"]["pick"] == 1
+    assert receipt["first_completed_steps"]["alignment"] == 2
 
 
 def _pose(x=0.0, y=0.0, z=0.0):
