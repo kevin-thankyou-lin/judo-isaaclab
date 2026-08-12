@@ -21,6 +21,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
@@ -52,6 +53,19 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_branch_approach_height_can_preserve_middle_branch_axis():
+    final = _pose(0.5, -0.2, 0.9)
+    branch = _pose()
+
+    on_axis = _branch_approach_mug_pose(final, branch, 0.04, 0.0)
+    raised = _branch_approach_mug_pose(final, branch, 0.04, 0.03)
+
+    assert on_axis[:3] == pytest.approx([0.54, -0.2, 0.9])
+    assert raised[:3] == pytest.approx([0.54, -0.2, 0.93])
+    with pytest.raises(ValueError, match="branch approach height"):
+        _branch_approach_mug_pose(final, branch, 0.04, 0.081)
 
 
 def test_handover_contact_transfer_preserves_authored_handle_frame_relation():

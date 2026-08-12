@@ -178,6 +178,7 @@ def _repair_command(
     for field, option in (
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
+        ("branch_approach_height_m", "--branch-approach-height-m"),
         ("branch_roll_offset_rad", "--branch-roll-offset-rad"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
@@ -283,6 +284,7 @@ def _repair_strategy(index: int) -> dict:
         "pick_lift_margin_m",
         "branch_orient_steps",
         "insert_clearance_m",
+        "branch_approach_height_m",
         "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
@@ -290,7 +292,8 @@ def _repair_strategy(index: int) -> dict:
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
-        "branch_orient_steps", "insert_clearance_m", "branch_roll_offset_rad",
+        "branch_orient_steps", "insert_clearance_m", "branch_approach_height_m",
+        "branch_roll_offset_rad",
         "branch_support_fraction", "branch_support_seat_down_m",
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
@@ -331,6 +334,16 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("insert clearance must be in [0.03, 0.10] m")
         strategy["insert_clearance_m"] = float(clearance)
+    if "branch_approach_height_m" in value:
+        height = value["branch_approach_height_m"]
+        if (
+            isinstance(height, bool)
+            or not isinstance(height, (int, float))
+            or not np.isfinite(height)
+            or not 0.0 <= height <= 0.08
+        ):
+            raise ValueError("branch approach height must be in [0, 0.08] m")
+        strategy["branch_approach_height_m"] = float(height)
     if "branch_roll_offset_rad" in value:
         roll = value["branch_roll_offset_rad"]
         if (
