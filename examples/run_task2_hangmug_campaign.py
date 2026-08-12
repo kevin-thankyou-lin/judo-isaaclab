@@ -168,6 +168,7 @@ def _repair_command(
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
     for field, option in (
+        ("branch_orient_steps", "--branch-orient-steps"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
     ):
@@ -269,13 +270,14 @@ def _repair_strategy(index: int) -> dict:
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
+        "branch_orient_steps",
         "branch_support_fraction",
         "branch_support_seat_down_m",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
-        "branch_support_fraction", "branch_support_seat_down_m"
+        "branch_orient_steps", "branch_support_fraction", "branch_support_seat_down_m"
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
@@ -296,6 +298,15 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("pick lift margin must be in [0, 0.03] m")
         strategy["pick_lift_margin_m"] = float(margin)
+    if "branch_orient_steps" in value:
+        branch_orient_steps = value["branch_orient_steps"]
+        if (
+            isinstance(branch_orient_steps, bool)
+            or not isinstance(branch_orient_steps, int)
+            or not 0 <= branch_orient_steps <= 90
+        ):
+            raise ValueError("branch orient steps must be in [0, 90]")
+        strategy["branch_orient_steps"] = branch_orient_steps
     if "branch_support_fraction" in value:
         fraction = value["branch_support_fraction"]
         if (

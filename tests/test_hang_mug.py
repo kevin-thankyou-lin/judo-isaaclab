@@ -21,6 +21,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _branch_reanchor_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
@@ -857,6 +858,66 @@ def test_hangmug_program_is_one_continuous_named_rollout():
     assert trajectory.left_poses[transport_end:] == pytest.approx(
         np.broadcast_to(left_observer, trajectory.left_poses[transport_end:].shape)
     )
+
+
+def test_branch_receiver_orients_clear_then_approaches_without_rotation():
+    transport = _pose(0.55, -0.1, 1.05)
+    approach = _handover_target_with_local_pitch(
+        _pose(0.7, -0.2, 0.98), np.pi / 4.0
+    )
+    orient = transport.copy()
+    orient[3:] = approach[3:]
+    insert = approach.copy()
+    insert[:3] += [0.02, -0.05, -0.04]
+    program = HangMugSkillProgram(_pose(), _pose(0.0, -0.5, 0.9))
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1,
+    )
+    program.handle_to_branch_insert(
+        transport,
+        approach,
+        insert,
+        transport_steps=2,
+        right_orient_clear=orient,
+        orient_steps=3,
+        approach_steps=4,
+        insert_steps=2,
+    )
+    program.release_and_support(
+        insert, insert, unload_steps=1, release_steps=1, settle_steps=1
+    )
+    trajectory = program.build()
+    transport_end = trajectory.waypoint_steps["tree_transport"]
+    orient_end = trajectory.waypoint_steps["branch_orient_clear"]
+    approach_end = trajectory.waypoint_steps["branch_approach"]
+    np.testing.assert_allclose(
+        trajectory.right_poses[transport_end + 1 : orient_end + 1, :3],
+        np.repeat(transport[None, :3], orient_end - transport_end, axis=0),
+    )
+    np.testing.assert_allclose(
+        trajectory.right_poses[orient_end + 1 : approach_end + 1, 3:],
+        np.repeat(approach[None, 3:], approach_end - orient_end, axis=0),
+    )
+    assert np.all(
+        trajectory.grippers[transport_end + 1 : approach_end + 1, 1] == 0.0
+    )
+    assert "branch_orient_clear" in _branch_reanchor_waypoints(trajectory)
+    with pytest.raises(ValueError, match="target and steps must match"):
+        HangMugSkillProgram(_pose(), _pose()).handle_to_branch_insert(
+            transport, approach, insert, transport_steps=1, orient_steps=1,
+            approach_steps=1, insert_steps=1,
+        )
+
+    legacy = HangMugSkillProgram(_pose(), _pose())
+    legacy.handle_to_branch_insert(
+        transport, approach, insert,
+        transport_steps=1, approach_steps=1, insert_steps=1,
+    )
+    assert "branch_orient_clear" not in _branch_reanchor_waypoints(legacy.build())
 
 
 def test_handover_reanchor_changes_only_handover_and_transport_entry():

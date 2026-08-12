@@ -649,6 +649,8 @@ class HangMugSkillProgram:
         right_insert: Any,
         *,
         transport_steps: int,
+        right_orient_clear: Any | None = None,
+        orient_steps: int = 0,
         approach_steps: int,
         insert_steps: int,
         left_observer: Any | None = None,
@@ -667,6 +669,17 @@ class HangMugSkillProgram:
             left_pose=left_observer,
             right_pose=right_transport,
         )
+        if orient_steps < 0:
+            raise ValueError("orient_steps must be nonnegative")
+        if bool(orient_steps) != (right_orient_clear is not None):
+            raise ValueError("clear branch orientation target and steps must match")
+        if orient_steps:
+            self._append(
+                "branch_orient_clear",
+                "handle_to_branch_insertion",
+                orient_steps,
+                right_pose=right_orient_clear,
+            )
         self._append(
             "branch_approach",
             "handle_to_branch_insertion",

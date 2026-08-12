@@ -139,6 +139,12 @@ def _parser() -> argparse.Namespace:
         help="Transfer the demonstrated receiver pose through authored handle-hole frames.",
     )
     parser.add_argument(
+        "--branch-orient-steps",
+        type=int,
+        default=0,
+        help="Rows used to orient the held mug at the clear transport pose.",
+    )
+    parser.add_argument(
         "--handover-confirm-steps",
         type=int,
         default=0,
@@ -788,13 +794,10 @@ def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
         if "handover_confirm" in trajectory.waypoint_steps
         else "left_release"
     )
-    return (
-        handover_boundary,
-        "tree_transport",
-        "branch_approach",
-        "branch_insert",
-        "branch_unload",
-    )
+    names = [handover_boundary, "tree_transport"]
+    if "branch_orient_clear" in trajectory.waypoint_steps:
+        names.append("branch_orient_clear")
+    return (*names, "branch_approach", "branch_insert", "branch_unload")
 
 
 def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
@@ -1288,6 +1291,10 @@ def _build_skill(
     right_transport = held(transport_mug_pose, right_contact)
     right_approach = held(approach_mug_pose, right_contact)
     right_insert = held(final_mug.root_pose, right_contact)
+    right_branch_orient = None
+    if args.branch_orient_steps:
+        right_branch_orient = right_transport.copy()
+        right_branch_orient[3:] = right_approach[3:]
     source_insert = frames["inserted_held"]
     left_branch_observer = target_tree.transfer_pose_from(
         RigidAssetGeometry(source_insert["tree_pose"], source_tree.size),
@@ -1324,6 +1331,8 @@ def _build_skill(
         right_approach,
         right_insert,
         transport_steps=100,
+        right_orient_clear=right_branch_orient,
+        orient_steps=args.branch_orient_steps,
         approach_steps=70,
         insert_steps=70,
         left_observer=left_branch_observer,
@@ -1363,6 +1372,7 @@ def _sparse_joint_nominal(
         "handover_receiver_lift": indices["handover"],
         "handover_confirm": indices["handover"],
         "tree_transport": indices["tree_approach"],
+        "branch_orient_clear": indices["tree_approach"],
         "branch_approach": indices["tree_approach"],
         "branch_insert": indices["inserted_held"],
         "branch_unload": indices["inserted_held"],
@@ -1416,6 +1426,8 @@ def main() -> None:
     _require_proven_control_defaults(args)
     if args.handover_confirm_steps < 0:
         raise ValueError("--handover-confirm-steps must be nonnegative")
+    if not 0 <= args.branch_orient_steps <= 90:
+        raise ValueError("--branch-orient-steps must be in [0, 90]")
     if not 0 <= args.handover_contact_acquire_steps <= 60:
         raise ValueError("--handover-contact-acquire-steps must be in [0, 60]")
     _bounded_handover_offset(args.handover_target_offset_m)
@@ -2145,6 +2157,9 @@ def main() -> None:
             "direct_replay_baseline": direct_replay,
             "task_override": override,
         }
+        result["protocol"]["parameters"]["branch_orient_steps"] = int(
+            args.branch_orient_steps
+        )
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         _write_json_atomic(args.result_json, result)
         print("HANGMUG_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
