@@ -36,3 +36,11 @@ def test_cpu_physics_receipt_proves_requested_and_actual_cpu():
         "actual": "cpu",
         "passed": True,
     }
+
+
+def test_left_release_retreat_is_bounded():
+    module = _module()
+
+    assert module._bounded_left_release_retreat(0.03) == pytest.approx(0.03)
+    with pytest.raises(ValueError, match=r"\[0.02, 0.12\]"):
+        module._bounded_left_release_retreat(0.15)

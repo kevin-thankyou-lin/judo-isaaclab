@@ -169,6 +169,11 @@ def _repair_command(
                 "--handover-target-offset-m",
                 *map(str, strategy["handover_target_offset_m"]),
             ])
+        if "left_release_retreat_m" in strategy:
+            arguments.extend([
+                "--left-release-retreat-m",
+                str(strategy["left_release_retreat_m"]),
+            ])
     elif selection["actual_repair_boundary"] == "pick":
         if strategy:
             raise ValueError("pair repair strategy is valid only from reset")
@@ -206,7 +211,11 @@ def _repair_strategy(index: int) -> dict:
     if not path.is_file():
         return {}
     value = _load(path)
-    allowed = {"handover_contact_settle_steps", "handover_target_offset_m"}
+    allowed = {
+        "handover_contact_settle_steps",
+        "handover_target_offset_m",
+        "left_release_retreat_m",
+    }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     settle = value.get("handover_contact_settle_steps", 30)
@@ -215,10 +224,21 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset must be three finite values within 4 cm")
-    return {
+    strategy = {
         "handover_contact_settle_steps": settle,
         "handover_target_offset_m": offset.tolist(),
     }
+    if "left_release_retreat_m" in value:
+        retreat = value["left_release_retreat_m"]
+        if (
+            isinstance(retreat, bool)
+            or not isinstance(retreat, (int, float))
+            or not np.isfinite(retreat)
+            or not 0.02 <= retreat <= 0.12
+        ):
+            raise ValueError("left release retreat must be in [0.02, 0.12] m")
+        strategy["left_release_retreat_m"] = float(retreat)
+    return strategy
 
 
 def _worker_pids() -> list[int]:
