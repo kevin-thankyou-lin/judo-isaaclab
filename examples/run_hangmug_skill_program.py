@@ -547,6 +547,35 @@ def _bounded_left_release_retreat(value: float) -> float:
     return retreat
 
 
+def _semantic_waypoint_name(trajectory, step: int) -> str:
+    for name, endpoint in trajectory.waypoint_steps.items():
+        if step <= endpoint:
+            return name
+    raise IndexError(f"semantic step {step} exceeds the skill trajectory")
+
+
+def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
+    rows = samples[1:]
+    return {
+        "left_grasp": np.asarray([row["left_grasp"] for row in rows], dtype=bool),
+        "right_grasp": np.asarray([row["right_grasp"] for row in rows], dtype=bool),
+        "left_assist_engaged": np.asarray(
+            [row["grasp_assist_engaged"].get("left", False) for row in rows],
+            dtype=bool,
+        ),
+        "right_assist_engaged": np.asarray(
+            [row["grasp_assist_engaged"].get("right", False) for row in rows],
+            dtype=bool,
+        ),
+        **{
+            f"stage{stage}_latched": np.asarray(
+                [row[f"stage{stage}"] for row in rows], dtype=bool
+            )
+            for stage in (1, 2, 3)
+        },
+    }
+
+
 def _source_pick_prefix_steps(keyframes) -> int:
     """Return the exact source-action prefix ending at right pregrasp."""
     frame = keyframes["frames"]["right_pregrasp"]
@@ -1174,6 +1203,7 @@ def main() -> None:
         for name, pose_key in (("mug", "mug_pose"), ("mug_tree", "tree_pose")):
             initial_placement[name]["observed_after_restore"] = samples[0][pose_key]
         actions = []; mug_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []; semantic_left_eef = []; semantic_right_eef = []; frame_stats = []
+        trace_stages = []; trace_waypoints = []
         handover_boundary = None
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
@@ -1182,10 +1212,12 @@ def main() -> None:
             if trajectory is None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
+                waypoint = "direct_source_action_replay"
                 semantic_step = None
             elif step < source_prefix_steps:
                 action = source["actions"][step : step + 1]
                 stage = "exact_source_pick_prefix"
+                waypoint = "exact_source_pick_prefix"
                 semantic_step = None
             else:
                 if source_prefix_steps and joint_nominal is None:
@@ -1221,6 +1253,7 @@ def main() -> None:
                     if not handover_boundary["passed"]:
                         break
                 stage = trajectory.stage_names[semantic_step]
+                waypoint = _semantic_waypoint_name(trajectory, semantic_step)
                 integrate = bool(
                     source_prefix_steps
                     or semantic_step > trajectory.waypoint_steps["left_grasp"]
@@ -1249,6 +1282,7 @@ def main() -> None:
             )
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
+            trace_stages.append(stage); trace_waypoints.append(waypoint)
             if semantic_step is not None:
                 semantic_left_eef.append(sample["left_eef_pose"])
                 semantic_right_eef.append(sample["right_eef_pose"])
@@ -1330,9 +1364,9 @@ def main() -> None:
             mug_poses=np.asarray(mug_poses, dtype=np.float32),
             left_eef_poses=np.asarray(left_eef, dtype=np.float32),
             right_eef_poses=np.asarray(right_eef, dtype=np.float32),
-            program_stages=np.asarray(
-                [row["program_stage"] for row in samples], dtype="U32"
-            ),
+            program_stages=np.asarray(trace_stages, dtype="U32"),
+            semantic_waypoints=np.asarray(trace_waypoints, dtype="U32"),
+            **_trace_status_arrays(samples),
             desired_left_eef_poses=np.asarray(desired_left, dtype=np.float32),
             desired_right_eef_poses=np.asarray(desired_right, dtype=np.float32),
             sparse_joint_nominal=np.asarray(joint_nominal, dtype=np.float32) if joint_nominal is not None else np.empty((0, 14), dtype=np.float32),

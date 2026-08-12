@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,3 +45,41 @@ def test_left_release_retreat_is_bounded():
     assert module._bounded_left_release_retreat(0.03) == pytest.approx(0.03)
     with pytest.raises(ValueError, match=r"\[0.02, 0.12\]"):
         module._bounded_left_release_retreat(0.15)
+
+
+def test_semantic_waypoint_identity_uses_executed_row_endpoints():
+    module = _module()
+    trajectory = SimpleNamespace(
+        waypoint_steps={"approach": 1, "close": 4, "release": 6}
+    )
+
+    assert [module._semantic_waypoint_name(trajectory, row) for row in range(7)] == [
+        "approach", "approach", "close", "close", "close", "release", "release"
+    ]
+    with pytest.raises(IndexError, match="exceeds"):
+        module._semantic_waypoint_name(trajectory, 7)
+
+
+def test_trace_status_arrays_are_one_to_one_with_executed_rows():
+    module = _module()
+    reset = {"left_grasp": False, "right_grasp": False,
+             "grasp_assist_engaged": {}, "stage1": False, "stage2": False,
+             "stage3": False}
+    rows = [
+        {**reset, "left_grasp": True, "grasp_assist_engaged": {"left": True},
+         "stage1": True},
+        {**reset, "right_grasp": True, "grasp_assist_engaged": {"right": True},
+         "stage1": True, "stage2": True},
+    ]
+
+    trace = module._trace_status_arrays([reset, *rows])
+
+    assert set(trace) == {
+        "left_grasp", "right_grasp", "left_assist_engaged",
+        "right_assist_engaged", "stage1_latched", "stage2_latched",
+        "stage3_latched",
+    }
+    assert all(value.shape == (2,) and value.dtype == bool for value in trace.values())
+    assert trace["left_grasp"].tolist() == [True, False]
+    assert trace["right_grasp"].tolist() == [False, True]
+    assert trace["stage2_latched"].tolist() == [False, True]
