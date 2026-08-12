@@ -304,6 +304,116 @@ def reanchor_right_grasp_from_observed_mug(
     )
 
 
+def reanchor_handover_contact_acquire(
+    trajectory: SkillTrajectory,
+    nominal_right_contact: Any,
+    observed_mug_pose: Any,
+    observed_left_pose: Any,
+    observed_right_pose: Any,
+    *,
+    maximum_translation_m: float = 0.03,
+    maximum_rotation_error_rad: float = 0.12,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Move the left-held mug into a closed, stationary receiver.
+
+    The correction is the live world-space residual between the demonstrated
+    mug-relative receiver contact and the observed right wrist.  It changes no
+    orientation, controller setting, or later semantic target.
+    """
+
+    required = (
+        "right_grasp",
+        "handover_contact_acquire",
+        "left_release",
+    )
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
+    limit = float(maximum_translation_m)
+    if not np.isfinite(limit) or not 0.0 < limit <= 0.03:
+        raise ValueError("maximum contact-acquire translation must be in (0, 0.03] m")
+    rotation_limit = float(maximum_rotation_error_rad)
+    if not np.isfinite(rotation_limit) or not 0.0 < rotation_limit <= 0.2:
+        raise ValueError("maximum contact-acquire rotation error must be in (0, 0.2] rad")
+    nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    mug = _pose(observed_mug_pose, "observed_mug_pose")
+    observed_left = _pose(observed_left_pose, "observed_left_pose")
+    observed_right = _pose(observed_right_pose, "observed_right_pose")
+    desired_right = compose_pose(mug, nominal_contact)
+    translation = observed_right[:3] - desired_right[:3]
+    norm = float(np.linalg.norm(translation))
+    rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
+    rotation_error_rad = float(
+        2.0 * np.arccos(np.clip(abs(rotation_error[3]), 0.0, 1.0))
+    )
+    if norm > limit:
+        raise RuntimeError(
+            f"live handover contact residual {norm:.6f} m exceeds {limit:.6f} m"
+        )
+    if rotation_error_rad > rotation_limit:
+        raise RuntimeError(
+            "live handover contact rotation error "
+            f"{rotation_error_rad:.6f} rad exceeds {rotation_limit:.6f} rad"
+        )
+
+    steps = trajectory.waypoint_steps
+    grasp_end = steps["right_grasp"]
+    acquire_end = steps["handover_contact_acquire"]
+    release_end = steps["left_release"]
+    if not grasp_end < acquire_end < release_end:
+        raise ValueError("contact acquisition must lie between grasp and release")
+    left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    corrected_left = observed_left.copy()
+    corrected_left[:3] += translation
+    left[grasp_end + 1 : acquire_end + 1] = interpolate_poses(
+        observed_left, corrected_left, acquire_end - grasp_end
+    )
+    right[grasp_end + 1 : acquire_end + 1] = observed_right
+    corrected_release = trajectory.left_poses[release_end].copy()
+    corrected_release[:3] += translation
+    left[acquire_end + 1 : release_end + 1] = interpolate_poses(
+        corrected_left, corrected_release, release_end - acquire_end
+    )
+    right[acquire_end + 1 : release_end + 1] = observed_right
+
+    lift_end = steps.get("handover_receiver_lift", release_end)
+    confirm_end = steps.get("handover_confirm", lift_end)
+    corrected_lift = transfer_pose(
+        trajectory.right_poses[lift_end],
+        trajectory.right_poses[release_end],
+        observed_right,
+    )
+    if lift_end > release_end:
+        right[release_end + 1 : lift_end + 1] = interpolate_poses(
+            observed_right, corrected_lift, lift_end - release_end
+        )
+    right[lift_end + 1 : confirm_end + 1] = corrected_lift
+    left[release_end + 1 : confirm_end + 1] = corrected_release
+    receipt = {
+        "strategy": "translate_left_held_mug_into_stationary_closed_receiver",
+        "desired_right_contact_world": desired_right.tolist(),
+        "observed_right_eef_world": observed_right.tolist(),
+        "world_translation_m": translation.tolist(),
+        "translation_norm_m": norm,
+        "maximum_translation_m": limit,
+        "rotation_error_rad": rotation_error_rad,
+        "maximum_rotation_error_rad": rotation_limit,
+        "orientation_unchanged": True,
+        "acquire_steps": acquire_end - grasp_end,
+    }
+    return (
+        SkillTrajectory(
+            left_poses=left,
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        receipt,
+    )
+
+
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
     planned_right_contact: Any,
@@ -430,6 +540,7 @@ class HangMugSkillProgram:
         close_steps: int,
         release_steps: int,
         contact_settle_steps: int = 0,
+        contact_acquire_steps: int = 0,
         confirm_steps: int = 0,
         closed: float = 0.0,
         opened: float = -0.0475,
@@ -457,6 +568,14 @@ class HangMugSkillProgram:
             right_pose=right_grasp,
             right_gripper=closed,
         )
+        if contact_acquire_steps < 0:
+            raise ValueError("contact_acquire_steps must be nonnegative")
+        if contact_acquire_steps:
+            self._append(
+                "handover_contact_acquire",
+                "physical_handover",
+                contact_acquire_steps,
+            )
         self._append(
             "left_release",
             "physical_handover",

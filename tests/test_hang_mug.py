@@ -13,6 +13,7 @@ from judo_isaaclab.hang_mug import (
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
+    reanchor_handover_contact_acquire,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
     transfer_handover_contact_by_handle_frame,
@@ -28,6 +29,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
+    _handover_contact_acquire_guard_receipt,
     _handover_lift_guard_receipt,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
@@ -1087,6 +1089,95 @@ def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():
     assert continued[0] == pytest.approx(
         0.5 * (source["actions"].value[7] + source["actions"].value[4])
     )
+
+
+def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(0.4, 0.1, 0.8),
+        _pose(0.3, -0.1, 0.9),
+        _pose(0.4, -0.1, 0.9),
+        _pose(0.4, 0.2, 0.8),
+        approach_steps=2,
+        close_steps=2,
+        contact_acquire_steps=4,
+        release_steps=3,
+        confirm_steps=2,
+    )
+    trajectory = program.build()
+    mug = _pose(0.5, 0.0, 0.8)
+    nominal_contact = _pose(-0.1, -0.02, 0.1)
+    desired_right = compose_pose(mug, nominal_contact)
+    translation = np.asarray([0.012, -0.018, 0.002])
+    observed_right = desired_right.copy()
+    observed_right[:3] += translation
+    observed_left = _pose(0.4, 0.1, 0.8)
+
+    adjusted, receipt = reanchor_handover_contact_acquire(
+        trajectory, nominal_contact, mug, observed_left, observed_right
+    )
+
+    grasp_end = adjusted.waypoint_steps["right_grasp"]
+    acquire_end = adjusted.waypoint_steps["handover_contact_acquire"]
+    release_end = adjusted.waypoint_steps["left_release"]
+    acquire_x = adjusted.left_poses[grasp_end + 1 : acquire_end + 1, 0]
+    assert np.all(np.diff(acquire_x) > 0)
+    np.testing.assert_allclose(
+        adjusted.left_poses[acquire_end, :3],
+        observed_left[:3] + translation,
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[grasp_end + 1 : release_end + 1],
+        np.repeat(observed_right[None], release_end - grasp_end, axis=0),
+    )
+    assert adjusted.grippers[acquire_end] == pytest.approx([0.0, 0.0])
+    assert adjusted.grippers[release_end, 0] < 0.0
+    assert receipt["world_translation_m"] == pytest.approx(translation)
+    assert receipt["translation_norm_m"] == pytest.approx(np.linalg.norm(translation))
+    assert receipt["orientation_unchanged"] is True
+
+
+def test_contact_acquire_rejects_unbounded_live_residual():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1,
+        close_steps=1,
+        contact_acquire_steps=2,
+        release_steps=1,
+    )
+    with pytest.raises(RuntimeError, match="exceeds"):
+        reanchor_handover_contact_acquire(
+            program.build(), _pose(), _pose(), _pose(), _pose(0.031)
+        )
+
+
+def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
+    sample = {
+        "step": 9,
+        "stage1": True,
+        "left_grasp": True,
+        "right_grasp": False,
+        "grasp_assist_engaged": {"left": True, "right": False},
+    }
+    assert _handover_contact_acquire_guard_receipt(sample, phase="entry")["passed"]
+    assert _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
+    assert not _handover_contact_acquire_guard_receipt(
+        sample, phase="completion"
+    )["passed"]
+    sample["right_grasp"] = True
+    sample["grasp_assist_engaged"]["right"] = True
+    sample["grasp_assist_engaged"]["left"] = False
+    assert _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
+    assert _handover_contact_acquire_guard_receipt(
+        sample, phase="completion"
+    )["passed"]
+    sample["right_grasp"] = False
+    sample["grasp_assist_engaged"]["right"] = False
+    assert not _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
 
 
 def test_receiver_lift_requires_target_and_follows_release():

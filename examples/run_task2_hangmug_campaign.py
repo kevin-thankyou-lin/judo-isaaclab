@@ -178,6 +178,11 @@ def _repair_command(
             "--handover-contact-settle-steps",
             str(strategy.get("handover_contact_settle_steps", 30)),
         ])
+        if strategy.get("handover_contact_acquire_steps"):
+            arguments.extend([
+                "--handover-contact-acquire-steps",
+                str(strategy["handover_contact_acquire_steps"]),
+            ])
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
@@ -236,6 +241,7 @@ def _repair_strategy(index: int) -> dict:
     value = _load(path)
     allowed = {
         "handover_contact_settle_steps",
+        "handover_contact_acquire_steps",
         "handover_confirm_steps",
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
@@ -293,10 +299,13 @@ def _repair_strategy(index: int) -> dict:
     if not (set(value) & handover_fields):
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
+    acquire = value.get("handover_contact_acquire_steps", 0)
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
+    if not isinstance(acquire, int) or not 0 <= acquire <= 60:
+        raise ValueError("handover contact acquire must be an integer in [0, 60]")
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
     post_release_lift = value.get("handover_post_release_lift_m", 0.0)
@@ -321,6 +330,7 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError("handover target offset must be three finite values within 4 cm")
     strategy.update({
         "handover_contact_settle_steps": settle,
+        "handover_contact_acquire_steps": acquire,
         "handover_confirm_steps": confirm,
         "handover_post_release_lift_m": float(post_release_lift),
         "handover_post_release_lift_steps": post_release_steps,

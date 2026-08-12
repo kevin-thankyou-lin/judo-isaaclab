@@ -171,6 +171,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.parent.mkdir(parents=True)
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
+        "handover_contact_acquire_steps": 24,
         "handover_confirm_steps": 20,
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
@@ -190,6 +191,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[cursor + 1]) == pytest.approx(0.03)
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
+    assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
@@ -216,6 +218,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_handle_frame_transfer": False}))
     with pytest.raises(ValueError, match="must be true"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
+    with pytest.raises(ValueError, match="contact acquire"):
         campaign._repair_strategy(2)
 
 
