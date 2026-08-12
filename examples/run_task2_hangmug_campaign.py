@@ -38,6 +38,7 @@ GUARD = GEAR_REPO / "scripts/run_local_isaac_guarded.sh"
 KEYFRAMES = Path("results/task2/source/attempt_001_compact_replay/source_keyframes.json")
 TIMING = Path("results/task2/pairs/000001/attempt_004_handover_confirm_hold/accepted_runtime_timing.json")
 RESULTS = Path("results/task2")
+MIDDLE_ROW_BRANCHES = frozenset({"branch_layer_2_a", "branch_layer_2_b"})
 LD_LIBRARY_PATH = ":".join(
     (
         "/home/linke/miniforge3/envs/yam_lab/lib",
@@ -53,6 +54,13 @@ def _sha256(path: str | Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _require_middle_row_branch(selected_branch: str | None) -> None:
+    if selected_branch not in MIDDLE_ROW_BRANCHES:
+        raise RuntimeError(
+            f"accepted hang must use a middle-row branch, got {selected_branch!r}"
+        )
 
 
 def _load(path: str | Path) -> dict:
@@ -278,13 +286,12 @@ def _repair_strategy(index: int) -> dict:
         "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
-        "target_branch_rank",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = {
         "branch_orient_steps", "insert_clearance_m", "branch_roll_offset_rad",
-        "branch_support_fraction", "branch_support_seat_down_m", "target_branch_rank",
+        "branch_support_fraction", "branch_support_seat_down_m",
     }
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
@@ -334,11 +341,6 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch roll offset must be within 90 degrees")
         strategy["branch_roll_offset_rad"] = float(roll)
-    if "target_branch_rank" in value:
-        rank = value["target_branch_rank"]
-        if isinstance(rank, bool) or not isinstance(rank, int) or not 0 <= rank < 6:
-            raise ValueError("target branch rank must be in [0, 5]")
-        strategy["target_branch_rank"] = rank
     if "branch_support_fraction" in value:
         fraction = value["branch_support_fraction"]
         if (
@@ -726,6 +728,8 @@ def independent_audit(index: int, attempt: Path) -> dict:
         result["initial_placement"]["mug"]["target_root_z_m"],
         resets,
     )
+    selected_branch = semantic_audit["contact_policy"]["selected_branch"]
+    _require_middle_row_branch(selected_branch)
     runner_terminal = result.get("independent_terminal_hang")
     if (
         not runner_terminal

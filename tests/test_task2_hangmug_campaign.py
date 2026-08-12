@@ -186,7 +186,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "insert_clearance_m": 0.04,
         "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
-        "target_branch_rank": 0,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -216,7 +215,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
-    assert command[command.index("--target-branch-rank") + 1] == "0"
+    assert "--target-branch-rank" not in command
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
@@ -269,9 +268,17 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"branch_roll_offset_rad": 3.141592653589793}))
     with pytest.raises(ValueError, match="branch roll offset"):
         campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({"target_branch_rank": 6}))
-    with pytest.raises(ValueError, match="target branch rank"):
+    candidate.write_text(json.dumps({"target_branch_rank": 2}))
+    with pytest.raises(ValueError, match="unsupported repair candidate"):
         campaign._repair_strategy(2)
+
+
+def test_campaign_accepts_only_middle_row_branches():
+    for branch in ("branch_layer_2_a", "branch_layer_2_b"):
+        campaign._require_middle_row_branch(branch)
+    for branch in (None, "branch_layer_1_a", "branch_layer_3_b"):
+        with pytest.raises(RuntimeError, match="middle-row branch"):
+            campaign._require_middle_row_branch(branch)
 
 
 def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
