@@ -1289,6 +1289,7 @@ def _sparse_joint_nominal(
         "handover_pregrasp": indices["right_pregrasp"],
         "right_grasp_settle": indices["dual_grasp"],
         "right_grasp": indices["dual_grasp"],
+        "handover_contact_acquire": indices["dual_grasp"],
         "left_release": indices["handover"],
         "handover_receiver_lift": indices["handover"],
         "handover_confirm": indices["handover"],

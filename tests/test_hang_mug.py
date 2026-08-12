@@ -1137,7 +1137,33 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     assert adjusted.grippers[release_end, 0] < 0.0
     assert receipt["world_translation_m"] == pytest.approx(translation)
     assert receipt["translation_norm_m"] == pytest.approx(np.linalg.norm(translation))
+    assert receipt["rotation_error_rad"] == pytest.approx(0.0)
     assert receipt["orientation_unchanged"] is True
+
+    class Actions:
+        def __init__(self):
+            self.value = np.arange(20 * 14).reshape(20, 14)
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def __array__(self, dtype=None):
+            return np.asarray(self.value, dtype=dtype)
+
+    indices = {
+        "left_pregrasp": 1, "left_grasp": 2, "left_lift": 3,
+        "right_pregrasp": 4, "dual_grasp": 5, "handover": 6,
+        "tree_approach": 7, "inserted_held": 8, "release": 9,
+        "stable_settle": 10,
+    }
+    actions = Actions()
+    nominal = _sparse_joint_nominal(
+        {"actions": actions}, trajectory, {"semantic_indices": indices}
+    )
+    assert nominal[acquire_end] == pytest.approx(actions.value[5])
 
 
 def test_contact_acquire_rejects_unbounded_live_residual():
