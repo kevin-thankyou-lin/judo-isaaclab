@@ -181,6 +181,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
+        "handover_straddle_local_x_m": -0.124,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -203,6 +204,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
+    assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
@@ -235,6 +237,16 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
+    with pytest.raises(ValueError, match="requires orient-first"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_orient_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+        "handover_straddle_local_x_m": -0.141,
+    }))
+    with pytest.raises(ValueError, match="within 14 cm"):
         campaign._repair_strategy(2)
 
 

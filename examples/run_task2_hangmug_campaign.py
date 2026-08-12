@@ -193,6 +193,11 @@ def _repair_command(
                 "--handover-target-local-pitch-rad",
                 str(strategy["handover_target_local_pitch_rad"]),
             ])
+        if "handover_straddle_local_x_m" in strategy:
+            arguments.extend([
+                "--handover-straddle-local-x-m",
+                str(strategy["handover_straddle_local_x_m"]),
+            ])
         for field, option in (
             ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
             ("handover_orient_steps", "--handover-orient-steps"),
@@ -258,6 +263,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "handover_target_local_pitch_rad",
+        "handover_straddle_local_x_m",
         "handover_orient_clearance_m",
         "handover_orient_steps",
         "handover_handle_frame_transfer",
@@ -317,6 +323,7 @@ def _repair_strategy(index: int) -> dict:
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
+    straddle = value.get("handover_straddle_local_x_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
@@ -353,6 +360,13 @@ def _repair_strategy(index: int) -> dict:
     ):
         raise ValueError("handover target local pitch must be within 45 degrees")
     if (
+        isinstance(straddle, bool)
+        or not isinstance(straddle, (int, float))
+        or not np.isfinite(straddle)
+        or abs(straddle) > 0.14
+    ):
+        raise ValueError("handover local straddle correction must be within 14 cm")
+    if (
         isinstance(orient_clearance, bool)
         or not isinstance(orient_clearance, (int, float))
         or not np.isfinite(orient_clearance)
@@ -378,6 +392,12 @@ def _repair_strategy(index: int) -> dict:
     if orient_steps:
         strategy["handover_orient_clearance_m"] = float(orient_clearance)
         strategy["handover_orient_steps"] = orient_steps
+    if straddle:
+        if not orient_steps:
+            raise ValueError(
+                "handover local straddle correction requires orient-first descent"
+            )
+        strategy["handover_straddle_local_x_m"] = float(straddle)
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (
