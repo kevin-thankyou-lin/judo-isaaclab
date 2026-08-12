@@ -188,6 +188,11 @@ def _repair_command(
                 "--handover-target-offset-m",
                 *map(str, strategy["handover_target_offset_m"]),
             ])
+        if "handover_target_local_pitch_rad" in strategy:
+            arguments.extend([
+                "--handover-target-local-pitch-rad",
+                str(strategy["handover_target_local_pitch_rad"]),
+            ])
         if "left_release_retreat_m" in strategy:
             arguments.extend([
                 "--left-release-retreat-m",
@@ -246,6 +251,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
+        "handover_target_local_pitch_rad",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
@@ -302,6 +308,7 @@ def _repair_strategy(index: int) -> dict:
     acquire = value.get("handover_contact_acquire_steps", 0)
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
+    pitch = value.get("handover_target_local_pitch_rad", 0.0)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
@@ -328,6 +335,13 @@ def _repair_strategy(index: int) -> dict:
         )
     if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset must be three finite values within 4 cm")
+    if (
+        isinstance(pitch, bool)
+        or not isinstance(pitch, (int, float))
+        or not np.isfinite(pitch)
+        or abs(pitch) > np.pi / 4.0
+    ):
+        raise ValueError("handover target local pitch must be within 45 degrees")
     strategy.update({
         "handover_contact_settle_steps": settle,
         "handover_contact_acquire_steps": acquire,
@@ -336,6 +350,8 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps": post_release_steps,
         "handover_target_offset_m": offset.tolist(),
     })
+    if "handover_target_local_pitch_rad" in value:
+        strategy["handover_target_local_pitch_rad"] = float(pitch)
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (

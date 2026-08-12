@@ -178,6 +178,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "left_release_retreat_m": 0.03,
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
+        "handover_target_local_pitch_rad": 0.7853981633974483,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -195,6 +196,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
+    assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
+        0.7853981633974483
+    )
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
@@ -221,6 +225,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
     with pytest.raises(ValueError, match="contact acquire"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
+    with pytest.raises(ValueError, match="within 45 degrees"):
         campaign._repair_strategy(2)
 
 

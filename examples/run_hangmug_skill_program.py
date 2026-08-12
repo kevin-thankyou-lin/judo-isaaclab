@@ -110,6 +110,12 @@ def _parser() -> argparse.Namespace:
         help="Bounded world-translation correction for the fixed receiving waypoint.",
     )
     parser.add_argument(
+        "--handover-target-local-pitch-rad",
+        type=float,
+        default=0.0,
+        help="Bounded local-Y rotation of the fixed receiving waypoint.",
+    )
+    parser.add_argument(
         "--handover-handle-frame-transfer",
         action="store_true",
         help="Transfer the demonstrated receiver pose through authored handle-hole frames.",
@@ -721,6 +727,22 @@ def _bounded_handover_post_release_lift_steps(value: int, lift_m: float) -> int:
     return value
 
 
+def _handover_target_with_local_pitch(pose, angle_rad: float) -> np.ndarray:
+    """Rotate a receiver waypoint about its own Y axis without translating it."""
+    from judo_isaaclab.put_marker import _pose, quaternion_multiply
+
+    angle = float(angle_rad)
+    if not np.isfinite(angle) or abs(angle) > np.pi / 4.0:
+        raise ValueError("handover target local pitch must be finite and within 45 degrees")
+    result = _pose(pose, "handover target").copy()
+    half = 0.5 * angle
+    result[3:] = quaternion_multiply(
+        result[3:], np.asarray([np.cos(half), 0.0, np.sin(half), 0.0])
+    )
+    result[3:] /= np.linalg.norm(result[3:])
+    return result
+
+
 def _semantic_waypoint_name(trajectory, step: int) -> str:
     for name, endpoint in trajectory.waypoint_steps.items():
         if step <= endpoint:
@@ -1164,6 +1186,9 @@ def _build_skill(
             local_position_scale=target_parts.body_size / source_parts.body_size,
         )
     right_grasp[:3] += _bounded_handover_offset(args.handover_target_offset_m)
+    right_grasp = _handover_target_with_local_pitch(
+        right_grasp, args.handover_target_local_pitch_rad
+    )
     right_contact = compose_pose(
         inverse_pose(target_handover_mug.root_pose), right_grasp
     )
@@ -1350,6 +1375,10 @@ def main() -> None:
     if not 0 <= args.handover_contact_acquire_steps <= 60:
         raise ValueError("--handover-contact-acquire-steps must be in [0, 60]")
     _bounded_handover_offset(args.handover_target_offset_m)
+    _handover_target_with_local_pitch(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.handover_target_local_pitch_rad,
+    )
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _bounded_branch_support_seat_down(args.branch_support_seat_down_m)
     _bounded_left_release_retreat(args.left_release_retreat_m)
@@ -1978,7 +2007,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_lift_margin_m": _bounded_pick_lift_margin(args.pick_lift_margin_m), "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_contact_acquire_steps": args.handover_contact_acquire_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "handover_handle_frame_transfer": bool(args.handover_handle_frame_transfer), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "pick_lift_margin_m": _bounded_pick_lift_margin(args.pick_lift_margin_m), "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_contact_acquire_steps": args.handover_contact_acquire_steps, "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "handover_target_local_pitch_rad": float(args.handover_target_local_pitch_rad), "handover_handle_frame_transfer": bool(args.handover_handle_frame_transfer), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
             "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,
