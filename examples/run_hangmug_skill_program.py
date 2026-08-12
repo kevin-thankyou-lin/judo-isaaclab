@@ -554,6 +554,21 @@ def _semantic_waypoint_name(trajectory, step: int) -> str:
     raise IndexError(f"semantic step {step} exceeds the skill trajectory")
 
 
+def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
+    handover_boundary = (
+        "handover_confirm"
+        if "handover_confirm" in trajectory.waypoint_steps
+        else "left_release"
+    )
+    return (
+        handover_boundary,
+        "tree_transport",
+        "branch_approach",
+        "branch_insert",
+        "branch_unload",
+    )
+
+
 def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
     rows = samples[1:]
     return {
@@ -1319,13 +1334,7 @@ def main() -> None:
                     sample["mug_pose"],
                     sample["right_eef_pose"],
                 )
-            reanchor_waypoints = (
-                "left_release",
-                "tree_transport",
-                "branch_approach",
-                "branch_insert",
-                "branch_unload",
-            )
+            reanchor_waypoints = _branch_reanchor_waypoints(trajectory)
             if semantic_step is not None and any(
                 semantic_step == trajectory.waypoint_steps[name]
                 for name in reanchor_waypoints

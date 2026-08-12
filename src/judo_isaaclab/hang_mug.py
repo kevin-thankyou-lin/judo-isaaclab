@@ -277,6 +277,11 @@ def reanchor_branch_transport_contact(
         raise ValueError(
             f"trajectory is missing {completed_waypoint} waypoint"
         )
+    if (
+        completed_waypoint == "left_release"
+        and "handover_confirm" in trajectory.waypoint_steps
+    ):
+        raise ValueError("branch transport cannot reanchor before handover confirmation")
     planned_contact = _pose(planned_right_contact, "planned_right_contact")
     observed_contact = compose_pose(
         inverse_pose(observed_mug_pose), observed_right_pose

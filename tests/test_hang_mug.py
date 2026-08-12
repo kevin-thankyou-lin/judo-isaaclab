@@ -608,6 +608,7 @@ def test_branch_transport_reanchors_observed_right_contact():
     program.physical_handover(
         _pose(0.3, z=1), _pose(0.3, -0.1, 1), _pose(0.3, -0.2, 1),
         _pose(0.3, 0.1, 1), approach_steps=2, close_steps=2, release_steps=2,
+        confirm_steps=3,
     )
     program.handle_to_branch_insert(
         _pose(0.5, -0.2, 1.1), _pose(0.6, -0.3, 1.0),
@@ -619,9 +620,10 @@ def test_branch_transport_reanchors_observed_right_contact():
     observed_mug = _pose(0.4, 0.2, 0.8)
     observed_right = _pose(0.47, 0.16, 0.85)
     adjusted = reanchor_branch_transport_contact(
-        trajectory, nominal_contact, observed_mug, observed_right
+        trajectory, nominal_contact, observed_mug, observed_right,
+        completed_waypoint="handover_confirm",
     )
-    start = trajectory.waypoint_steps["left_release"] + 1
+    start = trajectory.waypoint_steps["handover_confirm"] + 1
     from judo_isaaclab.put_marker import compose_pose, inverse_pose
 
     observed_contact = compose_pose(inverse_pose(observed_mug), observed_right)
@@ -634,6 +636,16 @@ def test_branch_transport_reanchors_observed_right_contact():
     assert adjusted.right_poses[:start] == pytest.approx(
         trajectory.right_poses[:start]
     )
+    release_end = trajectory.waypoint_steps["left_release"]
+    confirm_end = trajectory.waypoint_steps["handover_confirm"]
+    assert adjusted.right_poses[release_end + 1 : confirm_end + 1] == pytest.approx(
+        np.repeat(trajectory.right_poses[release_end][None], 3, axis=0)
+    )
+    with pytest.raises(ValueError, match="before handover confirmation"):
+        reanchor_branch_transport_contact(
+            trajectory, nominal_contact, observed_mug, observed_right,
+            completed_waypoint="left_release",
+        )
 
     second_mug = _pose(0.55, -0.05, 0.95)
     second_right = _pose(0.64, -0.06, 1.01)
