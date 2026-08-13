@@ -47,20 +47,6 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_support_fraction",
     "branch_support_seat_down_m",
 })
-HANDOVER_SUFFIX_STRATEGY_FIELDS = frozenset({
-    "handover_contact_settle_steps",
-    "handover_contact_acquire_steps",
-    "handover_confirm_steps",
-    "handover_post_release_lift_m",
-    "handover_post_release_lift_steps",
-    "handover_target_offset_m",
-    "handover_target_local_pitch_rad",
-    "handover_straddle_local_x_m",
-    "handover_orient_clearance_m",
-    "handover_orient_steps",
-    "handover_handle_frame_transfer",
-    "left_release_retreat_m",
-})
 LD_LIBRARY_PATH = ":".join(
     (
         "/home/linke/miniforge3/envs/yam_lab/lib",
@@ -208,8 +194,7 @@ def _repair_command(
     ):
         if field in strategy:
             arguments.extend([option, str(strategy[field])])
-    boundary = selection["actual_repair_boundary"]
-    if boundary in {"reset", "pick"}:
+    if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
             str(strategy.get("handover_contact_settle_steps", 30)),
@@ -252,11 +237,8 @@ def _repair_command(
                 "--handover-post-release-lift-steps",
                 str(strategy["handover_post_release_lift_steps"]),
             ])
-    if boundary == "reset":
-        pass
-    elif boundary == "pick":
-        allowed = HANDOVER_SUFFIX_STRATEGY_FIELDS | BRANCH_SUFFIX_STRATEGY_FIELDS
-        if set(strategy) - allowed:
+    elif selection["actual_repair_boundary"] == "pick":
+        if set(strategy) - BRANCH_SUFFIX_STRATEGY_FIELDS:
             raise ValueError("pair repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
     else:
@@ -315,7 +297,8 @@ def _repair_strategy(index: int) -> dict:
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
-    handover_fields = set(HANDOVER_SUFFIX_STRATEGY_FIELDS)
+    late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
+    handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
     if "handover_handle_frame_transfer" in value:
         enabled = value["handover_handle_frame_transfer"]

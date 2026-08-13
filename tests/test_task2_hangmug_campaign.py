@@ -225,38 +225,7 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     )
     assert "--reuse-source-pick-prefix" in handover
     assert handover[handover.index("--handover-confirm-steps") + 1] == "12"
-    assert handover[handover.index("--handover-contact-settle-steps") + 1] == "30"
-
-
-def test_handover_repair_options_are_allowed_after_exact_pick_prefix(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
-    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
-    strategy = {
-        "handover_handle_frame_transfer": True,
-        "handover_contact_settle_steps": 30,
-        "handover_confirm_steps": 20,
-        "handover_orient_clearance_m": 0.06,
-        "handover_orient_steps": 30,
-        "left_release_retreat_m": 0.1,
-    }
-
-    command = campaign._repair_command(
-        36,
-        tmp_path / "repair",
-        tmp_path / "classification/result.json",
-        campaign._repair_selection("handover", "pick"),
-        strategy,
-    )
-
-    assert "--reuse-source-pick-prefix" in command
-    assert "--handover-handle-frame-transfer" in command
-    assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
-    assert command[command.index("--handover-confirm-steps") + 1] == "20"
-    assert command[command.index("--handover-orient-clearance-m") + 1] == "0.06"
-    assert command[command.index("--handover-orient-steps") + 1] == "30"
-    assert command[command.index("--left-release-retreat-m") + 1] == "0.1"
+    assert "--handover-contact-settle-steps" not in handover
 
 
 def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkeypatch):
