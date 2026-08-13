@@ -242,6 +242,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
         "handover_target_local_pitch_rad": 0.7853981633974483,
+        "handover_target_local_axis_angle_rad": [0.039112, 0.056642, -0.101834],
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_straddle_local_x_m": -0.124,
@@ -275,6 +276,10 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert "--handover-handle-frame-transfer" in command
     assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
         0.7853981633974483
+    )
+    axis_cursor = command.index("--handover-target-local-axis-angle-rad")
+    assert list(map(float, command[axis_cursor + 1 : axis_cursor + 4])) == pytest.approx(
+        [0.039112, 0.056642, -0.101834]
     )
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
@@ -310,6 +315,11 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
     with pytest.raises(ValueError, match="within 45 degrees"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_target_local_axis_angle_rad": [0.0, 0.0, 0.200001]
+    }))
+    with pytest.raises(ValueError, match="within 0.2 rad"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
