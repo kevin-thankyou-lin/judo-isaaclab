@@ -34,6 +34,7 @@ from run_hangmug_skill_program import (
     _direct_phase_contract_receipt,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
+    _left_grasp_inset_toward_body,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
@@ -63,6 +64,18 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_left_grasp_inset_moves_toward_body_without_rotating():
+    grasp = np.asarray([0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
+    body = np.asarray([0.2, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
+
+    corrected = _left_grasp_inset_toward_body(grasp, body, 0.003)
+
+    np.testing.assert_allclose(corrected[:3], [0.103, 0.2, 0.3])
+    np.testing.assert_array_equal(corrected[3:], grasp[3:])
+    with pytest.raises(ValueError, match=r"\[0, 0.01\]"):
+        _left_grasp_inset_toward_body(grasp, body, 0.011)
 
 
 def test_quality_wave_contact_reports_cover_both_arms_and_tree():

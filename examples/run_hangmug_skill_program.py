@@ -85,6 +85,15 @@ def _parser() -> argparse.Namespace:
         help="Bounded extra clearance above the unchanged 5 cm Pick threshold.",
     )
     parser.add_argument(
+        "--left-grasp-inset-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded object-centered inset for evidence-backed correction of "
+            "a tip-biased left pickup."
+        ),
+    )
+    parser.add_argument(
         "--branch-support-fraction",
         type=float,
         default=0.5,
@@ -958,6 +967,28 @@ def _bounded_pick_lift_margin(value: float) -> float:
     if not np.isfinite(margin) or not 0.0 <= margin <= 0.03:
         raise ValueError("pick lift margin must be finite and in [0, 0.03] m")
     return margin
+
+
+def _left_grasp_inset_toward_body(grasp, body_pose, inset_m: float) -> np.ndarray:
+    """Move a grasp deeper toward the live body center without changing orientation."""
+    result = np.asarray(grasp, dtype=np.float64)
+    body = np.asarray(body_pose, dtype=np.float64)
+    if result.shape != (7,) or body.shape != (7,):
+        raise ValueError("grasp and body pose must each contain seven values")
+    if not np.isfinite(result).all() or not np.isfinite(body).all():
+        raise ValueError("grasp and body pose must be finite")
+    amount = float(inset_m)
+    if not np.isfinite(amount) or not 0.0 <= amount <= 0.01:
+        raise ValueError("left grasp inset must be finite and in [0, 0.01] m")
+    if amount == 0.0:
+        return result.copy()
+    direction = body[:3] - result[:3]
+    distance = float(np.linalg.norm(direction))
+    if distance <= amount:
+        raise ValueError("left grasp inset must remain short of the body center")
+    corrected = result.copy()
+    corrected[:3] += amount * direction / distance
+    return corrected
 
 
 def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
@@ -2254,6 +2285,9 @@ def _build_skill(
         )
 
     left_grasp = transfer_mug_frame("left_grasp", "left")
+    left_grasp = _left_grasp_inset_toward_body(
+        left_grasp, target_initial_body, args.left_grasp_inset_m
+    )
     left_contact = compose_pose(inverse_pose(target_geometry.root_pose), left_grasp)
     source_dual = frames["dual_grasp"]
     source_dual_body = compose_pose(
@@ -2595,6 +2629,11 @@ def main() -> None:
     ):
         raise ValueError("--branch-roll-offset-rad must be within 90 degrees")
     _bounded_branch_support_seat_down(args.branch_support_seat_down_m)
+    _left_grasp_inset_toward_body(
+        np.asarray([0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.left_grasp_inset_m,
+    )
     _bounded_left_release_retreat(args.left_release_retreat_m)
     post_release_lift = _bounded_handover_post_release_lift(
         args.handover_post_release_lift_m
@@ -3529,6 +3568,10 @@ def main() -> None:
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,
             "reset_counts": reset_counts,
+            "pair_geometry": {
+                "left_grasp_inset_m": float(args.left_grasp_inset_m),
+                "left_grasp_inset_frame": "live_target_body_center",
+            },
             "terminal_stability": terminal_stability,
             "grasp_quality": {
                 "required": bool(args.require_broad_pad_contact),

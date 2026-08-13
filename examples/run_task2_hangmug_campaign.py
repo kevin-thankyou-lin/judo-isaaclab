@@ -190,6 +190,10 @@ def _repair_command(
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
         ])
+    if "left_grasp_inset_m" in strategy:
+        arguments.extend([
+            "--left-grasp-inset-m", str(strategy["left_grasp_inset_m"])
+        ])
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
     for field, option in (
@@ -306,6 +310,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
+        "left_grasp_inset_m",
         "require_broad_pad_contact",
         "post_handover_right_return_steps",
         "left_branch_point_steps",
@@ -324,7 +329,9 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
     handover_fields = allowed - late_support_fields - {
-        "force_semantic_regeneration", "pick_lift_margin_m"
+        "force_semantic_regeneration",
+        "pick_lift_margin_m",
+        "left_grasp_inset_m",
     }
     strategy = {}
     if "force_semantic_regeneration" in value:
@@ -355,6 +362,16 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("pick lift margin must be in [0, 0.03] m")
         strategy["pick_lift_margin_m"] = float(margin)
+    if "left_grasp_inset_m" in value:
+        inset = value["left_grasp_inset_m"]
+        if (
+            isinstance(inset, bool)
+            or not isinstance(inset, (int, float))
+            or not np.isfinite(inset)
+            or not 0.0 <= inset <= 0.01
+        ):
+            raise ValueError("left grasp inset must be in [0, 0.01] m")
+        strategy["left_grasp_inset_m"] = float(inset)
     setup_steps = (
         value.get("post_handover_right_return_steps", 0),
         value.get("left_branch_point_steps", 0),
