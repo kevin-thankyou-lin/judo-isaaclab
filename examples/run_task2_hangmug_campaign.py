@@ -473,11 +473,19 @@ def _repair_strategy(index: int) -> dict:
 
 def _worker_pids() -> list[int]:
     workers = []
+    lane_id = os.environ.get("CPGEN_LANE_ID")
+    lane_marker = (
+        f"CPGEN_LANE_ID={lane_id}".encode() if lane_id is not None else None
+    )
     for process in Path("/proc").glob("[0-9]*"):
         try:
             tokens = process.joinpath("cmdline").read_bytes().split(b"\0")
             names = [Path(token.decode(errors="replace")).name for token in tokens if token]
             comm = process.joinpath("comm").read_text().strip()
+            if lane_marker is not None:
+                environment = process.joinpath("environ").read_bytes().split(b"\0")
+                if lane_marker not in environment:
+                    continue
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
         if comm in {"isaac-sim", "kit"} or "run_hangmug_skill_program.py" in names:
