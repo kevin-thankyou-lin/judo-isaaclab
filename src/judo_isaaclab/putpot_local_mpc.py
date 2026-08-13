@@ -510,10 +510,20 @@ def handle_local_mpc_step(
     # Preserve the demonstrated force-free corridor on the gripper's pad-depth
     # axis.  The target handle normal becomes authoritative only once physical
     # contact exists; enabling it earlier changed Pair 15's interior first
-    # contact into an edge intersection.  After contact, the live handle axis
-    # still removes the inward component that dragged the pot in Attempt 32.
+    # contact into an edge intersection.  Once a force-backed tangent recenter
+    # has physically started, retain that handle frame across transient force
+    # dropouts until guard release.  Otherwise the axis can snap back to the
+    # pad frame for one step and turn a tangential command inward again.
+    handle_contact_normal_latched = bool(
+        depth_guard_use_handle_contact_normal
+        and contact_fraction_recenter
+        and contact_recenter_use_handle_tangent
+        and contact_recenter_total_m > 0.0
+        and not depth_guard_released
+    )
     use_contact_normal_depth_axis = bool(
-        depth_guard_use_handle_contact_normal and physical_contact_observed
+        depth_guard_use_handle_contact_normal
+        and (physical_contact_observed or handle_contact_normal_latched)
     )
     depth_guard_axis = (
         handle_contact_normal if use_contact_normal_depth_axis else mean_pad_axis
@@ -968,7 +978,9 @@ def handle_local_mpc_step(
             "active": depth_guard_active,
             "depth_axis_source": (
                 "observed_handle_contact_normal"
-                if use_contact_normal_depth_axis
+                if physical_contact_observed and use_contact_normal_depth_axis
+                else "latched_observed_handle_contact_normal"
+                if handle_contact_normal_latched
                 else "mean_pad_depth_axis"
             ),
             "depth_axis_world": depth_guard_axis.tolist(),

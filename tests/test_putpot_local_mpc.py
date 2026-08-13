@@ -455,6 +455,42 @@ def test_handle_normal_depth_guard_preserves_force_free_pad_axis_corridor():
     )
 
 
+def test_handle_normal_depth_guard_stays_latched_across_contact_dropout():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=36,
+            observed_handle_contact_frame=handle,
+            active_finger_forces_n=[0.0, 0.089],
+            active_pad_fractions=[np.nan, 0.34],
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=False,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        contact_recenter_total_m=0.003,
+    )
+    guard = command.frame_receipt["contact_frame_guard"]
+    control = np.asarray(
+        command.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    assert not guard["physical_contact_observed"]
+    assert guard["depth_axis_source"] == "latched_observed_handle_contact_normal"
+    np.testing.assert_allclose(
+        guard["depth_axis_world"], [1.0, 0.0, 0.0], atol=1.0e-12
+    )
+    assert np.dot(control, guard["depth_axis_world"]) == pytest.approx(
+        0.0, abs=1.0e-12
+    )
+    assert not command.fail_closed
+
+
 def test_handle_tangent_contact_recenter_removes_normal_motion_and_honors_budget():
     half_sqrt_two = np.sqrt(0.5)
     handle = np.asarray(
