@@ -831,10 +831,10 @@ def _measured_right_dual_contact_pad_balance(
     lane_id: str,
     minimum_force_n: float,
     minimum_pad_fraction_margin: float,
-    target_weak_pad_fraction: float = 0.25,
+    target_weak_pad_fraction: float = 0.20,
     maximum_translation_m: float = 0.025,
 ):
-    """Move measured right contacts baseward before the force-backed close."""
+    """Plan a measured handle-tangent right recenter without moving the prior."""
 
     from judo_isaaclab.put_pot import YAM_FINGER_PAD_AXIS_LENGTH_M
 
@@ -879,15 +879,20 @@ def _measured_right_dual_contact_pad_balance(
         failure.get("attempt_62_first_right_dual_force_pad_fractions", []),
         dtype=np.float64,
     )
+    handle_normal = np.asarray(
+        failure.get("attempt_63_runtime_handle_normal_world", []),
+        dtype=np.float64,
+    )
     if (
         diagnosis.get("lane_id") != lane_id
-        or diagnosis.get("trace_sha256") != _sha256(trace_source)
+        or failure.get("attempt_62_trace_sha256") != _sha256(trace_source)
         or failure.get("attempt_62_first_right_dual_force_program_step")
         != int(sample_step)
         or failure.get("classification")
-        != "right_postclosure_pivot_exceeds_remaining_pre_peer_motion"
+        != "right_raw_pad_axis_precontact_translation_leaves_handle_surface"
         or expected_forces.shape != (2,)
         or expected_fractions.shape != (2,)
+        or handle_normal.shape != (3,)
     ):
         raise ValueError("right pad balance diagnosis does not own the trace sample")
     with np.load(trace_source, allow_pickle=False) as trace:
@@ -937,14 +942,22 @@ def _measured_right_dual_contact_pad_balance(
     axes /= axis_norms[:, None]
     mean_axis = np.mean(axes, axis=0)
     mean_axis_norm = float(np.linalg.norm(mean_axis))
-    if mean_axis_norm <= 1.0e-9:
-        raise ValueError("right pad balance mean axis is degenerate")
+    handle_normal_norm = float(np.linalg.norm(handle_normal))
+    if mean_axis_norm <= 1.0e-9 or handle_normal_norm <= 1.0e-9:
+        raise ValueError("right pad balance measurement axes are degenerate")
     mean_axis /= mean_axis_norm
+    handle_normal /= handle_normal_norm
+    tangent_axis = mean_axis - float(np.dot(mean_axis, handle_normal)) * handle_normal
+    tangent_projection_gain = float(np.linalg.norm(tangent_axis))
+    if tangent_projection_gain <= 1.0e-9:
+        raise ValueError("right pad balance handle tangent is degenerate")
+    tangent_axis /= tangent_projection_gain
     applied_fraction_delta = float(target_weak_pad_fraction - fractions[weak])
     translation = (
         -applied_fraction_delta
         * float(YAM_FINGER_PAD_AXIS_LENGTH_M)
-        * mean_axis
+        / tangent_projection_gain
+        * tangent_axis
     )
     translation_norm = float(np.linalg.norm(translation))
     predicted = fractions + applied_fraction_delta
@@ -956,11 +969,9 @@ def _measured_right_dual_contact_pad_balance(
         )
     ):
         raise ValueError("right pad balance exceeds its unchanged geometry bounds")
-    corrected = grasp.copy()
-    corrected[:3] += translation
-    return corrected, {
+    return grasp.copy(), {
         "enabled": True,
-        "mechanism": "measured_right_dual_contact_baseward_pad_balance",
+        "mechanism": "measured_right_open_jaw_handle_tangent_pad_balance",
         "trace": {
             "path": str(trace_source),
             "sample_step": int(sample_step),
@@ -979,14 +990,22 @@ def _measured_right_dual_contact_pad_balance(
         "predicted_pad_fractions": predicted.tolist(),
         "minimum_pad_fraction_margin": float(minimum_pad_fraction_margin),
         "mean_tip_to_base_axis_world": mean_axis.tolist(),
-        "translation_world_m": translation.tolist(),
-        "translation_norm_m": translation_norm,
+        "handle_normal_world": handle_normal.tolist(),
+        "handle_tangent_axis_world": tangent_axis.tolist(),
+        "tangent_projection_gain": tangent_projection_gain,
+        "planned_tangent_translation_world_m": translation.tolist(),
+        "planned_tangent_translation_norm_m": translation_norm,
         "maximum_translation_m": float(maximum_translation_m),
         "bound_margin_m": float(maximum_translation_m - translation_norm),
-        "orientation_unchanged": bool(np.array_equal(corrected[3:], grasp[3:])),
+        "planned_handle_normal_component_m": float(
+            np.dot(translation, handle_normal)
+        ),
+        "orientation_unchanged": True,
         "collision_clear_pregrasp_preserved": True,
-        "grasp_translation_applied": True,
+        "grasp_translation_applied": False,
         "pregrasp_translation_applied": False,
+        "source_mapped_wrist_prior_unchanged": True,
+        "defer_closure_until_observed_target": True,
         "correction_is_force_free": True,
     }
 
@@ -1639,8 +1658,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-right-quality-precontact-pad-balance-trace",
         help=(
             "Pair-lane complete failed trace containing one dual-force right "
-            "sample used to move the mapped right grasp baseward along the "
-            "measured pad axis before contact."
+            "sample used to bound a live handle-tangent right-pad recenter; "
+            "the mapped wrist prior remains unchanged."
         ),
     )
     parser.add_argument(
@@ -4880,19 +4899,11 @@ def main(argv: list[str] | None = None) -> None:
                         minimum_pad_fraction_margin=float(
                             quality_config.grasp["minimum_pad_fraction_margin"]
                         ),
-                        target_weak_pad_fraction=0.25,
+                        target_weak_pad_fraction=0.20,
                         maximum_translation_m=float(args.collision_clearance_m),
                     )
-                    local_mpc_right_contact_prior_local = compose_marker_pose(
-                        calibration_pot_inverse,
-                        desired_right_source_contact_wrist,
-                    )
-                    right_predicted_fractions = np.asarray(
-                        right_precontact_pad_balance["predicted_pad_fractions"],
-                        dtype=np.float64,
-                    )
                     right_precontact_pad_balance[
-                        "corrected_target_wrist_pose"
+                        "source_mapped_target_wrist_pose_unchanged"
                     ] = (
                         desired_right_source_contact_wrist.tolist()
                     )
@@ -6156,8 +6167,14 @@ def main(argv: list[str] | None = None) -> None:
                                     and args.target_handle_local_depth_guarded_intercept
                                 ),
                                 depth_guard_use_handle_contact_normal=bool(
-                                    active_arm == "left"
-                                    and args.target_left_quality_handle_normal_depth_guard
+                                    (
+                                        active_arm == "left"
+                                        and args.target_left_quality_handle_normal_depth_guard
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and right_precontact_pad_balance_requested
+                                    )
                                 ),
                                 depth_guard_alignment_streak=(
                                     local_mpc_left_depth_guard_alignment_streak
@@ -6177,8 +6194,14 @@ def main(argv: list[str] | None = None) -> None:
                                     and args.target_handle_local_contact_fraction_recenter
                                 ),
                                 contact_recenter_use_handle_tangent=bool(
-                                    active_arm == "left"
-                                    and args.target_left_quality_handle_tangent_contact_recenter
+                                    (
+                                        active_arm == "left"
+                                        and args.target_left_quality_handle_tangent_contact_recenter
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and right_precontact_pad_balance_requested
+                                    )
                                 ),
                                 contact_recenter_preserve_transverse_centering=bool(
                                     active_arm == "left"
@@ -6193,6 +6216,22 @@ def main(argv: list[str] | None = None) -> None:
                                         active_arm == "right"
                                         and args.target_right_quality_geometric_preseat
                                     )
+                                ),
+                                allow_committed_handle_tangent_prestage=bool(
+                                    active_arm == "right"
+                                    and right_precontact_pad_balance_requested
+                                ),
+                                committed_handle_tangent_target_margin=(
+                                    0.20
+                                    if active_arm == "right"
+                                    and right_precontact_pad_balance_requested
+                                    else None
+                                ),
+                                committed_handle_tangent_maximum_total_m=(
+                                    0.020
+                                    if active_arm == "right"
+                                    and right_precontact_pad_balance_requested
+                                    else None
                                 ),
                                 allow_bounded_closure_commit=bool(
                                     (
@@ -8541,6 +8580,18 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "right_measured_precontact_pad_balance": (
                         right_precontact_pad_balance
+                    ),
+                    "right_uses_handle_tangent_surface_recenter": bool(
+                        right_precontact_pad_balance_requested
+                    ),
+                    "right_source_mapped_wrist_prior_unchanged": bool(
+                        right_precontact_pad_balance_requested
+                    ),
+                    "right_committed_handle_tangent_target_margin": (
+                        0.20 if right_precontact_pad_balance_requested else None
+                    ),
+                    "right_committed_handle_tangent_maximum_total_m": (
+                        0.020 if right_precontact_pad_balance_requested else None
                     ),
                     "right_uses_dual_force_pad_margin_pivot": bool(
                         args.target_right_quality_postclosure_force_settle

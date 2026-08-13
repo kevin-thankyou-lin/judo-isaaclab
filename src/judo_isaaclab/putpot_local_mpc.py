@@ -367,6 +367,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "bounded_closure_priority_active",
             "preclosure_geometric_prestage_enabled",
             "preclosure_geometric_prestage_active",
+            "committed_handle_tangent_prestage_enabled",
+            "committed_handle_tangent_prestage_eligible",
+            "committed_handle_tangent_target_margin",
+            "committed_handle_tangent_maximum_total_m",
             "preclosure_geometric_uses_raw_pad_axis",
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
@@ -376,6 +380,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "protected_pad_fraction_margin",
             "acceptance_pad_fraction_margin",
             "requested_translation_m",
+            "fraction_projection_gain",
             "executed_translation_m",
             "budgeted_axial_translation_world_m",
             "retained_transverse_translation_world_m",
@@ -492,6 +497,9 @@ def handle_local_mpc_step(
     contact_recenter_use_handle_tangent: bool = False,
     contact_recenter_preserve_transverse_centering: bool = False,
     contact_recenter_preserve_bounded_closure: bool = False,
+    allow_committed_handle_tangent_prestage: bool = False,
+    committed_handle_tangent_target_margin: float | None = None,
+    committed_handle_tangent_maximum_total_m: float | None = None,
     allow_bounded_closure_commit: bool = False,
     closure_committed: bool = False,
     pause_committed_closure_on_dual_force_backing: bool = False,
@@ -537,6 +545,32 @@ def handle_local_mpc_step(
         raise ValueError(
             "dual-force pivot target margin must preserve the configured "
             "acceptance margin and remain below 0.5"
+        )
+    if allow_committed_handle_tangent_prestage and not (
+        contact_fraction_recenter
+        and contact_recenter_use_handle_tangent
+        and contact_recenter_preserve_bounded_closure
+        and depth_guard_use_handle_contact_normal
+        and allow_bounded_closure_commit
+        and require_geometric_preseat_for_closure
+    ):
+        raise ValueError(
+            "committed handle-tangent prestage requires tangent recentering, "
+            "bounded closure commitment, and geometric preseat"
+        )
+    if allow_committed_handle_tangent_prestage and (
+        committed_handle_tangent_target_margin is None
+        or committed_handle_tangent_maximum_total_m is None
+        or not config.minimum_pad_fraction_margin
+        <= committed_handle_tangent_target_margin
+        < 0.5
+        or not config.maximum_contact_recenter_total_m
+        <= committed_handle_tangent_maximum_total_m
+        <= 0.025
+    ):
+        raise ValueError(
+            "committed handle-tangent prestage requires a bounded target "
+            "margin and total translation"
         )
     pot = _pose(observed_pot_pose, "observed_pot_pose")
     handle = _pose(observed_handle_contact_frame, "observed_handle_contact_frame")
@@ -605,11 +639,20 @@ def handle_local_mpc_step(
     # has physically started, retain that handle frame across transient force
     # dropouts until guard release.  Otherwise the axis can snap back to the
     # pad frame for one step and turn a tangential command inward again.
+    finite_geometric_intersections = np.isfinite(fractions)
+    committed_handle_tangent_geometric_observation = bool(
+        allow_committed_handle_tangent_prestage
+        and closure_committed
+        and np.any(finite_geometric_intersections)
+    )
     handle_contact_normal_latched = bool(
         depth_guard_use_handle_contact_normal
         and contact_fraction_recenter
         and contact_recenter_use_handle_tangent
-        and contact_recenter_total_m > 0.0
+        and (
+            contact_recenter_total_m > 0.0
+            or committed_handle_tangent_geometric_observation
+        )
         and not depth_guard_released
     )
     # A finite pad intersection immediately after force-backed recentering is
@@ -617,14 +660,17 @@ def handle_local_mpc_step(
     # dropout.  ``contacting`` remains unchanged and is still the sole source
     # for force-backed margin, latch, closure, and acceptance decisions.
     transient_geometric_contacting = bool(
-        handle_contact_normal_latched
-        and not physical_contact_observed
-    ) & np.isfinite(fractions)
+        handle_contact_normal_latched and not physical_contact_observed
+    ) & finite_geometric_intersections
     control_contacting = contacting | transient_geometric_contacting
     control_contact_observed = bool(np.any(control_contacting))
     use_contact_normal_depth_axis = bool(
         depth_guard_use_handle_contact_normal
-        and (physical_contact_observed or handle_contact_normal_latched)
+        and (
+            physical_contact_observed
+            or handle_contact_normal_latched
+            or committed_handle_tangent_geometric_observation
+        )
     )
     depth_guard_axis = (
         handle_contact_normal if use_contact_normal_depth_axis else mean_pad_axis
@@ -749,7 +795,7 @@ def handle_local_mpc_step(
         and np.linalg.norm(rotation_residual)
         <= config.closure_rotation_tolerance_rad
     )
-    finite_pad_intersections = np.isfinite(fractions)
+    finite_pad_intersections = finite_geometric_intersections
     finite_interior_pad_intersections = bool(
         np.any(
             finite_pad_intersections
@@ -809,18 +855,30 @@ def handle_local_mpc_step(
         and pot_motion_ok
         and peer_margin_ok
     )
+    committed_handle_tangent_prestage_eligible = bool(
+        allow_committed_handle_tangent_prestage
+        and closure_committed
+        and np.any(finite_pad_intersections)
+        and np.count_nonzero(forces >= config.minimum_force_n) < 2
+        and pot_motion_ok
+        and peer_margin_ok
+    )
     # Attempt 53 first authorized closure while the only finite pad
     # intersection was still at fraction -0.0229 and the pot was unloaded.
     # Expose that geometric intersection to the existing bounded recenter only
     # once the ordinary closure pose gate is met.  A measured recenter response
     # then latches this open-jaw prestage even if the tangent move perturbs the
     # pose residual.
-    if preclosure_geometric_prestage_eligible:
+    if (
+        preclosure_geometric_prestage_eligible
+        or committed_handle_tangent_prestage_eligible
+    ):
         control_contacting = control_contacting | finite_pad_intersections
         control_contact_observed = bool(np.any(control_contacting))
     preclosure_geometric_uses_raw_pad_axis = bool(
         preclosure_geometric_prestage_eligible
         and not physical_contact_observed
+        and not committed_handle_tangent_prestage_eligible
     )
     contact_fraction_axis_world = (
         _unit(
@@ -862,6 +920,7 @@ def handle_local_mpc_step(
     if (
         pre_release_margin_protection_enabled
         or preclosure_geometric_prestage_eligible
+        or committed_handle_tangent_prestage_eligible
     ):
         # A full transverse command can consume pad-edge margin before its
         # effect is visible on the next observation.  Maintain one maximum
@@ -873,6 +932,10 @@ def handle_local_mpc_step(
             config.minimum_pad_fraction_margin
             + config.maximum_translation_step_m
             / active_pad_fraction_axis_extent_m,
+        )
+    if committed_handle_tangent_prestage_eligible:
+        protected_pad_fraction_margin = float(
+            committed_handle_tangent_target_margin
         )
     contact_fraction_delta = 0.0
     if control_contact_observed and np.all(
@@ -894,8 +957,20 @@ def handle_local_mpc_step(
                 contact_fraction_delta = float(
                     max(fraction_corrections, key=abs)
                 )
+    contact_recenter_fraction_projection_gain = float(
+        abs(np.dot(contact_fraction_axis_world, contact_recenter_axis_world))
+    )
     requested_recenter_translation_m = float(
-        contact_fraction_delta * active_pad_fraction_axis_extent_m
+        contact_fraction_delta
+        * active_pad_fraction_axis_extent_m
+        / (
+            contact_recenter_fraction_projection_gain
+            if (
+                committed_handle_tangent_prestage_eligible
+                and surface_tangent_axis_valid
+            )
+            else 1.0
+        )
     )
     pre_release_margin_protection_active = bool(
         pre_release_margin_protection_enabled
@@ -903,16 +978,23 @@ def handle_local_mpc_step(
         and active_margin_ok
     )
     effective_maximum_recenter_total_m = float(
-        preclosure_geometric_maximum_total_m
-        if preclosure_geometric_prestage_eligible
-        else config.maximum_contact_recenter_total_m
+        float(committed_handle_tangent_maximum_total_m)
+        if committed_handle_tangent_prestage_eligible
+        else (
+            preclosure_geometric_maximum_total_m
+            if preclosure_geometric_prestage_eligible
+            else config.maximum_contact_recenter_total_m
+        )
     )
     remaining_recenter_m = max(
         0.0,
         effective_maximum_recenter_total_m - contact_recenter_total_m,
     )
     if (
-        preclosure_geometric_prestage_eligible
+        (
+            preclosure_geometric_prestage_eligible
+            or committed_handle_tangent_prestage_eligible
+        )
         and remaining_recenter_m
         <= PRECLOSURE_GEOMETRIC_BUDGET_EXHAUSTION_TOLERANCE_M
     ):
@@ -935,6 +1017,7 @@ def handle_local_mpc_step(
             not active_margin_ok
             or pre_release_margin_protection_active
             or preclosure_geometric_prestage_eligible
+            or committed_handle_tangent_prestage_eligible
         )
         and contact_fraction_delta != 0.0
         and remaining_recenter_m > 0.0
@@ -973,7 +1056,11 @@ def handle_local_mpc_step(
         )
     )
     preclosure_geometric_prestage_active = bool(
-        preclosure_geometric_prestage_eligible and contact_recenter_active
+        (
+            preclosure_geometric_prestage_eligible
+            or committed_handle_tangent_prestage_eligible
+        )
+        and contact_recenter_active
     )
     dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
     pad_edge_margins = np.minimum(fractions, 1.0 - fractions)
@@ -1141,7 +1228,16 @@ def handle_local_mpc_step(
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
     elif (
-        preclosure_geometric_prestage_eligible
+        committed_handle_tangent_prestage_eligible
+        and contact_fraction_delta != 0.0
+        and not surface_tangent_axis_valid
+    ):
+        fail_reason = "committed_handle_tangent_axis_degenerate"
+    elif (
+        (
+            preclosure_geometric_prestage_eligible
+            or committed_handle_tangent_prestage_eligible
+        )
         and contact_fraction_delta != 0.0
         and remaining_recenter_m <= 1.0e-12
     ):
@@ -1553,6 +1649,18 @@ def handle_local_mpc_step(
             "preclosure_geometric_prestage_active": (
                 preclosure_geometric_prestage_active
             ),
+            "committed_handle_tangent_prestage_enabled": bool(
+                allow_committed_handle_tangent_prestage
+            ),
+            "committed_handle_tangent_prestage_eligible": (
+                committed_handle_tangent_prestage_eligible
+            ),
+            "committed_handle_tangent_target_margin": (
+                committed_handle_tangent_target_margin
+            ),
+            "committed_handle_tangent_maximum_total_m": (
+                committed_handle_tangent_maximum_total_m
+            ),
             "preclosure_geometric_uses_raw_pad_axis": (
                 preclosure_geometric_uses_raw_pad_axis
             ),
@@ -1572,6 +1680,9 @@ def handle_local_mpc_step(
                 config.minimum_pad_fraction_margin
             ),
             "requested_translation_m": requested_recenter_translation_m,
+            "fraction_projection_gain": (
+                contact_recenter_fraction_projection_gain
+            ),
             "executed_translation_m": (
                 reported_recenter_translation_m
             ),

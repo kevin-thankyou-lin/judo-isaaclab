@@ -309,13 +309,19 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
                 "trace_sha256": trace_sha256,
                 "earliest_causal_failure": {
                     "classification": (
-                        "right_postclosure_pivot_exceeds_remaining_pre_peer_motion"
+                        "right_raw_pad_axis_precontact_translation_leaves_handle_surface"
                     ),
+                    "attempt_62_trace_sha256": trace_sha256,
                     "attempt_62_first_right_dual_force_program_step": 0,
                     "attempt_62_first_right_dual_force_forces_n": forces.tolist(),
                     "attempt_62_first_right_dual_force_pad_fractions": (
                         fractions.tolist()
                     ),
+                    "attempt_63_runtime_handle_normal_world": [
+                        0.26815366,
+                        -0.96219699,
+                        -0.04765038,
+                    ],
                 },
             }
         ),
@@ -330,20 +336,26 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
         lane_id=lane_id,
         minimum_force_n=1.0,
         minimum_pad_fraction_margin=0.15,
-        target_weak_pad_fraction=0.25,
+        target_weak_pad_fraction=0.20,
         maximum_translation_m=0.025,
     )
     assert receipt["weak_finger_index"] == 0
     assert receipt["strong_finger_index"] == 1
     assert receipt["predicted_pad_fractions"] == pytest.approx(
-        [0.25, 0.481503]
+        [0.20, 0.431503]
     )
-    assert receipt["translation_norm_m"] == pytest.approx(0.017938, abs=1.0e-6)
-    assert receipt["translation_norm_m"] < receipt["maximum_translation_m"]
+    assert receipt["planned_tangent_translation_norm_m"] == pytest.approx(
+        0.0174211, abs=1.0e-6
+    )
+    assert (
+        receipt["planned_tangent_translation_norm_m"]
+        < receipt["maximum_translation_m"]
+    )
+    assert abs(receipt["planned_handle_normal_component_m"]) < 1.0e-12
     assert receipt["orientation_unchanged"]
     assert receipt["collision_clear_pregrasp_preserved"]
     np.testing.assert_array_equal(corrected[3:], grasp[3:])
-    assert not np.array_equal(corrected, grasp)
+    np.testing.assert_array_equal(corrected, grasp)
     with pytest.raises(ValueError, match="unchanged geometry bounds"):
         _measured_right_dual_contact_pad_balance(
             grasp,
@@ -353,7 +365,7 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
             lane_id=lane_id,
             minimum_force_n=1.0,
             minimum_pad_fraction_margin=0.15,
-            target_weak_pad_fraction=0.25,
+            target_weak_pad_fraction=0.20,
             maximum_translation_m=0.01,
         )
 
