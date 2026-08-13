@@ -350,6 +350,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
         "stable_support_steps": 180,
+        "target_branch_rank": 1,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -373,6 +374,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         0.5235987755982988
     )
     assert float(command[command.index("--branch-support-fraction") + 1]) == 0.75
+    assert command[command.index("--target-branch-rank") + 1] == "1"
     assert command[command.index("--stable-support-steps") + 1] == "180"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
@@ -385,7 +387,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
-    assert "--target-branch-rank" not in command
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
     with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
@@ -482,7 +483,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     with pytest.raises(ValueError, match="branch roll offset"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"target_branch_rank": 2}))
-    with pytest.raises(ValueError, match="unsupported repair candidate"):
+    with pytest.raises(ValueError, match="two middle-row branches"):
         campaign._repair_strategy(2)
 
 
