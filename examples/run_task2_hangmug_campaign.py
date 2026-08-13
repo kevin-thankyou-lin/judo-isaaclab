@@ -163,6 +163,12 @@ def _guarded(attempt: Path, workload: list[str]) -> list[str]:
     return [str(GUARD), str(_steady_state_seconds()), str(attempt / "replay.log"), *workload]
 
 
+def _fixed_point_cli_float(value: float) -> str:
+    """Keep negative sub-millimeter values from looking like CLI options."""
+
+    return format(float(value), ".17f")
+
+
 def _classification_command(index: int, attempt: Path) -> list[str]:
     workload = _common_workload(index, attempt)
     workload[workload.index("--device"):workload.index("--device")] = [
@@ -222,7 +228,7 @@ def _repair_command(
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
-                *map(str, strategy["handover_target_offset_m"]),
+                *map(_fixed_point_cli_float, strategy["handover_target_offset_m"]),
             ])
         if "handover_target_local_pitch_rad" in strategy:
             arguments.extend([
