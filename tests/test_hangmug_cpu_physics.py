@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,3 +104,20 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
     assert trace["left_grasp"].tolist() == [True, False]
     assert trace["right_grasp"].tolist() == [False, True]
     assert trace["stage2_latched"].tolist() == [False, True]
+
+
+def test_evidence_runner_disables_the_unused_internal_hdf5_recorder():
+    path = Path(__file__).parents[1] / "examples/run_hangmug_skill_program.py"
+    tree = ast.parse(path.read_text())
+    environment_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_task_environment"
+    ]
+
+    assert len(environment_calls) == 1
+    keywords = {keyword.arg: keyword.value for keyword in environment_calls[0].keywords}
+    value = keywords["enable_internal_hdf5_recorder"]
+    assert isinstance(value, ast.Constant) and value.value is False

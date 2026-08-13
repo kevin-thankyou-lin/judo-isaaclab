@@ -1561,6 +1561,7 @@ def main() -> None:
             enable_gripper_grasp_clamp=False,
             enable_grasp_ray_viz=False,
             check_gripper_release_for_hang=True,
+            enable_internal_hdf5_recorder=False,
         )
         physics_device = _physics_device_receipt(
             args.device,
