@@ -3540,6 +3540,10 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_right_depth_guard_alignment_streak = 0
         local_mpc_right_depth_guard_released = False
         local_mpc_right_contact_recenter_total_m = 0.0
+        local_mpc_pending_recenter_measurements = {
+            "left": None,
+            "right": None,
+        }
         local_mpc_fail_closed = False
         local_mpc_fail_reason = None
         local_mpc_last_control_vectors_world = {
@@ -3949,7 +3953,42 @@ def main(argv: list[str] | None = None) -> None:
                             handle_local_bootstrap_active,
                             handle_local_mpc_active,
                             handle_local_mpc_step,
+                            realized_contact_recenter_displacement_m,
                         )
+
+                        for measured_arm in ("left", "right"):
+                            pending_measurement = (
+                                local_mpc_pending_recenter_measurements[
+                                    measured_arm
+                                ]
+                            )
+                            if pending_measurement is None:
+                                continue
+                            realized_recenter_m = (
+                                realized_contact_recenter_displacement_m(
+                                    pending_measurement["wrist_position_m"],
+                                    np.asarray(
+                                        samples[-1][
+                                            f"{measured_arm}_eef_pose"
+                                        ],
+                                        dtype=np.float64,
+                                    )[:3],
+                                    pending_measurement[
+                                        "translation_world_m"
+                                    ],
+                                )
+                            )
+                            if measured_arm == "left":
+                                local_mpc_left_contact_recenter_total_m += (
+                                    realized_recenter_m
+                                )
+                            else:
+                                local_mpc_right_contact_recenter_total_m += (
+                                    realized_recenter_m
+                                )
+                            local_mpc_pending_recenter_measurements[
+                                measured_arm
+                            ] = None
 
                         right_bootstrap_active = bool(
                             args.target_right_handle_local_mpc_bootstrap
@@ -4202,6 +4241,25 @@ def main(argv: list[str] | None = None) -> None:
                                     "receipt": local_command.frame_receipt,
                                 }
                             )
+                            if local_command.frame_receipt[
+                                "contact_fraction_recenter"
+                            ]["active"]:
+                                local_mpc_pending_recenter_measurements[
+                                    active_arm
+                                ] = {
+                                    "wrist_position_m": np.asarray(
+                                        samples[-1][
+                                            f"{active_arm}_eef_pose"
+                                        ],
+                                        dtype=np.float64,
+                                    )[:3].copy(),
+                                    "translation_world_m": np.asarray(
+                                        local_command.frame_receipt[
+                                            "executed_control"
+                                        ]["translation_world_m"],
+                                        dtype=np.float64,
+                                    ).copy(),
+                                }
                             if active_arm == "right":
                                 local_mpc_right_contact_window_step += 1
                                 local_mpc_right_depth_guard_alignment_streak = (
@@ -6299,6 +6357,13 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,
+                    "budget_accounting": (
+                        "measured_positive_axial_wrist_displacement"
+                    ),
+                    "realized_total_m": {
+                        "left": local_mpc_left_contact_recenter_total_m,
+                        "right": local_mpc_right_contact_recenter_total_m,
+                    },
                     "executed_total_m": {
                         "left": local_mpc_left_contact_recenter_total_m,
                         "right": local_mpc_right_contact_recenter_total_m,

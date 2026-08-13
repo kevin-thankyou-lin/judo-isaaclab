@@ -173,6 +173,36 @@ def _unit(value: np.ndarray, name: str) -> np.ndarray:
     return value / norm
 
 
+def realized_contact_recenter_displacement_m(
+    previous_wrist_position_m: Any,
+    current_wrist_position_m: Any,
+    preceding_translation_world_m: Any,
+) -> float:
+    """Measure the realized positive motion from one recenter command.
+
+    The controller budget is a physical swept-motion bound, so it must not be
+    charged for Cartesian motion that the joint-space IK did not realize.  Cap
+    the measured projection by the preceding bounded command to reject
+    unrelated settling or overshoot.
+    """
+
+    previous = _vector(previous_wrist_position_m, (3,), "previous wrist position")
+    current = _vector(current_wrist_position_m, (3,), "current wrist position")
+    command = _vector(
+        preceding_translation_world_m,
+        (3,),
+        "preceding recenter translation",
+    )
+    command_norm = float(np.linalg.norm(command))
+    if command_norm <= 1.0e-12:
+        return 0.0
+    positive_projection = max(
+        0.0,
+        float(np.dot(current - previous, command / command_norm)),
+    )
+    return min(positive_projection, command_norm)
+
+
 def _axis_angle(actual: np.ndarray, target: np.ndarray) -> np.ndarray:
     inverse_actual = actual * np.asarray([1.0, -1.0, -1.0, -1.0])
     delta = quaternion_multiply(target, inverse_actual)
@@ -311,6 +341,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         }
         and set(contact_fraction_recenter)
         == {
+            "budget_accounting",
             "enabled",
             "active",
             "finger_tip_to_base_axis_world",
@@ -559,10 +590,11 @@ def handle_local_mpc_step(
             or next_depth_guard_released
         )
     )
-    next_contact_recenter_total_m = float(
-        contact_recenter_total_m
-        + (abs(executed_recenter_translation_m) if contact_recenter_active else 0.0)
-    )
+    # ``contact_recenter_total_m`` is the realized positive axial wrist motion
+    # accumulated by the runtime from the preceding commands.  Do not charge
+    # this physical-motion budget for a command before its realization is
+    # observed on the next control frame.
+    next_contact_recenter_total_m = float(contact_recenter_total_m)
     fail_reason = None
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
@@ -690,6 +722,7 @@ def handle_local_mpc_step(
             "released": next_depth_guard_released,
         },
         "contact_fraction_recenter": {
+            "budget_accounting": "measured_positive_axial_wrist_displacement",
             "enabled": bool(contact_fraction_recenter),
             "active": contact_recenter_active,
             "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),

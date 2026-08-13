@@ -10,6 +10,7 @@ from judo_isaaclab.putpot_local_mpc import (
     handle_local_mpc_active,
     handle_local_mpc_frame_receipt_complete,
     handle_local_mpc_step,
+    realized_contact_recenter_displacement_m,
     source_prior_weight,
 )
 
@@ -107,7 +108,12 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     assert recenter["contact_fraction_delta"] == pytest.approx(0.146)
     assert recenter["requested_translation_m"] == pytest.approx(0.009928)
     assert recenter["executed_translation_m"] == pytest.approx(0.001)
-    assert command.contact_recenter_total_m == pytest.approx(0.001)
+    assert command.contact_recenter_total_m == pytest.approx(0.0)
+    assert recenter["total_translation_m"] == pytest.approx(0.0)
+    assert (
+        recenter["budget_accounting"]
+        == "measured_positive_axial_wrist_displacement"
+    )
     assert np.linalg.norm(
         command.frame_receipt["executed_control"]["translation_world_m"]
     ) == pytest.approx(0.001)
@@ -119,6 +125,36 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     )
     np.testing.assert_allclose(contact_pad_axis, [0.0, 0.0, 1.0])
     assert np.dot(translation, contact_pad_axis) == pytest.approx(-0.001)
+
+    realized = realized_contact_recenter_displacement_m(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, -0.0003],
+        translation,
+    )
+    assert realized == pytest.approx(0.0003)
+    assert realized_contact_recenter_displacement_m(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, -0.002],
+        translation,
+    ) == pytest.approx(0.001)
+    assert realized_contact_recenter_displacement_m(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0003],
+        translation,
+    ) == pytest.approx(0.0)
+
+    observed = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=21,
+            active_finger_forces_n=[0.0, 2.0],
+            active_pad_fractions=[np.nan, -0.046],
+        ),
+        contact_fraction_recenter=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        contact_recenter_total_m=realized,
+    )
+    assert not observed.fail_closed
+    assert observed.contact_recenter_total_m == pytest.approx(0.0003)
 
     exhausted = handle_local_mpc_step(
         **_inputs(
