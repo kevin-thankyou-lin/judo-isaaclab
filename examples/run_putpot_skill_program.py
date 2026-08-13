@@ -123,6 +123,14 @@ def _quality_left_first_local_mpc_enabled(
     )
 
 
+def _robot_arm_registry_key(semantic_arm: str) -> str:
+    """Map receipt-facing arm labels to the live YAM registry names."""
+
+    if semantic_arm not in {"left", "right"}:
+        raise ValueError("semantic arm must be left or right")
+    return f"{semantic_arm}_arm"
+
+
 def _translate_source_corridor_endpoints(
     desired_pregrasp, desired_grasp, static_precontact_receipt
 ):
@@ -3572,7 +3580,9 @@ def main(argv: list[str] | None = None) -> None:
             for arm in active_fraction_arms:
                 finger_axis_lengths = [
                     float(finger._tip_base_axis(env.device)[2].item())
-                    for finger in env.robot.arms[arm].end_effector.fingers
+                    for finger in env.robot.arms[
+                        _robot_arm_registry_key(arm)
+                    ].end_effector.fingers
                 ]
                 if not np.allclose(
                     finger_axis_lengths,

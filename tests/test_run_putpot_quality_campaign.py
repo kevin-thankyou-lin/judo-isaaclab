@@ -9,6 +9,7 @@ from run_putpot_skill_program import (
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
+    _robot_arm_registry_key,
     _source_contact_requires_acquisition_only,
     _source_left_first_requires_measured_corridor,
     _static_precontact_requires_acquisition_only,
@@ -121,6 +122,17 @@ def test_quality_local_mpc_requires_full_left_first_failed_trace_contract():
     acquisition_only = dict(required)
     acquisition_only["acquisition_only"] = True
     assert not _quality_left_first_local_mpc_enabled(**acquisition_only)
+
+
+def test_semantic_arm_labels_map_to_live_yam_registry_keys():
+    assert _robot_arm_registry_key("left") == "left_arm"
+    assert _robot_arm_registry_key("right") == "right_arm"
+    try:
+        _robot_arm_registry_key("peer")
+    except ValueError as error:
+        assert "left or right" in str(error)
+    else:
+        raise AssertionError("invalid semantic arm label was accepted")
 
 
 def test_measured_static_translation_moves_both_source_corridor_endpoints():
