@@ -222,7 +222,10 @@ def _repair_command(
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
-                *map(str, strategy["handover_target_offset_m"]),
+                *(
+                    f"{float(value):.12f}"
+                    for value in strategy["handover_target_offset_m"]
+                ),
             ])
         if "handover_target_local_pitch_rad" in strategy:
             arguments.extend([
