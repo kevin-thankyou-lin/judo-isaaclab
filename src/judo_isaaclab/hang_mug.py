@@ -521,6 +521,7 @@ def reanchor_branch_transport_contact(
     *,
     completed_waypoint: str = "left_release",
     uniform_post_release_return: bool = False,
+    post_release_return_orientation_delay_rows: int = 0,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -574,6 +575,9 @@ def reanchor_branch_transport_contact(
             trajectory.right_poses[direct_return],
             direct_return - release_end,
             uniform=uniform_post_release_return,
+            orientation_delay_rows=(
+                post_release_return_orientation_delay_rows
+            ),
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -599,6 +603,7 @@ class HangMugSkillProgram:
         self._initial_grippers = (self._left_gripper, self._right_gripper)
         self._waypoints: list[SkillWaypoint] = []
         self._uniform_pose_waypoints: set[str] = set()
+        self._pose_orientation_delay_rows: dict[str, int] = {}
 
     def _append(
         self,
@@ -927,6 +932,7 @@ class HangMugSkillProgram:
         settle_steps: int,
         opened: float = -0.0475,
         uniform_return: bool = False,
+        return_orientation_delay_rows: int = 0,
     ) -> None:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
@@ -953,6 +959,10 @@ class HangMugSkillProgram:
         )
         if uniform_return:
             self._uniform_pose_waypoints.add("post_release_return")
+        if return_orientation_delay_rows:
+            self._pose_orientation_delay_rows[
+                "post_release_return"
+            ] = return_orientation_delay_rows
         self._append(
             "stable_support",
             "stable_settle",
@@ -982,6 +992,9 @@ class HangMugSkillProgram:
                     waypoint.right_pose,
                     waypoint.steps,
                     uniform=waypoint.name in self._uniform_pose_waypoints,
+                    orientation_delay_rows=self._pose_orientation_delay_rows.get(
+                        waypoint.name, 0
+                    ),
                 )
             )
             fraction = np.linspace(1.0 / waypoint.steps, 1.0, waypoint.steps)

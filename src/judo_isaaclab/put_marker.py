@@ -159,17 +159,28 @@ def interpolate_poses(
     steps: int,
     *,
     uniform: bool = False,
+    orientation_delay_rows: int = 0,
 ) -> np.ndarray:
     """Cartesian interpolation including the target, excluding the start.
 
     The default quintic time law remains appropriate for contact-free motion.
     ``uniform`` retains the identical pose segment and endpoint while providing
-    immediate, bounded clearance along an already-screened retreat.
+    immediate, bounded clearance along an already-screened retreat.  A bounded
+    orientation delay can hold the starting rotation briefly while translation
+    begins, then complete the same shortest-arc rotation within the segment.
     """
     if steps < 1:
         raise ValueError("steps must be positive")
     start = _pose(start, "start")
     target = _pose(target, "target")
+    if (
+        isinstance(orientation_delay_rows, bool)
+        or not isinstance(orientation_delay_rows, int)
+        or not 0 <= orientation_delay_rows < steps
+    ):
+        raise ValueError("orientation delay rows must be an integer in [0, steps)")
+    if orientation_delay_rows and not uniform:
+        raise ValueError("orientation delay requires uniform interpolation")
     fraction = np.linspace(1.0 / steps, 1.0, steps)
     smooth = (
         fraction
@@ -178,7 +189,19 @@ def interpolate_poses(
     )
     result = np.empty((steps, 7), dtype=np.float64)
     result[:, :3] = start[:3] + smooth[:, None] * (target[:3] - start[:3])
-    result[:, 3:] = _slerp(start[3:], target[3:], smooth)
+    orientation_fraction = smooth
+    if orientation_delay_rows:
+        orientation_fraction = np.concatenate(
+            (
+                np.zeros(orientation_delay_rows, dtype=np.float64),
+                np.linspace(
+                    1.0 / (steps - orientation_delay_rows),
+                    1.0,
+                    steps - orientation_delay_rows,
+                ),
+            )
+        )
+    result[:, 3:] = _slerp(start[3:], target[3:], orientation_fraction)
     return result
 
 

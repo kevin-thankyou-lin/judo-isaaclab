@@ -47,6 +47,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
     "post_release_return_uniform_interpolation",
+    "post_release_return_orientation_delay_rows",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -190,6 +191,11 @@ def _repair_command(
         arguments.append("--require-broad-pad-contact")
     if strategy.get("post_release_return_uniform_interpolation"):
         arguments.append("--post-release-return-uniform-interpolation")
+    if strategy.get("post_release_return_orientation_delay_rows"):
+        arguments.extend([
+            "--post-release-return-orientation-delay-rows",
+            str(strategy["post_release_return_orientation_delay_rows"]),
+        ])
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -322,6 +328,7 @@ def _repair_strategy(index: int) -> dict:
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
         "post_release_return_uniform_interpolation",
+        "post_release_return_orientation_delay_rows",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -434,6 +441,25 @@ def _repair_strategy(index: int) -> dict:
                 "uniform post-release return requires direct choreography"
             )
         strategy["post_release_return_uniform_interpolation"] = True
+    if "post_release_return_orientation_delay_rows" in value:
+        delay = value["post_release_return_orientation_delay_rows"]
+        if (
+            isinstance(delay, bool)
+            or not isinstance(delay, int)
+            or not 1 <= delay <= 4
+        ):
+            raise ValueError(
+                "post-release return orientation delay must be an integer in [1, 4]"
+            )
+        if not value.get("post_release_return_uniform_interpolation"):
+            raise ValueError(
+                "post-release return orientation delay requires uniform interpolation"
+            )
+        if not direct_steps[1] or delay >= direct_steps[1]:
+            raise ValueError(
+                "post-release return orientation delay requires a longer direct return"
+            )
+        strategy["post_release_return_orientation_delay_rows"] = delay
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (

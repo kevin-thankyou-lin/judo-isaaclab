@@ -1488,6 +1488,69 @@ def test_uniform_post_release_return_preserves_direct_segment_and_clears_immedia
     )
 
 
+def test_uniform_return_can_delay_only_orientation_one_row_through_reanchor():
+    start = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    half_turn = np.asarray([0.5, -0.2, 0.3, 0.0, 0.0, 0.0, 1.0])
+    delayed = interpolate_poses(
+        start,
+        half_turn,
+        5,
+        uniform=True,
+        orientation_delay_rows=1,
+    )
+    np.testing.assert_allclose(delayed[:, :3], interpolate_poses(
+        start, half_turn, 5, uniform=True
+    )[:, :3])
+    np.testing.assert_allclose(delayed[0, 3:], start[3:])
+    np.testing.assert_allclose(delayed[-1], half_turn)
+    with pytest.raises(ValueError, match="requires uniform"):
+        interpolate_poses(start, half_turn, 5, orientation_delay_rows=1)
+
+    program = HangMugSkillProgram(_pose(), _pose(0.2, -0.7, 0.9))
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(_pose(0.2, -0.7, 0.9), _pose(), steps=2)
+    program.direct_rest_to_branch_insert(
+        _pose(0.7, -0.2, 0.95), half_turn, direct_steps=3, insert_steps=2,
+    )
+    program.release_and_return_to_rest(
+        half_turn,
+        _pose(0.2, -0.7, 0.9),
+        support_steps=2,
+        release_steps=2,
+        return_steps=5,
+        settle_steps=2,
+        uniform_return=True,
+        return_orientation_delay_rows=1,
+    )
+    trajectory = program.build()
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    adjusted = reanchor_branch_transport_contact(
+        trajectory,
+        _pose(0.05, -0.02, 0.03),
+        _pose(0.35, -0.25, 0.82),
+        _pose(0.425, -0.26, 0.865),
+        completed_waypoint="carrying_rest_observer",
+        uniform_post_release_return=True,
+        post_release_return_orientation_delay_rows=1,
+    )
+    expected = interpolate_poses(
+        adjusted.right_poses[release_end],
+        trajectory.right_poses[return_end],
+        5,
+        uniform=True,
+        orientation_delay_rows=1,
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[release_end + 1 : return_end + 1], expected
+    )
+    np.testing.assert_allclose(expected[0, 3:], adjusted.right_poses[release_end, 3:])
+    np.testing.assert_allclose(expected[-1], trajectory.right_poses[return_end])
+
+
 def test_direct_quality_contract_applies_support_offset_only_after_insertion():
     right_start = _pose(0.2, -0.7, 0.9)
     preinsert = _pose(0.7, -0.2, 0.95)
