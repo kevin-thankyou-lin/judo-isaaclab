@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -169,6 +170,22 @@ def test_task2_source_receipt_binds_actions_and_never_processed_actions(tmp_path
     changed = actions.copy()
     changed[1, 3] += 1
     assert not _direct_actions_exact(list(actions), TensorLike(changed))
+
+
+def test_evidence_runner_explicitly_disables_unused_internal_recorder():
+    runner = Path(__file__).parents[1] / "examples/run_hangmug_skill_program.py"
+    tree = ast.parse(runner.read_text())
+    create_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_task_environment"
+    ]
+    assert len(create_calls) == 1
+    keywords = {keyword.arg: keyword.value for keyword in create_calls[0].keywords}
+    assert isinstance(keywords["disable_internal_recorder"], ast.Constant)
+    assert keywords["disable_internal_recorder"].value is True
 
 
 def test_source_pick_prefix_is_exactly_aligned_and_physically_completed():
