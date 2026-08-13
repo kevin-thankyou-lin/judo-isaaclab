@@ -854,6 +854,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "closure resumes if force backing is lost."
         ),
     )
+    parser.add_argument(
+        "--target-left-handle-pad-balance-limit-m",
+        type=float,
+        help=(
+            "Pair-owned upper bound for the existing left-grasp one-finger "
+            "pivot. Valid only for strict quality left-first acquisition; "
+            "controller gains, contact gates, and the right grasp are unchanged."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1424,6 +1433,14 @@ def _build_skill(
                 target_parts.handle_axis,
                 predicted_imbalance,
             )
+            default_balance_limit = balance_limit
+            if (
+                arm == "left"
+                and args.target_left_handle_pad_balance_limit_m is not None
+            ):
+                balance_limit = float(
+                    args.target_left_handle_pad_balance_limit_m
+                )
             relative_balance = bounded_handle_pad_balance(
                 predicted_imbalance,
                 balance_limit,
@@ -1435,7 +1452,12 @@ def _build_skill(
                 "handle_side": int(side),
                 "pad_depth_m": pad_depth,
                 "jaw_center_offset_m": jaw_center_offset,
+                "default_balance_limit_m": default_balance_limit,
                 "balance_limit_m": balance_limit,
+                "pair_owned_balance_limit_override": bool(
+                    arm == "left"
+                    and args.target_left_handle_pad_balance_limit_m is not None
+                ),
                 "predicted_pad_imbalance_m": predicted_imbalance,
                 "relative_balance_m": relative_balance,
             }
@@ -2863,6 +2885,19 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "left dual-force closure stop requires bounded-closure commitment"
         )
+    if args.target_left_handle_pad_balance_limit_m is not None:
+        if not quality_left_first_local_mpc:
+            raise ValueError(
+                "left handle-pad balance authority requires strict quality "
+                "left-first handle-local MPC"
+            )
+        if (
+            not np.isfinite(args.target_left_handle_pad_balance_limit_m)
+            or args.target_left_handle_pad_balance_limit_m <= 0.0
+        ):
+            raise ValueError(
+                "left handle-pad balance authority must be finite and positive"
+            )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(

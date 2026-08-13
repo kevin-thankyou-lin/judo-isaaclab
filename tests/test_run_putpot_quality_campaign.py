@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
+    _parser,
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
     _offset_object_contact_frame,
@@ -27,6 +28,26 @@ from run_putpot_skill_program import (
 
 ROOT = Path(__file__).parents[1]
 CONFIG = ROOT / "configs/putpot_quality_wave_v1.json"
+
+
+def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
+    required = [
+        "--gear-repo", "gear",
+        "--source-dataset", "source.hdf5",
+        "--target-dataset", "target.hdf5",
+        "--objects-root", "objects",
+        "--mode", "skill",
+        "--trace-npz", "trace.npz",
+        "--result-json", "result.json",
+    ]
+    assert _parser(required).target_left_handle_pad_balance_limit_m is None
+    parsed = _parser(
+        required
+        + ["--target-left-handle-pad-balance-limit-m", "0.01819198772819174"]
+    )
+    assert parsed.target_left_handle_pad_balance_limit_m == pytest.approx(
+        0.01819198772819174
+    )
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():
