@@ -2692,9 +2692,6 @@ def main() -> None:
             camera_width=args.camera_width,
             camera_height=args.camera_height,
             image_downsample_factor=1,
-            # This runner writes its own hash-verified demo only after acceptance.
-            # Avoid IsaacLab's otherwise-unused shared default HDF5 recorder.
-            enable_internal_hdf5_recorder=False,
             enable_gripper_grasp_clamp=False,
             enable_grasp_ray_viz=False,
             disable_env_recorders=True,

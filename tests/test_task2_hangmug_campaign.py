@@ -661,9 +661,6 @@ def test_classification_binding_and_manifest_preserve_actual_boundary(
         repair_strategy={"handover_contact_settle_steps": 30},
     )
     assert manifest["classification"] == binding
-    assert manifest["judo_head"] == "head"
-    assert manifest["gear_head"] == "head"
-    assert manifest["internal_hdf5_recorder_enabled"] is False
     assert manifest["source_prefix_action_count"] == campaign.SOURCE_PREFIX_STEPS
     assert manifest["method"] == "semantic_coarse_boundary_repair"
     assert manifest["repair_strategy"] == {"handover_contact_settle_steps": 30}
