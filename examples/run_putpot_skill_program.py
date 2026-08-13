@@ -4683,9 +4683,18 @@ def main(argv: list[str] | None = None) -> None:
                             desired_pregrasp,
                             desired_grasp,
                             loaded_pad_interior_preseat,
-                            translate_pregrasp=False,
+                            translate_pregrasp=True,
                         )
                     )
+                    loaded_pad_interior_preseat[
+                        "pregrasp_translation_applied"
+                    ] = True
+                    loaded_pad_interior_preseat[
+                        "source_approach_vector_unchanged"
+                    ] = True
+                    loaded_pad_interior_preseat[
+                        "preseat_scheduled_in_force_free_corridor"
+                    ] = True
                     local_mpc_left_loaded_pad_interior_translation_local = (
                         np.asarray(
                             loaded_pad_interior_preseat[
