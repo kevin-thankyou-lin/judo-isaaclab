@@ -1030,6 +1030,38 @@ def _handover_contact_acquire_guard_receipt(
     }
 
 
+def _handover_contact_reference(nominal_right_contact, sample):
+    """Use an observed contact frame only after a broad assisted transfer.
+
+    Once the task manager has transferred fixed-joint support to a receiver
+    with bilateral interior-pad contact, moving the mug toward a scaled source
+    contact would disturb a better live grasp. Keep the nominal reference for
+    every other state so the existing translation and rotation bounds remain
+    authoritative for acquisition.
+    """
+    from judo_isaaclab.put_marker import _pose, compose_pose, inverse_pose
+
+    nominal = _pose(nominal_right_contact, "nominal right contact")
+    broad_receiver_transfer = bool(
+        not sample["grasp_assist_engaged"].get("left", False)
+        and sample["grasp_assist_engaged"].get("right", False)
+        and _sample_has_broad_pad_contact(sample, "right")
+    )
+    if not broad_receiver_transfer:
+        return nominal, {
+            "source": "scaled_source_nominal",
+            "broad_receiver_transfer": False,
+        }
+    reference = compose_pose(
+        inverse_pose(_pose(sample["mug_pose"], "observed mug pose")),
+        _pose(sample["right_eef_pose"], "observed right EEF pose"),
+    )
+    return reference, {
+        "source": "live_broad_receiver_contact",
+        "broad_receiver_transfer": True,
+    }
+
+
 def _handover_lift_guard_receipt(sample, *, phase: str) -> dict[str, object]:
     """Bind receiver lift entry to contact, then retain assist-backed support."""
     checks = {
@@ -1879,15 +1911,21 @@ def main() -> None:
                         reanchor_handover_contact_acquire,
                     )
 
+                    contact_reference, contact_reference_receipt = (
+                        _handover_contact_reference(
+                            nominal_right_contact, samples[-1]
+                        )
+                    )
                     trajectory, plan = reanchor_handover_contact_acquire(
                         trajectory,
-                        nominal_right_contact,
+                        contact_reference,
                         samples[-1]["mug_pose"],
                         samples[-1]["left_eef_pose"],
                         samples[-1]["right_eef_pose"],
                     )
                     handover_contact_acquire = {
                         **plan,
+                        "contact_reference": contact_reference_receipt,
                         "entry": entry,
                         "completion": None,
                         "passed": False,

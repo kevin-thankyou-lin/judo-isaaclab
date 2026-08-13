@@ -35,6 +35,7 @@ from run_hangmug_skill_program import (
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
+    _handover_contact_reference,
     _handover_lift_guard_receipt,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
@@ -1554,6 +1555,31 @@ def test_contact_acquire_entry_accepts_only_broad_transferred_receiver_support()
     receipt = _handover_contact_acquire_guard_receipt(sample, phase="entry")
     assert not receipt["passed"]
     assert not receipt["checks"]["giver_or_broad_receiver_assist_secure"]
+
+
+def test_contact_acquire_rebinds_only_to_broad_assisted_receiver():
+    nominal = _pose(0.01, 0.02, 0.03)
+    mug = _pose(0.4, -0.03, 0.79)
+    right = _pose(0.42, -0.15, 0.92)
+    sample = {
+        "mug_pose": mug,
+        "right_eef_pose": right,
+        "right_grasp": True,
+        "right_finger_forces_n": [6.13, 5.17],
+        "right_pad_fractions": [0.569, 0.168],
+        "grasp_assist_engaged": {"left": False, "right": True},
+    }
+    reference, receipt = _handover_contact_reference(nominal, sample)
+    assert receipt == {
+        "source": "live_broad_receiver_contact",
+        "broad_receiver_transfer": True,
+    }
+    assert compose_pose(mug, reference) == pytest.approx(right)
+
+    sample["right_pad_fractions"] = [0.569, 0.149]
+    reference, receipt = _handover_contact_reference(nominal, sample)
+    assert reference == pytest.approx(nominal)
+    assert receipt["source"] == "scaled_source_nominal"
 
 
 def test_receiver_lift_requires_target_and_follows_release():
