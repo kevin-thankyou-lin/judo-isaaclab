@@ -871,6 +871,15 @@ def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
             [[finger["pad_fraction"] for finger in fingers] for fingers in diagnostics],
             dtype=np.float32,
         )
+        for field in (
+            "contact_position",
+            "pad_tip_position",
+            "pad_base_position",
+        ):
+            result[f"{arm}_finger_{field}"] = np.asarray(
+                [[finger[field] for finger in fingers] for fingers in diagnostics],
+                dtype=np.float32,
+            )
     return result
 
 
@@ -1030,10 +1039,12 @@ def _handover_lift_guard_receipt(sample, *, phase: str) -> dict[str, object]:
 
 def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     import torch
+    from isaaclab.utils.math import quat_apply
     from run_putmarker_skill_program import _eef_pose
 
     left_grasp, right_grasp = env.robot.is_grasping()
     env_ids = torch.tensor([0], dtype=torch.long, device=env.scene.device)
+    scene_origin = env.scene.env_origins[0]
     gripper_contact_diagnostics = {}
     for arm_name in ("left_arm", "right_arm"):
         gripper = env.robot.arms[arm_name].end_effector
@@ -1046,6 +1057,26 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
             fraction, valid = finger.contact_pad_fraction("mug", env_ids)
             pad_valid = bool(valid[0].item())
             pad_fraction = float(fraction[0].item()) if pad_valid else float("nan")
+            filter_index = finger._filter_index("mug")
+            contact_position = torch.full(
+                (3,), float("nan"), dtype=torch.float32, device=env.scene.device
+            )
+            if filter_index >= 0 and finger._sensor.data.contact_pos_w is not None:
+                contact_position = (
+                    finger._sensor.data.contact_pos_w[0, 0, filter_index] - scene_origin
+                )
+            arm = env.scene[arm_name]
+            body_index = arm.data.body_names.index(finger.link)
+            finger_pose = arm.data.body_link_pose_w[0, body_index]
+            tip, axis_unit, axis_length = finger._tip_base_axis(env.scene.device)
+            pad_tip_position = (
+                finger_pose[:3] + quat_apply(finger_pose[3:], tip) - scene_origin
+            )
+            pad_base_position = (
+                finger_pose[:3]
+                + quat_apply(finger_pose[3:], tip + axis_unit * axis_length)
+                - scene_origin
+            )
             fingers.append(
                 {
                     "link": finger.link,
@@ -1056,6 +1087,9 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
                     "pad_in_band": bool(
                         pad_valid and pad_min <= pad_fraction <= pad_max
                     ),
+                    "contact_position": contact_position.detach().cpu().tolist(),
+                    "pad_tip_position": pad_tip_position.detach().cpu().tolist(),
+                    "pad_base_position": pad_base_position.detach().cpu().tolist(),
                 }
             )
         gripper_contact_diagnostics[arm_name.removesuffix("_arm")] = fingers

@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 
@@ -89,7 +90,10 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
                  arm: [
                      {"force_n": 0.0, "touching": False,
                       "pad_fraction": float("nan"), "pad_valid": False,
-                      "pad_in_band": False}
+                      "pad_in_band": False,
+                      "contact_position": [float("nan")] * 3,
+                      "pad_tip_position": [0.0, 0.0, 0.0],
+                      "pad_base_position": [0.0, 0.0, 0.068]}
                      for _ in range(2)
                  ]
                  for arm in ("left", "right")
@@ -101,9 +105,15 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
              **reset["gripper_contact_diagnostics"],
              "left": [
                  {"force_n": 1.5, "touching": True, "pad_fraction": 0.4,
-                  "pad_valid": True, "pad_in_band": True},
+                  "pad_valid": True, "pad_in_band": True,
+                  "contact_position": [1.0, 2.0, 3.0],
+                  "pad_tip_position": [0.0, 0.0, 0.0],
+                  "pad_base_position": [0.0, 0.0, 0.068]},
                  {"force_n": 2.0, "touching": True, "pad_fraction": 0.6,
-                  "pad_valid": True, "pad_in_band": True},
+                  "pad_valid": True, "pad_in_band": True,
+                  "contact_position": [4.0, 5.0, 6.0],
+                  "pad_tip_position": [0.1, 0.2, 0.3],
+                  "pad_base_position": [0.1, 0.2, 0.368]},
              ],
          }},
         {**reset, "right_grasp": True, "grasp_assist_engaged": {"right": True},
@@ -124,11 +134,18 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
     ))
     assert trace["left_finger_contact_force_n"].shape == (2, 2)
     assert trace["right_finger_pad_fraction"].shape == (2, 2)
+    assert trace["left_finger_contact_position"].shape == (2, 2, 3)
+    assert trace["right_finger_pad_tip_position"].shape == (2, 2, 3)
+    assert trace["left_finger_pad_base_position"].shape == (2, 2, 3)
     assert trace["left_finger_touching"].dtype == bool
     assert trace["left_finger_pad_in_band"].dtype == bool
     assert trace["left_finger_contact_force_n"][0].tolist() == pytest.approx([1.5, 2.0])
     assert trace["left_finger_pad_fraction"][0].tolist() == pytest.approx([0.4, 0.6])
     assert trace["left_finger_pad_in_band"][0].tolist() == [True, True]
+    np.testing.assert_allclose(
+        trace["left_finger_contact_position"][0],
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+    )
     assert trace["left_grasp"].tolist() == [True, False]
     assert trace["right_grasp"].tolist() == [False, True]
     assert trace["stage2_latched"].tolist() == [False, True]
