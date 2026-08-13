@@ -289,11 +289,22 @@ def _array_sha256(value: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def _json_scalar(value: object) -> object:
+    """Convert NumPy receipt scalars without changing their values."""
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(
+        f"Object of type {value.__class__.__name__} is not JSON serializable"
+    )
+
+
 def _write_json_atomic(path: str | os.PathLike[str], value: dict[str, object]) -> None:
     destination = Path(path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(
+        json.dumps(value, default=_json_scalar, indent=2, sort_keys=True) + "\n"
+    )
     os.replace(temporary, destination)
 
 
@@ -3843,7 +3854,11 @@ def main() -> None:
         )
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         _write_json_atomic(args.result_json, result)
-        print("HANGMUG_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
+        print(
+            "HANGMUG_FINAL="
+            + json.dumps(result, default=_json_scalar, sort_keys=True),
+            flush=True,
+        )
         if result["status"] != "passed":
             raise RuntimeError(f"acceptance checks failed: {acceptance}")
     except BaseException as error:

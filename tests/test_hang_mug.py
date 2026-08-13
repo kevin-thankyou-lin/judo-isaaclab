@@ -65,6 +65,7 @@ from run_hangmug_skill_program import (
     _trajectory_after,
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
+    _write_json_atomic,
 )
 
 
@@ -79,6 +80,18 @@ def _return_clearance_row(environment_force, mug_force, prior_rows):
         "return_contact_clearance": receipt,
         "passed": receipt["passed"],
     }
+
+
+def test_result_writer_serializes_numpy_receipt_scalars(tmp_path):
+    path = tmp_path / "result.json"
+    _write_json_atomic(
+        path,
+        {"receipt": {"passed": np.bool_(True), "force_n": np.float64(0.5)}},
+    )
+
+    assert path.read_text() == (
+        '{\n  "receipt": {\n    "force_n": 0.5,\n    "passed": true\n  }\n}\n'
+    )
 
 
 def test_post_release_contact_must_progress_by_eight_and_clear_within_thirty_rows():
