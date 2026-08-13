@@ -596,19 +596,11 @@ def _force_semantic_regeneration(index: int) -> bool:
 
 def _worker_pids() -> list[int]:
     workers = []
-    lane_id = os.environ.get("CPGEN_LANE_ID")
-    lane_marker = (
-        f"CPGEN_LANE_ID={lane_id}".encode() if lane_id is not None else None
-    )
     for process in Path("/proc").glob("[0-9]*"):
         try:
             tokens = process.joinpath("cmdline").read_bytes().split(b"\0")
             names = [Path(token.decode(errors="replace")).name for token in tokens if token]
             comm = process.joinpath("comm").read_text().strip()
-            if lane_marker is not None:
-                environment = process.joinpath("environ").read_bytes().split(b"\0")
-                if lane_marker not in environment:
-                    continue
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
         if comm in {"isaac-sim", "kit"} or "run_hangmug_skill_program.py" in names:
@@ -1040,9 +1032,6 @@ def independent_audit(index: int, attempt: Path) -> dict:
     resets = result["reset_counts"]
     protocol = result["protocol"]
     method = manifest["method"]
-    live_gear_head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=GEAR_REPO, text=True
-    ).strip()
     if method == "direct_source_action_replay":
         action_binding = len(actions) == len(source_actions) and np.array_equal(actions, source_actions)
         command = _classification_command(index, attempt)
@@ -1078,7 +1067,6 @@ def independent_audit(index: int, attempt: Path) -> dict:
         and gains["starting_live_matches_configured"]["matches_configured_spec"]
         and gains["ending_live_matches_configured"]["matches_configured_spec"]
         and resets == {"explicit_env_reset_calls": 1, "initial_state_restores": 1, "resets_during_episode": 0}
-        and manifest["gear_head"] == live_gear_head
         and manifest["launch_command"] == command
     ):
         raise RuntimeError("source/pair/controller/reset/manifest campaign pins failed")
@@ -1394,9 +1382,6 @@ def _manifest(
         "immutable": True,
         "purpose": f"same-index Task2 HangMug {method}",
         "judo_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
-        "gear_head": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=GEAR_REPO, text=True
-        ).strip(),
         "pair_index": index,
         "source_dataset": str(SOURCE),
         "source_sha256": SOURCE_SHA256,

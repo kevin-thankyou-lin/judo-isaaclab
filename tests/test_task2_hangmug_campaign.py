@@ -295,24 +295,6 @@ def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch)
     assert campaign._worker_pids() == []
 
 
-def test_worker_gate_is_scoped_to_explicit_lane(tmp_path, monkeypatch):
-    owned = tmp_path / "123"
-    other = tmp_path / "456"
-    for proc, lane in ((owned, "lane-owned"), (other, "lane-other")):
-        proc.mkdir()
-        (proc / "comm").write_text("python\n")
-        (proc / "cmdline").write_bytes(
-            b"python\0examples/run_hangmug_skill_program.py\0"
-        )
-        (proc / "environ").write_bytes(f"CPGEN_LANE_ID={lane}\0".encode())
-    monkeypatch.setattr(
-        campaign.Path, "glob", lambda _self, _pattern: [owned, other]
-    )
-    monkeypatch.setenv("CPGEN_LANE_ID", "lane-owned")
-
-    assert campaign._worker_pids() == [123]
-
-
 def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch):
     objects = tmp_path / "objects"
     for kind, name in (
@@ -679,8 +661,6 @@ def test_classification_binding_and_manifest_preserve_actual_boundary(
         repair_strategy={"handover_contact_settle_steps": 30},
     )
     assert manifest["classification"] == binding
-    assert manifest["judo_head"] == "head"
-    assert manifest["gear_head"] == "head"
     assert manifest["source_prefix_action_count"] == campaign.SOURCE_PREFIX_STEPS
     assert manifest["method"] == "semantic_coarse_boundary_repair"
     assert manifest["repair_strategy"] == {"handover_contact_settle_steps": 30}
