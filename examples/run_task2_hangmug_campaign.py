@@ -238,6 +238,11 @@ def _repair_command(
                 "--handover-straddle-local-x-m",
                 str(strategy["handover_straddle_local_x_m"]),
             ])
+        if "handover_pad_depth_m" in strategy:
+            arguments.extend([
+                "--handover-pad-depth-m",
+                str(strategy["handover_pad_depth_m"]),
+            ])
         for field, option in (
             ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
             ("handover_orient_steps", "--handover-orient-steps"),
@@ -311,6 +316,7 @@ def _repair_strategy(index: int) -> dict:
         "left_release_retreat_m",
         "pick_lift_margin_m",
         "pick_pad_depth_m",
+        "handover_pad_depth_m",
         "require_broad_pad_contact",
         "post_handover_right_return_steps",
         "left_branch_point_steps",
@@ -503,6 +509,7 @@ def _repair_strategy(index: int) -> dict:
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
     straddle = value.get("handover_straddle_local_x_m", 0.0)
+    pad_depth = value.get("handover_pad_depth_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
     outside_standoff = value.get("handover_standoff_outside_m", 0.0)
@@ -547,6 +554,13 @@ def _repair_strategy(index: int) -> dict:
     ):
         raise ValueError("handover local straddle correction must be within 14 cm")
     if (
+        isinstance(pad_depth, bool)
+        or not isinstance(pad_depth, (int, float))
+        or not np.isfinite(pad_depth)
+        or abs(pad_depth) > 0.01
+    ):
+        raise ValueError("handover pad depth must be in [-0.01, 0.01] m")
+    if (
         isinstance(orient_clearance, bool)
         or not isinstance(orient_clearance, (int, float))
         or not np.isfinite(orient_clearance)
@@ -585,6 +599,8 @@ def _repair_strategy(index: int) -> dict:
                 "handover local straddle correction requires orient-first descent"
             )
         strategy["handover_straddle_local_x_m"] = float(straddle)
+    if pad_depth:
+        strategy["handover_pad_depth_m"] = float(pad_depth)
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (

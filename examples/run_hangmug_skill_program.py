@@ -91,6 +91,12 @@ def _parser() -> argparse.Namespace:
         help="Bounded giver-local pad-axis seating applied to the pick grasp.",
     )
     parser.add_argument(
+        "--handover-pad-depth-m",
+        type=float,
+        default=0.0,
+        help="Bounded signed receiver-local pad-axis correction at handover.",
+    )
+    parser.add_argument(
         "--branch-support-fraction",
         type=float,
         default=0.5,
@@ -970,6 +976,15 @@ def _bounded_pick_pad_depth(value: float) -> float:
     depth = float(value)
     if not np.isfinite(depth) or not 0.0 <= depth <= 0.01:
         raise ValueError("pick pad depth must be finite and in [0, 0.01] m")
+    return depth
+
+
+def _bounded_handover_pad_depth(value: float) -> float:
+    depth = float(value)
+    if not np.isfinite(depth) or abs(depth) > 0.01:
+        raise ValueError(
+            "handover pad depth must be finite and in [-0.01, 0.01] m"
+        )
     return depth
 
 
@@ -2241,6 +2256,7 @@ def _build_skill(
         ensure_pick_latch_clearance,
         geometry_conditioned_hang_pose,
         seat_grasp_inside_finger_pads,
+        shift_grasp_along_finger_pad_axis,
         transfer_handover_contact_by_handle_frame,
     )
     from judo_isaaclab.put_marker import (
@@ -2316,6 +2332,9 @@ def _build_skill(
     )
     right_grasp = _handover_target_with_local_straddle(
         right_grasp, args.handover_straddle_local_x_m
+    )
+    right_grasp = shift_grasp_along_finger_pad_axis(
+        right_grasp, _bounded_handover_pad_depth(args.handover_pad_depth_m)
     )
     right_pregrasp = transfer_pose(
         frames["right_pregrasp"]["right_eef_pose"],
@@ -2577,6 +2596,7 @@ def main() -> None:
         raise ValueError("--handover-contact-acquire-steps must be in [0, 60]")
     _bounded_handover_offset(args.handover_target_offset_m)
     _bounded_pick_pad_depth(args.pick_pad_depth_m)
+    _bounded_handover_pad_depth(args.handover_pad_depth_m)
     _handover_target_with_local_pitch(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
         args.handover_target_local_pitch_rad,
@@ -3647,6 +3667,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["handover_pad_depth_m"] = (
+            _bounded_handover_pad_depth(args.handover_pad_depth_m)
         )
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
