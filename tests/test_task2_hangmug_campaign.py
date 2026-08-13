@@ -612,6 +612,31 @@ def test_quality_wave_direct_success_forces_fresh_skill(tmp_path, monkeypatch):
     assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
 
 
+def test_quality_wave_direct_failure_still_forces_fresh_skill_from_reset(
+    tmp_path, monkeypatch
+):
+    result = {
+        "status": "repair_required", "first_failed_stage": "handover",
+        "last_completed_stage": "pick", "completed_stages": ["pick"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_force_semantic_regeneration", lambda _index: True)
+
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+    attempt = (
+        tmp_path / "task2/pairs/000002/attempt_002_repair_quality_regeneration"
+    )
+    manifest = json.loads((attempt / "manifest.json").read_text())
+    assert manifest["classification"]["actual_repair_boundary"] == "reset"
+    assert manifest["classification"]["requested_failed_stage"] == "pick"
+    assert manifest["classification"][
+        "quality_regeneration_from_direct_success"
+    ] is True
+
+
 def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
     audit = tmp_path / "classification_audit.json"
     audit.write_text("{}")

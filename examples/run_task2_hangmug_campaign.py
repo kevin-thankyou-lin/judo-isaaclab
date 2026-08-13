@@ -526,7 +526,7 @@ def _repair_strategy(index: int) -> dict:
 
 
 def _force_semantic_regeneration(index: int) -> bool:
-    """Require a fresh skill trajectory even when direct replay succeeds."""
+    """Require a fresh reset-to-finish skill after direct replay diagnosis."""
     path = RESULTS / "pairs" / f"{index:06d}" / "repair_candidate.json"
     if not path.is_file():
         return False
@@ -1246,7 +1246,7 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
         return
     failed_stage = (
         "quality_regeneration"
-        if force_regeneration and classification["status"] == "direct_success"
+        if force_regeneration
         else classification["first_failed_stage"]
     )
     repair_attempt = _attempt_directory(index, f"repair_{failed_stage}")
@@ -1254,9 +1254,7 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
     classification_binding = _classification_binding(
         classification_attempt,
         classification,
-        force_from_reset=(
-            force_regeneration and classification["status"] == "direct_success"
-        ),
+        force_from_reset=force_regeneration,
     )
     repair_strategy = _repair_strategy(index)
     command = _repair_command(
