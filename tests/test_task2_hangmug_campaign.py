@@ -52,6 +52,38 @@ def test_atomic_immutable_receipt_never_overwrites(tmp_path):
     assert json.loads(path.read_text()) == {"value": 1}
 
 
+def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: "f623e360\n",
+    )
+
+    path = campaign._claim_explicit_lane(12, "node1-gpu3")
+    receipt = json.loads(path.read_text())
+    assert receipt == {
+        "schema_version": 1,
+        "pair_index": 12,
+        "human_pair": 13,
+        "lane_id": "node1-gpu3",
+        "judo_head": "f623e360",
+        "results_root": str(results.resolve()),
+    }
+    assert campaign._claim_explicit_lane(12, "node1-gpu3") == path
+    with pytest.raises(RuntimeError, match="assignment changed"):
+        campaign._claim_explicit_lane(12, "node2-gpu0")
+
+
+@pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
+def test_explicit_lane_claim_rejects_ambiguous_ids(tmp_path, monkeypatch, lane):
+    monkeypatch.setattr(campaign, "RESULTS", tmp_path)
+    with pytest.raises(ValueError, match="lane ID"):
+        campaign._claim_explicit_lane(12, lane)
+
+
 def test_resume_skips_only_hash_valid_contiguous_acceptances(tmp_path, monkeypatch):
     results = tmp_path / "task2"
     source = results / "source"

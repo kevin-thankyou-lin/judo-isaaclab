@@ -944,6 +944,16 @@ def test_hangmug_program_is_one_continuous_named_rollout():
     assert trajectory.grippers[
         trajectory.waypoint_steps["right_release"]
     ] == pytest.approx([-0.0475, -0.0475])
+    insertion_start = trajectory.waypoint_steps["left_release"] + 1
+    unload_end = trajectory.waypoint_steps["branch_unload"]
+    insertion_grippers = trajectory.grippers[insertion_start : unload_end + 1]
+    assert insertion_grippers[:, 0] == pytest.approx(-0.0475)
+    assert insertion_grippers[:, 1] == pytest.approx(0.0)
+    np.testing.assert_allclose(np.diff(insertion_grippers, axis=0), 0.0)
+    release_start = unload_end + 1
+    right_release = trajectory.grippers[release_start:, 1]
+    assert np.all(np.diff(right_release) <= 0.0)
+    assert np.flatnonzero(right_release < 0.0)[0] == 0
     transport_end = trajectory.waypoint_steps["tree_transport"]
     assert trajectory.left_poses[transport_end] == pytest.approx(left_observer)
     assert trajectory.left_poses[transport_end:] == pytest.approx(
