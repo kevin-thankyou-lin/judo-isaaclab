@@ -80,6 +80,8 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         required + ["--target-left-quality-dual-force-pad-margin-pivot"]
     )
     assert parsed.target_left_quality_dual_force_pad_margin_pivot is True
+    parsed = _parser(required + ["--target-right-quality-geometric-preseat"])
+    assert parsed.target_right_quality_geometric_preseat is True
     parsed = _parser(
         required
         + ["--target-left-quality-pre-peer-motion-budgeted-closure"]

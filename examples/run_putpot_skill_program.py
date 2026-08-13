@@ -1391,12 +1391,22 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-right-quality-geometric-preseat",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that keeps the right jaw open until at least "
+            "one measured pad intersection is inside the unchanged quality "
+            "margin, routing an edge intersection through the existing "
+            "bounded geometric preseat."
+        ),
+    )
+    parser.add_argument(
         "--target-left-quality-pre-peer-motion-budgeted-closure",
         action="store_true",
         help=(
-            "Pair-owned opt-in that scales a committed single-pad left wrist "
-            "correction to the remaining unchanged pre-peer object-motion "
-            "allowance while preserving the existing bounded jaw stroke."
+            "Pair-owned opt-in that scales committed single-pad left wrist "
+            "and jaw closure actuation to the remaining unchanged pre-peer "
+            "object-motion allowance."
         ),
     )
     parser.add_argument(
@@ -3541,6 +3551,17 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "left dual-force pad-margin pivot requires sequential quality MPC, "
             "contact-fraction telemetry, committed closure, and the dual-force stop"
+        )
+    if args.target_right_quality_geometric_preseat and not (
+        quality_left_first_local_mpc
+        and args.target_collision_clear_right_pregrasp
+        and args.target_handle_local_depth_guarded_intercept
+        and args.target_handle_local_contact_fraction_recenter
+    ):
+        raise ValueError(
+            "right geometric preseat requires sequential quality MPC with "
+            "the collision-clear right pregrasp, depth guard, and contact-"
+            "fraction telemetry"
         )
     if args.target_left_quality_pre_peer_motion_budgeted_closure and not (
         quality_left_first_local_mpc
@@ -5863,6 +5884,10 @@ def main(argv: list[str] | None = None) -> None:
                                     active_arm == "left"
                                     and args.target_left_quality_dual_force_pad_margin_pivot
                                 ),
+                                require_geometric_preseat_for_closure=bool(
+                                    active_arm == "right"
+                                    and args.target_right_quality_geometric_preseat
+                                ),
                                 budget_committed_closure_by_pre_peer_motion=bool(
                                     active_arm == "left"
                                     and args.target_left_quality_pre_peer_motion_budgeted_closure
@@ -8067,6 +8092,9 @@ def main(argv: list[str] | None = None) -> None:
                     "left_dual_force_pad_margin_pivot": bool(
                         args.target_left_quality_dual_force_pad_margin_pivot
                     ),
+                    "right_geometric_preseat": bool(
+                        args.target_right_quality_geometric_preseat
+                    ),
                     "left_pre_peer_motion_budgeted_closure": bool(
                         args.target_left_quality_pre_peer_motion_budgeted_closure
                     ),
@@ -8100,14 +8128,20 @@ def main(argv: list[str] | None = None) -> None:
                     "preclosure_geometric_extra_budget_m": (
                         PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
                         * local_mpc_config.maximum_contact_recenter_step_m
-                        if args.target_left_quality_dual_force_pad_margin_pivot
+                        if (
+                            args.target_left_quality_dual_force_pad_margin_pivot
+                            or args.target_right_quality_geometric_preseat
+                        )
                         else 0.0
                     ),
                     "preclosure_geometric_maximum_total_m": (
                         local_mpc_config.maximum_contact_recenter_total_m
                         + PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
                         * local_mpc_config.maximum_contact_recenter_step_m
-                        if args.target_left_quality_dual_force_pad_margin_pivot
+                        if (
+                            args.target_left_quality_dual_force_pad_margin_pivot
+                            or args.target_right_quality_geometric_preseat
+                        )
                         else local_mpc_config.maximum_contact_recenter_total_m
                     ),
                     "maximum_total_m": (

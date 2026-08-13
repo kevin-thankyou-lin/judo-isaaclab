@@ -429,6 +429,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "pre_peer_motion_unbudgeted_translation_world_m",
             "pre_peer_motion_unbudgeted_rotation_axis_angle_world_rad",
             "pre_peer_motion_unbudgeted_jaw_increment",
+            "geometric_preseat_required",
+            "geometric_preseat_satisfied",
+            "geometric_preseat_finite_pad_count",
+            "geometric_preseat_interior_pad_count",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -487,6 +491,7 @@ def handle_local_mpc_step(
     allow_transverse_aligned_two_pad_closure: bool = False,
     transverse_aligned_closure_pivot_pad_index: int | None = None,
     allow_dual_force_pad_margin_pivot: bool = False,
+    require_geometric_preseat_for_closure: bool = False,
     budget_committed_closure_by_pre_peer_motion: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
@@ -696,8 +701,16 @@ def handle_local_mpc_step(
         <= config.closure_rotation_tolerance_rad
     )
     finite_pad_intersections = np.isfinite(fractions)
+    finite_interior_pad_intersections = bool(
+        np.any(
+            finite_pad_intersections
+            & (fractions >= config.minimum_pad_fraction_margin)
+            & (fractions <= 1.0 - config.minimum_pad_fraction_margin)
+        )
+    )
     preclosure_geometric_prestage_enabled = bool(
         allow_dual_force_pad_margin_pivot
+        or require_geometric_preseat_for_closure
     )
     preclosure_geometric_extra_budget_m = float(
         PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
@@ -1162,10 +1175,16 @@ def handle_local_mpc_step(
         and np.linalg.norm(rotation_residual) <= config.closure_rotation_tolerance_rad
     )
     closure_authorized = bool(
-        aligned_for_closure
-        or (allow_bounded_closure_commit and closure_committed)
-        or interior_single_pad_triggered
-        or transverse_aligned_two_pad_triggered
+        (
+            aligned_for_closure
+            or (allow_bounded_closure_commit and closure_committed)
+            or interior_single_pad_triggered
+            or transverse_aligned_two_pad_triggered
+        )
+        and (
+            not require_geometric_preseat_for_closure
+            or finite_interior_pad_intersections
+        )
     )
     pause_committed_closure = bool(
         pause_committed_closure_on_dual_force_backing
@@ -1591,6 +1610,22 @@ def handle_local_mpc_step(
             ),
             "pre_peer_motion_unbudgeted_jaw_increment": (
                 pre_peer_motion_unbudgeted_jaw_increment
+            ),
+            "geometric_preseat_required": bool(
+                require_geometric_preseat_for_closure
+            ),
+            "geometric_preseat_satisfied": (
+                finite_interior_pad_intersections
+            ),
+            "geometric_preseat_finite_pad_count": int(
+                np.count_nonzero(finite_pad_intersections)
+            ),
+            "geometric_preseat_interior_pad_count": int(
+                np.count_nonzero(
+                    finite_pad_intersections
+                    & (fractions >= config.minimum_pad_fraction_margin)
+                    & (fractions <= 1.0 - config.minimum_pad_fraction_margin)
+                )
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,

@@ -1259,6 +1259,62 @@ def test_pair_15_committed_single_pad_closure_respects_remaining_motion_budget()
     assert unopted_closure["pre_peer_motion_control_scale"] == pytest.approx(1.0)
 
 
+def test_pair_15_right_closure_requires_interior_geometric_preseat():
+    aligned = _inputs(
+        observed_handle_contact_frame=_pose(x=0.009),
+        active_pad_fractions=[np.nan, np.nan],
+        active_finger_forces_n=[0.0, 0.0],
+        current_jaw_command=-0.0475,
+    )
+    legacy = handle_local_mpc_step(**aligned)
+    assert legacy.frame_receipt["executed_control"]["jaw_increment"] > 0.0
+
+    gated = handle_local_mpc_step(
+        **aligned,
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    closure = gated.frame_receipt["closure"]
+    assert closure["geometric_preseat_required"]
+    assert not closure["geometric_preseat_satisfied"]
+    assert closure["geometric_preseat_finite_pad_count"] == 0
+    assert closure["geometric_preseat_interior_pad_count"] == 0
+    assert gated.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+
+    edge = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_pad_fractions": [-0.0204, np.nan],
+        },
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    edge_recenter = edge.frame_receipt["contact_fraction_recenter"]
+    assert edge_recenter["preclosure_geometric_prestage_enabled"]
+    assert edge_recenter["preclosure_geometric_prestage_active"]
+    assert edge.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+    assert np.linalg.norm(
+        edge.frame_receipt["executed_control"]["translation_world_m"]
+    ) == pytest.approx(0.001)
+
+    interior = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_pad_fractions": [0.16, np.nan],
+        },
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    interior_closure = interior.frame_receipt["closure"]
+    assert interior_closure["geometric_preseat_satisfied"]
+    assert interior_closure["geometric_preseat_interior_pad_count"] == 1
+    assert interior.frame_receipt["executed_control"]["jaw_increment"] > 0.0
+    assert handle_local_mpc_frame_receipt_complete(interior.frame_receipt)
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None
