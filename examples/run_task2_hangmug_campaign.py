@@ -284,6 +284,7 @@ def _repair_strategy(index: int) -> dict:
         return {}
     value = _load(path)
     allowed = {
+        "force_semantic_regeneration",
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
         "handover_confirm_steps",
@@ -311,8 +312,15 @@ def _repair_strategy(index: int) -> dict:
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
-    handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
+    handover_fields = allowed - late_support_fields - {
+        "force_semantic_regeneration", "pick_lift_margin_m"
+    }
     strategy = {}
+    if "force_semantic_regeneration" in value:
+        if value["force_semantic_regeneration"] is not True:
+            raise ValueError(
+                "semantic regeneration must be true when selected"
+            )
     if "require_broad_pad_contact" in value:
         if value["require_broad_pad_contact"] is not True:
             raise ValueError(
@@ -515,6 +523,17 @@ def _repair_strategy(index: int) -> dict:
             raise ValueError("left release retreat must be in [0.02, 0.12] m")
         strategy["left_release_retreat_m"] = float(retreat)
     return strategy
+
+
+def _force_semantic_regeneration(index: int) -> bool:
+    """Require a fresh skill trajectory even when direct replay succeeds."""
+    path = RESULTS / "pairs" / f"{index:06d}" / "repair_candidate.json"
+    if not path.is_file():
+        return False
+    value = _load(path).get("force_semantic_regeneration", False)
+    if value not in (False, True):
+        raise ValueError("force_semantic_regeneration must be boolean")
+    return value
 
 
 def _worker_pids() -> list[int]:
@@ -1036,9 +1055,16 @@ def _recover_audited_attempt(index: int) -> bool:
     return False
 
 
-def _classification_binding(attempt: Path, classification: dict) -> dict:
-    selection = _repair_selection(
-        classification["first_failed_stage"], classification["last_completed_stage"]
+def _classification_binding(
+    attempt: Path, classification: dict, *, force_from_reset: bool = False
+) -> dict:
+    selection = (
+        _repair_selection("pick", None)
+        if force_from_reset
+        else _repair_selection(
+            classification["first_failed_stage"],
+            classification["last_completed_stage"],
+        )
     )
     return {
         "result_path": classification["result_path"],
@@ -1046,6 +1072,7 @@ def _classification_binding(attempt: Path, classification: dict) -> dict:
         "audit_path": str(attempt / "classification_audit.json"),
         "audit_sha256": _sha256(attempt / "classification_audit.json"),
         "completed_stages": classification["completed_stages"],
+        "quality_regeneration_from_direct_success": force_from_reset,
         **selection,
     }
 
@@ -1210,17 +1237,26 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
             raise
     else:
         classification_attempt, classification = reusable
-    if classification["status"] == "direct_success":
+    force_regeneration = _force_semantic_regeneration(index)
+    if classification["status"] == "direct_success" and not force_regeneration:
         _accept_attempt(
             index, classification_attempt, ledger_sha256,
             replace_existing=replace_existing,
         )
         return
-    failed_stage = classification["first_failed_stage"]
+    failed_stage = (
+        "quality_regeneration"
+        if force_regeneration and classification["status"] == "direct_success"
+        else classification["first_failed_stage"]
+    )
     repair_attempt = _attempt_directory(index, f"repair_{failed_stage}")
     repair_attempt.mkdir(parents=True, exist_ok=False)
     classification_binding = _classification_binding(
-        classification_attempt, classification
+        classification_attempt,
+        classification,
+        force_from_reset=(
+            force_regeneration and classification["status"] == "direct_success"
+        ),
     )
     repair_strategy = _repair_strategy(index)
     command = _repair_command(

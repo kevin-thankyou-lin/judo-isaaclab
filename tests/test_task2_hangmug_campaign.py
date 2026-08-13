@@ -592,6 +592,37 @@ def test_direct_success_skips_repair(tmp_path, monkeypatch):
     assert events == ["classification", "classification_audit", "accepted"]
 
 
+def test_quality_wave_direct_success_forces_fresh_skill(tmp_path, monkeypatch):
+    result = {
+        "status": "direct_success", "first_failed_stage": None,
+        "last_completed_stage": "release_and_hang",
+        "completed_stages": ["pick", "handover", "alignment", "insertion_and_support", "release_and_hang"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_force_semantic_regeneration", lambda _index: True)
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+
+
+def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
+    audit = tmp_path / "classification_audit.json"
+    audit.write_text("{}")
+    classification = {
+        "first_failed_stage": None,
+        "last_completed_stage": "release_and_hang",
+        "completed_stages": ["pick", "handover", "alignment", "insertion_and_support", "release_and_hang"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_sha256", lambda _path: "hash")
+    binding = campaign._classification_binding(
+        tmp_path, classification, force_from_reset=True
+    )
+    assert binding["actual_repair_boundary"] == "reset"
+    assert binding["quality_regeneration_from_direct_success"] is True
+
+
 def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
     seen = []
     def fail(index):
