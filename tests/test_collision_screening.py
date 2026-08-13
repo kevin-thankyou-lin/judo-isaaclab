@@ -9,6 +9,7 @@ from judo_isaaclab.collision_screening import (
     select_robot_feasible_object_path,
     screen_object_paths,
     screen_rigid_weld_paths,
+    sphere_path_collision_report,
 )
 
 
@@ -138,6 +139,27 @@ def test_exact_body_collision_report_rejects_only_intersecting_path():
     assert collision["first_collision_step"] == 2
     assert separated["valid"] is True
     assert separated["collision_steps"] == []
+
+
+def test_sphere_path_screen_reports_only_proxy_obstacle_contacts():
+    tree = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    mug = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
+    tree_pose = IDENTITY.copy()
+    mug_pose = IDENTITY.copy()
+    mug_pose[0] = 0.04  # Obstacles overlap, which must not implicate the proxy.
+    # Use an exact mesh vertex because the dependency-free fallback samples
+    # vertices and face centroids instead of relying on python-fcl.
+    points = np.asarray([[0.5, 0.0, 0.0], [-0.05, -0.05, -0.05]])
+
+    report = sphere_path_collision_report(
+        points,
+        radius_m=0.01,
+        obstacles={"tree": (tree, tree_pose), "mug": (mug, mug_pose)},
+    )
+
+    assert report["valid"] is False
+    assert report["collision_steps"] == [1]
+    assert report["collided_obstacles_by_step"][1] == ["tree"]
 
 
 def test_robot_feasible_selection_prefers_less_terminal_rotation():
