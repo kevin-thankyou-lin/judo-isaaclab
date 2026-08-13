@@ -45,6 +45,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_approach_height_m",
     "branch_roll_offset_rad",
     "branch_support_fraction",
+    "branch_support_handle_offset_m",
     "branch_support_seat_down_m",
 })
 LD_LIBRARY_PATH = ":".join(
@@ -194,6 +195,11 @@ def _repair_command(
     ):
         if field in strategy:
             arguments.extend([option, str(strategy[field])])
+    if "branch_support_handle_offset_m" in strategy:
+        arguments.extend([
+            "--branch-support-handle-offset-m",
+            *map(str, strategy["branch_support_handle_offset_m"]),
+        ])
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
@@ -299,6 +305,7 @@ def _repair_strategy(index: int) -> dict:
         "branch_approach_height_m",
         "branch_roll_offset_rad",
         "branch_support_fraction",
+        "branch_support_handle_offset_m",
         "branch_support_seat_down_m",
     }
     if set(value) - allowed:
@@ -372,6 +379,18 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch support fraction must be in [0.25, 0.75]")
         strategy["branch_support_fraction"] = float(fraction)
+    if "branch_support_handle_offset_m" in value:
+        offset = np.asarray(value["branch_support_handle_offset_m"], dtype=float)
+        if (
+            offset.shape != (3,)
+            or not np.all(np.isfinite(offset))
+            or np.linalg.norm(offset) > 0.02
+        ):
+            raise ValueError(
+                "branch support handle offset must contain three finite values "
+                "within 2 cm"
+            )
+        strategy["branch_support_handle_offset_m"] = offset.tolist()
     if "branch_support_seat_down_m" in value:
         seat_down = value["branch_support_seat_down_m"]
         if (

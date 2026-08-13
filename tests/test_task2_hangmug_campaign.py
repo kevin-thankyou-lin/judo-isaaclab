@@ -453,6 +453,23 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
     with pytest.raises(ValueError, match="seat-down"):
         campaign._repair_strategy(4)
 
+    offset = [0.009, 0.007, -0.001]
+    candidate.write_text(json.dumps({"branch_support_handle_offset_m": offset}))
+    strategy = campaign._repair_strategy(4)
+    assert strategy == {"branch_support_handle_offset_m": offset}
+    command = campaign._repair_command(
+        4,
+        tmp_path / "attempt3",
+        tmp_path / "classification/result.json",
+        campaign._repair_selection("release_and_hang", "insertion_and_support"),
+        strategy,
+    )
+    cursor = command.index("--branch-support-handle-offset-m")
+    assert [float(value) for value in command[cursor + 1 : cursor + 4]] == offset
+    candidate.write_text(json.dumps({"branch_support_handle_offset_m": [0.021, 0, 0]}))
+    with pytest.raises(ValueError, match="support handle offset"):
+        campaign._repair_strategy(4)
+
 
 def test_branch_approach_height_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
