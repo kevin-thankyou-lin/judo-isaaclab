@@ -1495,6 +1495,36 @@ def test_post_release_clearance_advances_only_straight_return_translation():
     with pytest.raises(ValueError, match="in \\[0, 0.02\\]"):
         apply_post_release_return_clearance(baseline, 0.021)
 
+    rotated = apply_post_release_return_clearance(
+        baseline,
+        0.0,
+        clearance_rows=7,
+        rotation_axis_local=[0.97861533, 0.16855211, 0.11790769],
+        rotation_rad=0.05,
+    )
+    np.testing.assert_allclose(
+        rotated.right_poses[:, :3], baseline.right_poses[:, :3]
+    )
+    np.testing.assert_allclose(
+        rotated.right_poses[: release_end + 1],
+        baseline.right_poses[: release_end + 1],
+    )
+    peak = release_end + 7
+    peak_alignment = abs(
+        float(rotated.right_poses[peak, 3:] @ baseline.right_poses[peak, 3:])
+    )
+    assert 2.0 * np.arccos(np.clip(peak_alignment, -1.0, 1.0)) == pytest.approx(
+        0.05
+    )
+    np.testing.assert_allclose(rotated.right_poses[return_end], right_start)
+    with pytest.raises(ValueError, match="unit length"):
+        apply_post_release_return_clearance(
+            baseline,
+            0.0,
+            rotation_axis_local=[1.0, 1.0, 0.0],
+            rotation_rad=0.05,
+        )
+
 
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     right_start = _pose(0.2, -0.7, 0.9)

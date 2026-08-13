@@ -15,6 +15,7 @@ from .put_marker import (
     interpolate_poses,
     inverse_pose,
     pose_from_matrix,
+    quaternion_multiply,
     quaternion_rotate,
     transfer_pose,
 )
@@ -649,15 +650,17 @@ def apply_post_release_return_clearance(
     clearance_m: float,
     *,
     clearance_rows: int = 7,
+    rotation_axis_local: Any | None = None,
+    rotation_rad: float = 0.0,
 ) -> SkillTrajectory:
-    """Advance open-return translation without changing its line or wrist SLERP.
+    """Apply bounded open-return clearance without changing Cartesian endpoints.
 
     The supported pose and demonstrated-rest endpoint stay fixed.  Only the
     positional progress along that exact straight segment is advanced during
-    the first bounded rows; orientation retains the original full-duration
-    interpolation.  This lets a released finger move along an evidence-backed
-    separating direction before wrist rotation can sweep another rigid body
-    into the support.
+    first bounded rows when ``clearance_m`` is nonzero.  A pair may instead
+    supply an evidence-backed local rotation axis: it ramps in over the same
+    rows and then returns continuously to the demonstrated-rest orientation,
+    moving an open finger without translating the wrist origin.
     """
 
     clearance = float(clearance_m)
@@ -665,6 +668,27 @@ def apply_post_release_return_clearance(
         raise ValueError("post-release return clearance must be in [0, 0.02] m")
     if isinstance(clearance_rows, bool) or not isinstance(clearance_rows, int):
         raise ValueError("post-release return clearance rows must be an integer")
+    angle = float(rotation_rad)
+    if not np.isfinite(angle) or abs(angle) > 0.12:
+        raise ValueError(
+            "post-release return clearance rotation must be within 0.12 rad"
+        )
+    if rotation_axis_local is None:
+        if angle:
+            raise ValueError("post-release return clearance rotation requires an axis")
+        axis = None
+    else:
+        axis = np.asarray(rotation_axis_local, dtype=np.float64)
+        if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+            raise ValueError(
+                "post-release return clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError("post-release return clearance axis must be unit length")
+        if not angle:
+            raise ValueError("post-release return clearance axis requires a rotation")
+        axis = axis / norm
     if (
         "right_release" not in trajectory.waypoint_steps
         or "post_release_return" not in trajectory.waypoint_steps
@@ -692,6 +716,20 @@ def apply_post_release_return_clearance(
         ) * (clearance / distance)
         translation_fraction = np.maximum(base_fraction, early_fraction)
         direct[:, :3] = start[:3] + translation_fraction[:, None] * displacement
+    if axis is not None:
+        row = np.arange(return_steps, dtype=np.float64) + 1.0
+        ramp = np.minimum(row / clearance_rows, 1.0)
+        decay = np.maximum(
+            (return_steps - row) / (return_steps - clearance_rows),
+            0.0,
+        )
+        envelope = np.minimum(ramp, decay)
+        for index, fraction in enumerate(envelope):
+            half_angle = 0.5 * angle * fraction
+            offset = np.concatenate(
+                ([np.cos(half_angle)], axis * np.sin(half_angle))
+            )
+            direct[index, 3:] = quaternion_multiply(direct[index, 3:], offset)
     right[release_end + 1 : return_end + 1] = direct
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),

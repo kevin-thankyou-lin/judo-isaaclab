@@ -714,6 +714,33 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
     with pytest.raises(ValueError, match="return clearance"):
         campaign._repair_strategy(4)
 
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+        "post_release_return_clearance_axis_local": [
+            0.97861533, 0.16855211, 0.11790769,
+        ],
+        "post_release_return_clearance_rotation_rad": 0.05,
+    }))
+    strategy = campaign._repair_strategy(4)
+    command = campaign._repair_command(
+        4,
+        tmp_path / "attempt4",
+        tmp_path / "classification/result.json",
+        campaign._repair_selection("release_and_hang", "insertion_and_support"),
+        strategy,
+    )
+    axis_option = command.index("--post-release-return-clearance-axis-local")
+    assert command[axis_option + 1 : axis_option + 4] == [
+        str(value)
+        for value in strategy["post_release_return_clearance_axis_local"]
+    ]
+    assert (
+        command[command.index("--post-release-return-clearance-rotation-rad") + 1]
+        == "0.05"
+    )
+
 
 def test_branch_approach_height_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])

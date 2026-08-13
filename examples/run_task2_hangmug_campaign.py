@@ -53,6 +53,8 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_support_fraction",
     "branch_support_seat_down_m",
     "post_release_return_clearance_m",
+    "post_release_return_clearance_axis_local",
+    "post_release_return_clearance_rotation_rad",
     "stable_support_steps",
 })
 LD_LIBRARY_PATH = ":".join(
@@ -187,6 +189,11 @@ def _repair_command(
     ]
     if strategy.get("require_broad_pad_contact"):
         arguments.append("--require-broad-pad-contact")
+    if "post_release_return_clearance_axis_local" in strategy:
+        arguments.extend([
+            "--post-release-return-clearance-axis-local",
+            *map(str, strategy["post_release_return_clearance_axis_local"]),
+        ])
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -206,6 +213,10 @@ def _repair_command(
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
         ("post_release_return_clearance_m", "--post-release-return-clearance-m"),
+        (
+            "post_release_return_clearance_rotation_rad",
+            "--post-release-return-clearance-rotation-rad",
+        ),
         ("stable_support_steps", "--stable-support-steps"),
         ("target_branch_rank", "--target-branch-rank"),
     ):
@@ -348,6 +359,8 @@ def _repair_strategy(index: int) -> dict:
         "branch_support_fraction",
         "branch_support_seat_down_m",
         "post_release_return_clearance_m",
+        "post_release_return_clearance_axis_local",
+        "post_release_return_clearance_rotation_rad",
         "stable_support_steps",
     }
     if set(value) - allowed:
@@ -517,6 +530,43 @@ def _repair_strategy(index: int) -> dict:
                 "post-release return clearance requires direct choreography"
             )
         strategy["post_release_return_clearance_m"] = float(clearance)
+    clearance_axis = value.get("post_release_return_clearance_axis_local")
+    clearance_angle = value.get("post_release_return_clearance_rotation_rad", 0.0)
+    if clearance_axis is not None:
+        axis = np.asarray(clearance_axis, dtype=np.float64)
+        if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+            raise ValueError(
+                "post-release return clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError("post-release return clearance axis must be unit length")
+        if not direct_steps[0]:
+            raise ValueError(
+                "post-release return clearance requires direct choreography"
+            )
+        strategy["post_release_return_clearance_axis_local"] = (
+            axis / norm
+        ).tolist()
+    if "post_release_return_clearance_rotation_rad" in value:
+        if (
+            isinstance(clearance_angle, bool)
+            or not isinstance(clearance_angle, (int, float))
+            or not np.isfinite(clearance_angle)
+            or abs(clearance_angle) > 0.12
+        ):
+            raise ValueError(
+                "post-release return clearance rotation must be within 0.12 rad"
+            )
+        if clearance_axis is None or not clearance_angle:
+            raise ValueError(
+                "post-release return clearance rotation requires an axis"
+            )
+        strategy["post_release_return_clearance_rotation_rad"] = float(
+            clearance_angle
+        )
+    elif clearance_axis is not None:
+        raise ValueError("post-release return clearance axis requires a rotation")
     if "stable_support_steps" in value:
         steps = value["stable_support_steps"]
         if (
