@@ -667,9 +667,10 @@ def _usd_rigid_body_names(usd_path: str, articulation_root: str) -> tuple[str, .
         raise RuntimeError(f"could not open articulation USD: {usd_path}")
     root = stage.GetPrimAtPath(str(articulation_root))
     if not root.IsValid():
-        raise RuntimeError(
-            f"articulation root {articulation_root} is absent from {usd_path}"
-        )
+        default_root = stage.GetDefaultPrim().GetPath().pathString.rstrip("/")
+        root = stage.GetPrimAtPath(default_root + str(articulation_root))
+    if not root.IsValid():
+        raise RuntimeError(f"cannot map articulation root in {usd_path}")
     names = tuple(
         prim.GetName()
         for prim in Usd.PrimRange(root)
