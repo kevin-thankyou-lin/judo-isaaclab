@@ -412,6 +412,7 @@ def reanchor_handover_contact_acquire(
     *,
     target_contact_mug_position_m: Any | None = None,
     target_contact_mug_quaternion_wxyz: Any | None = None,
+    interpolation_reference_steps: int | None = None,
     maximum_translation_m: float = 0.04,
     maximum_rotation_error_rad: float = 0.12,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
@@ -511,6 +512,21 @@ def reanchor_handover_contact_acquire(
     release_end = steps["left_release"]
     if not grasp_end < acquire_end < release_end:
         raise ValueError("contact acquisition must lie between grasp and release")
+    acquire_steps = acquire_end - grasp_end
+    reference_steps = (
+        acquire_steps
+        if interpolation_reference_steps is None
+        else interpolation_reference_steps
+    )
+    if (
+        isinstance(reference_steps, bool)
+        or not isinstance(reference_steps, int)
+        or not acquire_steps <= reference_steps <= 60
+    ):
+        raise ValueError(
+            "contact-acquisition interpolation reference steps must be an integer "
+            "between the executed acquisition steps and 60"
+        )
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     corrected_left = (
@@ -520,19 +536,20 @@ def reanchor_handover_contact_acquire(
     )
     if not rotate_held_mug:
         corrected_left[:3] += translation
-    left[grasp_end + 1 : acquire_end + 1] = interpolate_poses(
-        observed_left, corrected_left, acquire_end - grasp_end
-    )
+    acquire_path = interpolate_poses(
+        observed_left, corrected_left, reference_steps
+    )[:acquire_steps]
+    left[grasp_end + 1 : acquire_end + 1] = acquire_path
     right[grasp_end + 1 : acquire_end + 1] = observed_right
-    corrected_release = (
-        transfer_pose(trajectory.left_poses[release_end], mug, target_mug)
-        if rotate_held_mug
-        else trajectory.left_poses[release_end].copy()
+    observed_left_in_mug = compose_pose(inverse_pose(mug), observed_left)
+    acquisition_endpoint_mug = compose_pose(
+        acquire_path[-1], inverse_pose(observed_left_in_mug)
     )
-    if not rotate_held_mug:
-        corrected_release[:3] += translation
+    corrected_release = transfer_pose(
+        trajectory.left_poses[release_end], mug, acquisition_endpoint_mug
+    )
     left[acquire_end + 1 : release_end + 1] = interpolate_poses(
-        corrected_left, corrected_release, release_end - acquire_end
+        acquire_path[-1], corrected_release, release_end - acquire_end
     )
     right[acquire_end + 1 : release_end + 1] = observed_right
 
@@ -549,19 +566,31 @@ def reanchor_handover_contact_acquire(
         )
     right[lift_end + 1 : confirm_end + 1] = corrected_lift
     left[release_end + 1 : confirm_end + 1] = corrected_release
+    endpoint_contact = compose_pose(
+        inverse_pose(acquisition_endpoint_mug), observed_right
+    )
+    reference_fraction = acquire_steps / reference_steps
+    smooth_fraction = reference_fraction**3 * (
+        10.0 - 15.0 * reference_fraction + 6.0 * reference_fraction**2
+    )
     receipt = {
         "strategy": "translate_left_held_mug_into_stationary_closed_receiver",
         "desired_right_contact_world": desired_right.tolist(),
         "target_contact_mug_frame": desired_contact.tolist(),
         "observed_right_eef_world": observed_right.tolist(),
         "target_mug_world": target_mug.tolist(),
+        "acquisition_endpoint_mug_world": acquisition_endpoint_mug.tolist(),
+        "acquisition_endpoint_contact_mug_frame": endpoint_contact.tolist(),
         "world_translation_m": translation.tolist(),
         "translation_norm_m": norm,
         "maximum_translation_m": limit,
         "rotation_error_rad": rotation_error_rad,
         "maximum_rotation_error_rad": rotation_limit,
         "orientation_unchanged": not rotate_held_mug,
-        "acquire_steps": acquire_end - grasp_end,
+        "acquire_steps": acquire_steps,
+        "interpolation_reference_steps": reference_steps,
+        "interpolation_endpoint_fraction": reference_fraction,
+        "interpolation_endpoint_smooth_fraction": smooth_fraction,
     }
     return (
         SkillTrajectory(

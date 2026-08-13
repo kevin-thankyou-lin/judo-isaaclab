@@ -131,6 +131,15 @@ def _parser() -> argparse.Namespace:
         help="Move the left-held mug into the stationary closed receiver before release.",
     )
     parser.add_argument(
+        "--handover-contact-acquire-reference-steps",
+        type=int,
+        default=None,
+        help=(
+            "Optional longer quintic reference whose bounded prefix is executed "
+            "during contact acquisition."
+        ),
+    )
+    parser.add_argument(
         "--handover-contact-acquire-target-mug-position-m",
         type=float,
         nargs=3,
@@ -2876,6 +2885,15 @@ def main() -> None:
         raise ValueError("--stable-support-steps must be in [60, 240]")
     if not 0 <= args.handover_contact_acquire_steps <= 60:
         raise ValueError("--handover-contact-acquire-steps must be in [0, 60]")
+    if args.handover_contact_acquire_reference_steps is not None and not (
+        0 < args.handover_contact_acquire_steps
+        <= args.handover_contact_acquire_reference_steps
+        <= 60
+    ):
+        raise ValueError(
+            "--handover-contact-acquire-reference-steps must be between the "
+            "positive executed acquisition steps and 60"
+        )
     if args.handover_contact_acquire_target_mug_position_m is not None:
         target_contact = np.asarray(
             args.handover_contact_acquire_target_mug_position_m, dtype=np.float64
@@ -2913,6 +2931,15 @@ def main() -> None:
     ):
         raise ValueError(
             "right-assist contact reanchor requires an explicit mug-frame target pose"
+        )
+    if args.handover_contact_acquire_reference_steps is not None and (
+        not args.handover_contact_acquire_reanchor_right_assist
+        or args.handover_contact_acquire_target_mug_position_m is None
+        or args.handover_contact_acquire_target_mug_quaternion_wxyz is None
+    ):
+        raise ValueError(
+            "contact-acquisition reference steps require an explicit pose and "
+            "right-assist reanchor"
         )
     _bounded_handover_offset(args.handover_target_offset_m)
     _handover_target_with_local_pitch(
@@ -3307,6 +3334,9 @@ def main() -> None:
                         ),
                         target_contact_mug_quaternion_wxyz=(
                             args.handover_contact_acquire_target_mug_quaternion_wxyz
+                        ),
+                        interpolation_reference_steps=(
+                            args.handover_contact_acquire_reference_steps
                         ),
                     )
                     handover_contact_acquire = {
@@ -3910,7 +3940,7 @@ def main() -> None:
         result = {
             "status": "passed" if all(acceptance.values()) else "failed",
             "mode": args.mode,
-            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "branch_approach_height_m": args.branch_approach_height_m, "pick_lift_margin_m": _bounded_pick_lift_margin(args.pick_lift_margin_m), "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "stable_support_steps": args.stable_support_steps, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_contact_acquire_steps": args.handover_contact_acquire_steps, "handover_contact_acquire_target_mug_position_m": (list(map(float, args.handover_contact_acquire_target_mug_position_m)) if args.handover_contact_acquire_target_mug_position_m is not None else None), "handover_contact_acquire_target_mug_quaternion_wxyz": (list(map(float, args.handover_contact_acquire_target_mug_quaternion_wxyz)) if args.handover_contact_acquire_target_mug_quaternion_wxyz is not None else None), "handover_contact_acquire_reanchor_right_assist": bool(args.handover_contact_acquire_reanchor_right_assist), "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "post_handover_right_return_steps": args.post_handover_right_return_steps, "left_branch_point_steps": args.left_branch_point_steps, "post_handover_rest_observer_steps": args.post_handover_rest_observer_steps, "direct_rest_to_preinsert_steps": args.direct_rest_to_preinsert_steps, "post_release_return_to_rest_steps": args.post_release_return_to_rest_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "handover_target_local_pitch_rad": float(args.handover_target_local_pitch_rad), "handover_target_local_roll_rad": float(args.handover_target_local_roll_rad), "handover_straddle_local_x_m": float(args.handover_straddle_local_x_m), "handover_orient_clearance_m": float(args.handover_orient_clearance_m), "handover_orient_steps": int(args.handover_orient_steps), "handover_standoff_outside_m": float(args.handover_standoff_outside_m), "handover_handle_frame_transfer": bool(args.handover_handle_frame_transfer), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
+            "protocol": {"controller": "direct_source_action_replay" if trajectory is None else "source_pick_prefix_then_deterministic_semantic_cartesian_dls" if source_prefix_steps else "deterministic_semantic_cartesian_dls", "candidate_sampling": False, "scene_resets": reset_counts["explicit_env_reset_calls"], "initial_state_restores": reset_counts["initial_state_restores"], "inter_stage_resets": reset_counts["resets_during_episode"], "control_rate_hz": 30, "steps": len(actions), "seed": args.seed, "physics_device_requested": args.device, "physics_device_actual": str(env.device), "physics_device_requirement": "cpu" if args.require_cpu_physics else None, "physics_device_receipt": physics_device, "grasp_assistance": grasp_assistance, "source_pick_prefix": ({"through_waypoint": "right_pregrasp", "action_count": source_prefix_steps, "first_action_index": 0, "last_action_index": source_prefix_steps - 1, "actions_sha256": _array_sha256(np.asarray(actions[:source_prefix_steps], dtype=np.float32)), "exact": bool(source_pick_prefix_exact)} if source_prefix_steps else None), "parameters": {"damping": args.damping, "max_joint_delta": args.max_joint_delta, "max_position_step": args.max_position_step, "max_rotation_step": args.max_rotation_step, "insert_clearance_m": args.insert_clearance_m, "branch_approach_height_m": args.branch_approach_height_m, "pick_lift_margin_m": _bounded_pick_lift_margin(args.pick_lift_margin_m), "branch_support_fraction": _bounded_branch_support_fraction(args.branch_support_fraction), "branch_support_seat_down_m": args.branch_support_seat_down_m, "stable_support_steps": args.stable_support_steps, "handover_contact_settle_steps": args.handover_contact_settle_steps, "handover_contact_acquire_steps": args.handover_contact_acquire_steps, "handover_contact_acquire_reference_steps": args.handover_contact_acquire_reference_steps, "handover_contact_acquire_target_mug_position_m": (list(map(float, args.handover_contact_acquire_target_mug_position_m)) if args.handover_contact_acquire_target_mug_position_m is not None else None), "handover_contact_acquire_target_mug_quaternion_wxyz": (list(map(float, args.handover_contact_acquire_target_mug_quaternion_wxyz)) if args.handover_contact_acquire_target_mug_quaternion_wxyz is not None else None), "handover_contact_acquire_reanchor_right_assist": bool(args.handover_contact_acquire_reanchor_right_assist), "handover_confirm_steps": args.handover_confirm_steps, "handover_post_release_lift_m": _bounded_handover_post_release_lift(args.handover_post_release_lift_m), "handover_post_release_lift_steps": args.handover_post_release_lift_steps, "post_handover_right_return_steps": args.post_handover_right_return_steps, "left_branch_point_steps": args.left_branch_point_steps, "post_handover_rest_observer_steps": args.post_handover_rest_observer_steps, "direct_rest_to_preinsert_steps": args.direct_rest_to_preinsert_steps, "post_release_return_to_rest_steps": args.post_release_return_to_rest_steps, "handover_target_offset_m": _bounded_handover_offset(args.handover_target_offset_m).tolist(), "handover_target_local_pitch_rad": float(args.handover_target_local_pitch_rad), "handover_target_local_roll_rad": float(args.handover_target_local_roll_rad), "handover_straddle_local_x_m": float(args.handover_straddle_local_x_m), "handover_orient_clearance_m": float(args.handover_orient_clearance_m), "handover_orient_steps": int(args.handover_orient_steps), "handover_standoff_outside_m": float(args.handover_standoff_outside_m), "handover_handle_frame_transfer": bool(args.handover_handle_frame_transfer), "left_release_retreat_m": _bounded_left_release_retreat(args.left_release_retreat_m), "observed_left_anchor_held_during_handover": observed_handover_reanchor, "observed_handover_reanchor": observed_handover_reanchor, "right_contact_feedback_reanchor": trajectory is not None, "pick_clearance_uses_measured_body_height": True, "mug_body_frame_scaling": True, "handle_hole_branch_frame_transfer": True, "branch_support_midpoint": _bounded_branch_support_fraction(args.branch_support_fraction) == 0.5}},
             "provenance": {"source_dataset": source_receipt, "target_state_template": {"path": os.path.abspath(target_state_template), "sha256": _sha256(target_state_template), "actions_executed": False}, "source_assets": {name: _asset_provenance(path) for name, path in source_assets.items()}, "target_assets": {name: _asset_provenance(path) for name, path in target_assets.items()}, "task_manager": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager.py"))}, "task_config": {"path": os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"), "sha256": _sha256(os.path.join(args.gear_repo, "dc_study/envs/tasks/hang_mug_on_tree_manager_cfg.py"))}, "trace": {"path": os.path.abspath(args.trace_npz), "sha256": _sha256(args.trace_npz)}, "demonstration": demo_artifact, "source_keyframes": ({"path": os.path.abspath(args.source_keyframes), "sha256": _sha256(args.source_keyframes)} if args.source_keyframes else None)},
             "initial_placement": initial_placement,
             "controller_gains": controller_receipt,
