@@ -33,6 +33,7 @@ from run_hangmug_skill_program import (
     _contact_force_by_body_receipt,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
+    _direct_segment_live_row,
     _return_contact_clearance_receipt,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
@@ -205,6 +206,44 @@ def test_contact_force_receipt_attributes_only_nonzero_body_forces():
     )
 
     assert receipt == {"colliding_link": 5.0}
+
+
+def test_direct_segment_live_row_attributes_environment_and_mug_by_body():
+    def sensor(forces):
+        return SimpleNamespace(
+            data=SimpleNamespace(force_matrix_w=np.asarray(forces, dtype=np.float64))
+        )
+
+    views = {
+        "environment": (
+            sensor([[[0.0, 0.0, 0.0]]]),
+            sensor([[[0.0, 0.0, 7.0]]]),
+        ),
+        "mug": (
+            sensor([[[0.0, 0.0, 2.0]]]),
+            sensor([[[0.0, 0.0, 0.0]]]),
+        ),
+        "right_body_paths": ("right_camera", "right_finger"),
+    }
+    sample = {
+        "step": 12,
+        "right_pad_fractions": [0.0, 0.0],
+        "right_finger_forces_n": [0.0, 0.0],
+        "right_grasp": False,
+        "grasp_assist_engaged": {"right": False},
+    }
+
+    row = _direct_segment_live_row(
+        views, sample, "post_release_return", 1.0 / 120.0
+    )
+
+    assert row["environment_contact_force_by_right_body_n"] == {
+        "right_finger": 7.0
+    }
+    assert row["mug_contact_force_by_right_body_n"] == {"right_camera": 2.0}
+    assert row["maximum_environment_contact_force_n"] == 7.0
+    assert row["maximum_mug_contact_force_n"] == 2.0
+    assert row["passed"] is False
 
 
 def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
