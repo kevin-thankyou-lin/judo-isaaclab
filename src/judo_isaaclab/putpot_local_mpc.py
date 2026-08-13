@@ -405,6 +405,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "dual_force_pad_margin_pivot_weak_index",
             "dual_force_pad_margin_pivot_target_fraction",
             "dual_force_pad_margin_pivot_predicted_fraction",
+            "dual_force_pad_margin_pivot_translation_tracking_scale",
+            "dual_force_pad_margin_pivot_uncompensated_translation_world_m",
             "dual_force_pad_margin_pivot_translation_world_m",
             "dual_force_pad_margin_pivot_rotation_axis_angle_world_rad",
             "dual_force_pad_margin_pivot_point_world_m",
@@ -815,6 +817,10 @@ def handle_local_mpc_step(
     dual_force_pad_margin_pivot_weak_index = None
     dual_force_pad_margin_pivot_target_fraction = None
     dual_force_pad_margin_pivot_predicted_fraction = None
+    dual_force_pad_margin_pivot_translation_tracking_scale = 1.0
+    dual_force_pad_margin_pivot_uncompensated_translation = np.zeros(
+        3, dtype=np.float64
+    )
     dual_force_pad_margin_pivot_translation = np.zeros(3, dtype=np.float64)
     dual_force_pad_margin_pivot_rotation = np.zeros(3, dtype=np.float64)
     dual_force_pad_margin_pivot_point = np.zeros(3, dtype=np.float64)
@@ -909,8 +915,21 @@ def handle_local_mpc_step(
                     * predicted_motion(step_angle)
                     / active_pad_fraction_axis_extent_m
                 )
-                dual_force_pad_margin_pivot_translation = pivot_translation(
-                    step_angle
+                dual_force_pad_margin_pivot_uncompensated_translation = (
+                    pivot_translation(step_angle)
+                )
+                # Attempt 52 measured the first compensated-pivot response:
+                # translation realized 65.1% of its command while rotation
+                # realized only 24.9%.  The resulting excess translation moved
+                # the pot through the unchanged 3 mm guard.  Scale only this
+                # pair-opted pivot translation by 40%, the bounded measured
+                # rotation/translation tracking ratio, so the physical swept
+                # motion follows the same strong-contact pivot.  Controller
+                # and IK gains remain untouched.
+                dual_force_pad_margin_pivot_translation_tracking_scale = 0.4
+                dual_force_pad_margin_pivot_translation = (
+                    dual_force_pad_margin_pivot_translation_tracking_scale
+                    * dual_force_pad_margin_pivot_uncompensated_translation
                 )
                 dual_force_pad_margin_pivot_rotation = rotation_axis * step_angle
                 dual_force_pad_margin_pivot_point = pivot_point.copy()
@@ -1369,6 +1388,12 @@ def handle_local_mpc_step(
             ),
             "dual_force_pad_margin_pivot_predicted_fraction": (
                 dual_force_pad_margin_pivot_predicted_fraction
+            ),
+            "dual_force_pad_margin_pivot_translation_tracking_scale": (
+                dual_force_pad_margin_pivot_translation_tracking_scale
+            ),
+            "dual_force_pad_margin_pivot_uncompensated_translation_world_m": (
+                dual_force_pad_margin_pivot_uncompensated_translation.tolist()
             ),
             "dual_force_pad_margin_pivot_translation_world_m": (
                 dual_force_pad_margin_pivot_translation.tolist()

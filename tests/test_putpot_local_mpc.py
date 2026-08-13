@@ -3,7 +3,6 @@ import copy
 import numpy as np
 import pytest
 
-from judo_isaaclab.put_marker import quaternion_rotate
 from judo_isaaclab.putpot_local_mpc import (
     HandleLocalMpcConfig,
     contact_window_joint_nominal_weight,
@@ -524,7 +523,7 @@ def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
         )
 
 
-def test_dual_force_pad_margin_pivot_preserves_broad_contact_point():
+def test_dual_force_pad_margin_pivot_compensates_measured_tracking_ratio():
     wrist = np.asarray(
         [
             0.5640213,
@@ -583,25 +582,20 @@ def test_dual_force_pad_margin_pivot_preserves_broad_contact_point():
     assert closure["dual_force_pad_margin_pivot_weak_index"] == 1
     assert closure["dual_force_pad_margin_pivot_target_fraction"] == 0.25
     assert closure["dual_force_pad_margin_pivot_predicted_fraction"] > fractions[1]
+    assert closure[
+        "dual_force_pad_margin_pivot_translation_tracking_scale"
+    ] == pytest.approx(0.4)
+    assert np.linalg.norm(
+        closure[
+            "dual_force_pad_margin_pivot_uncompensated_translation_world_m"
+        ]
+    ) == pytest.approx(0.004)
     assert np.linalg.norm(
         closure["dual_force_pad_margin_pivot_translation_world_m"]
-    ) == pytest.approx(0.004)
+    ) == pytest.approx(0.0016)
     assert np.linalg.norm(
         closure["dual_force_pad_margin_pivot_rotation_axis_angle_world_rad"]
     ) < 0.08
-    pivot = np.asarray(
-        closure["dual_force_pad_margin_pivot_point_world_m"], dtype=np.float64
-    )
-    wrist_inverse_quaternion = wrist[3:] * np.asarray(
-        [1.0, -1.0, -1.0, -1.0], dtype=np.float64
-    )
-    pivot_wrist_local = quaternion_rotate(
-        wrist_inverse_quaternion, pivot - wrist[:3]
-    )
-    transformed_pivot = command.wrist_target_pose[:3] + quaternion_rotate(
-        command.wrist_target_pose[3:], pivot_wrist_local
-    )
-    np.testing.assert_allclose(transformed_pivot, pivot, atol=1.0e-10)
     assert command.jaw_command == pytest.approx(-0.0195)
     assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
 
