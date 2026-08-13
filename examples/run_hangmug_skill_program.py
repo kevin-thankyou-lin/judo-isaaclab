@@ -836,7 +836,7 @@ def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
 
 def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
     rows = samples[1:]
-    return {
+    result = {
         "left_grasp": np.asarray([row["left_grasp"] for row in rows], dtype=bool),
         "right_grasp": np.asarray([row["right_grasp"] for row in rows], dtype=bool),
         "left_assist_engaged": np.asarray(
@@ -854,6 +854,24 @@ def _trace_status_arrays(samples) -> dict[str, np.ndarray]:
             for stage in (1, 2, 3)
         },
     }
+    for arm in ("left", "right"):
+        diagnostics = [row["gripper_contact_diagnostics"][arm] for row in rows]
+        if any(len(fingers) != 2 for fingers in diagnostics):
+            raise ValueError(f"{arm} gripper contact trace must contain two fingers")
+        result[f"{arm}_finger_contact_force_n"] = np.asarray(
+            [[finger["force_n"] for finger in fingers] for fingers in diagnostics],
+            dtype=np.float32,
+        )
+        for field in ("touching", "pad_valid", "pad_in_band"):
+            result[f"{arm}_finger_{field}"] = np.asarray(
+                [[finger[field] for finger in fingers] for fingers in diagnostics],
+                dtype=bool,
+            )
+        result[f"{arm}_finger_pad_fraction"] = np.asarray(
+            [[finger["pad_fraction"] for finger in fingers] for fingers in diagnostics],
+            dtype=np.float32,
+        )
+    return result
 
 
 def _source_pick_prefix_steps(keyframes) -> int:
@@ -1015,6 +1033,32 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     from run_putmarker_skill_program import _eef_pose
 
     left_grasp, right_grasp = env.robot.is_grasping()
+    env_ids = torch.tensor([0], dtype=torch.long, device=env.scene.device)
+    gripper_contact_diagnostics = {}
+    for arm_name in ("left_arm", "right_arm"):
+        gripper = env.robot.arms[arm_name].end_effector
+        threshold = float(gripper._cfg["normal_force_thresh"])
+        pad_min = float(gripper._cfg["pad_min_frac"])
+        pad_max = float(gripper._cfg["pad_max_frac"])
+        fingers = []
+        for finger in gripper.fingers:
+            force = float(finger.contact_force("mug", env_ids)[0].item())
+            fraction, valid = finger.contact_pad_fraction("mug", env_ids)
+            pad_valid = bool(valid[0].item())
+            pad_fraction = float(fraction[0].item()) if pad_valid else float("nan")
+            fingers.append(
+                {
+                    "link": finger.link,
+                    "force_n": force,
+                    "touching": force >= threshold,
+                    "pad_fraction": pad_fraction,
+                    "pad_valid": pad_valid,
+                    "pad_in_band": bool(
+                        pad_valid and pad_min <= pad_fraction <= pad_max
+                    ),
+                }
+            )
+        gripper_contact_diagnostics[arm_name.removesuffix("_arm")] = fingers
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     mug_pose = env.scene["mug"].data.root_pose_w[0].detach().cpu().numpy().copy()
     tree_pose = env.scene["mug_tree"].data.root_pose_w[0].detach().cpu().numpy().copy()
@@ -1037,6 +1081,7 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "program_stage": stage,
         "left_grasp": bool(left_grasp[0].item()),
         "right_grasp": bool(right_grasp[0].item()),
+        "gripper_contact_diagnostics": gripper_contact_diagnostics,
         "grasp_assist_engaged": assist_engaged,
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
