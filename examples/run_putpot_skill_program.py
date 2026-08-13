@@ -7926,6 +7926,7 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_protocol = None
         if args.target_handle_local_mpc_acquisition:
             from judo_isaaclab.putpot_local_mpc import (
+                PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS,
                 handle_local_mpc_config_receipt,
             )
 
@@ -8068,7 +8069,25 @@ def main(argv: list[str] | None = None) -> None:
                         args.target_left_quality_handle_tangent_contact_recenter
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
-                    "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,
+                    "base_maximum_total_m": (
+                        local_mpc_config.maximum_contact_recenter_total_m
+                    ),
+                    "preclosure_geometric_extra_budget_m": (
+                        PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
+                        * local_mpc_config.maximum_contact_recenter_step_m
+                        if args.target_left_quality_dual_force_pad_margin_pivot
+                        else 0.0
+                    ),
+                    "preclosure_geometric_maximum_total_m": (
+                        local_mpc_config.maximum_contact_recenter_total_m
+                        + PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
+                        * local_mpc_config.maximum_contact_recenter_step_m
+                        if args.target_left_quality_dual_force_pad_margin_pivot
+                        else local_mpc_config.maximum_contact_recenter_total_m
+                    ),
+                    "maximum_total_m": (
+                        local_mpc_config.maximum_contact_recenter_total_m
+                    ),
                     "budget_accounting": (
                         "measured_positive_axial_wrist_displacement"
                     ),

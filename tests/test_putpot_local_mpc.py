@@ -631,6 +631,13 @@ def test_pair_15_preseats_finite_edge_with_open_jaw_before_closure():
     assert recenter["protected_pad_fraction_margin"] == pytest.approx(
         0.1 + 0.004 / 0.06806614249944687
     )
+    assert recenter["base_maximum_total_m"] == pytest.approx(0.012)
+    assert recenter["preclosure_geometric_extra_budget_m"] == pytest.approx(0.002)
+    assert recenter["preclosure_geometric_maximum_total_m"] == pytest.approx(
+        0.014
+    )
+    assert recenter["maximum_total_m"] == pytest.approx(0.012)
+    assert recenter["effective_maximum_total_m"] == pytest.approx(0.014)
     assert recenter["executed_translation_m"] == pytest.approx(0.001)
     np.testing.assert_allclose(control["translation_world_m"], [0.0, 0.0, -0.001])
     np.testing.assert_allclose(control["rotation_axis_angle_world_rad"], 0.0)
@@ -656,6 +663,43 @@ def test_pair_15_preseats_finite_edge_with_open_jaw_before_closure():
     assert unopted.frame_receipt["executed_control"]["jaw_increment"] == pytest.approx(
         0.004
     )
+
+
+def test_pair_15_preclosure_prestage_fails_closed_at_float32_budget_floor():
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=90,
+            observed_handle_contact_frame=_pose(),
+            object_relative_wrist_prior=_pose(),
+            source_warm_start_wrist_pose=_pose(),
+            active_pad_fractions=[np.nan, 0.14034],
+            active_finger_forces_n=[0.0, 0.0],
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        allow_dual_force_pad_margin_pivot=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+        contact_recenter_total_m=0.013999975,
+    )
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    assert command.fail_closed
+    assert command.fail_reason == "preclosure_geometric_prestage_budget_exhausted"
+    assert not recenter["active"]
+    assert recenter["maximum_total_m"] == pytest.approx(0.012)
+    assert recenter["effective_maximum_total_m"] == pytest.approx(0.014)
+    assert recenter["preclosure_geometric_budget_exhaustion_tolerance_m"] == (
+        pytest.approx(1.0e-6)
+    )
+    np.testing.assert_allclose(
+        command.frame_receipt["executed_control"]["translation_world_m"], 0.0
+    )
+    assert command.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
 
 
 def test_handle_normal_depth_guard_removes_inward_handle_motion():

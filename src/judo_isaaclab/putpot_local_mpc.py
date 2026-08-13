@@ -16,6 +16,10 @@ import numpy as np
 from .put_marker import inverse_pose, quaternion_multiply, quaternion_rotate
 
 
+PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS = 2
+PRECLOSURE_GEOMETRIC_BUDGET_EXHAUSTION_TOLERANCE_M = 1.0e-6
+
+
 @dataclass(frozen=True)
 class HandleLocalMpcConfig:
     horizon_steps: int = 15
@@ -380,7 +384,12 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "world_command_norm_m",
             "total_translation_m",
             "maximum_step_m",
+            "base_maximum_total_m",
             "maximum_total_m",
+            "effective_maximum_total_m",
+            "preclosure_geometric_extra_budget_m",
+            "preclosure_geometric_maximum_total_m",
+            "preclosure_geometric_budget_exhaustion_tolerance_m",
         }
         and set(closure)
         == {
@@ -682,6 +691,16 @@ def handle_local_mpc_step(
     preclosure_geometric_prestage_enabled = bool(
         allow_dual_force_pad_margin_pivot
     )
+    preclosure_geometric_extra_budget_m = float(
+        PRECLOSURE_GEOMETRIC_EXTRA_RECENTER_STEPS
+        * config.maximum_contact_recenter_step_m
+        if preclosure_geometric_prestage_enabled
+        else 0.0
+    )
+    preclosure_geometric_maximum_total_m = float(
+        config.maximum_contact_recenter_total_m
+        + preclosure_geometric_extra_budget_m
+    )
     preclosure_geometric_prestage_eligible = bool(
         preclosure_geometric_prestage_enabled
         and not closure_committed
@@ -783,10 +802,25 @@ def handle_local_mpc_step(
         and contact_fraction_delta != 0.0
         and active_margin_ok
     )
+    effective_maximum_recenter_total_m = float(
+        preclosure_geometric_maximum_total_m
+        if preclosure_geometric_prestage_eligible
+        else config.maximum_contact_recenter_total_m
+    )
     remaining_recenter_m = max(
         0.0,
-        config.maximum_contact_recenter_total_m - contact_recenter_total_m,
+        effective_maximum_recenter_total_m - contact_recenter_total_m,
     )
+    if (
+        preclosure_geometric_prestage_eligible
+        and remaining_recenter_m
+        <= PRECLOSURE_GEOMETRIC_BUDGET_EXHAUSTION_TOLERANCE_M
+    ):
+        # Float32 wrist observations left a 24.8 nm remainder after Attempt
+        # 54 consumed its measured budget.  Treat a sub-micron remainder as
+        # exhausted so the controller fails closed instead of emitting an
+        # ineffective command through the rest of the acquisition window.
+        remaining_recenter_m = 0.0
     executed_recenter_translation_m = float(
         np.clip(
             requested_recenter_translation_m,
@@ -1395,7 +1429,22 @@ def handle_local_mpc_step(
             ),
             "total_translation_m": next_contact_recenter_total_m,
             "maximum_step_m": config.maximum_contact_recenter_step_m,
+            "base_maximum_total_m": (
+                config.maximum_contact_recenter_total_m
+            ),
             "maximum_total_m": config.maximum_contact_recenter_total_m,
+            "effective_maximum_total_m": (
+                effective_maximum_recenter_total_m
+            ),
+            "preclosure_geometric_extra_budget_m": (
+                preclosure_geometric_extra_budget_m
+            ),
+            "preclosure_geometric_maximum_total_m": (
+                preclosure_geometric_maximum_total_m
+            ),
+            "preclosure_geometric_budget_exhaustion_tolerance_m": (
+                PRECLOSURE_GEOMETRIC_BUDGET_EXHAUSTION_TOLERANCE_M
+            ),
         },
         "closure": {
             "commit_enabled": bool(allow_bounded_closure_commit),
