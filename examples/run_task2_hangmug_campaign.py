@@ -190,6 +190,10 @@ def _repair_command(
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
         ])
+    if "pick_pad_depth_m" in strategy:
+        arguments.extend([
+            "--pick-pad-depth-m", str(strategy["pick_pad_depth_m"])
+        ])
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
     for field, option in (
@@ -306,6 +310,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
+        "pick_pad_depth_m",
         "require_broad_pad_contact",
         "post_handover_right_return_steps",
         "left_branch_point_steps",
@@ -324,7 +329,9 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
     handover_fields = allowed - late_support_fields - {
-        "force_semantic_regeneration", "pick_lift_margin_m"
+        "force_semantic_regeneration",
+        "pick_lift_margin_m",
+        "pick_pad_depth_m",
     }
     strategy = {}
     if "force_semantic_regeneration" in value:
@@ -355,6 +362,16 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("pick lift margin must be in [0, 0.03] m")
         strategy["pick_lift_margin_m"] = float(margin)
+    if "pick_pad_depth_m" in value:
+        depth = value["pick_pad_depth_m"]
+        if (
+            isinstance(depth, bool)
+            or not isinstance(depth, (int, float))
+            or not np.isfinite(depth)
+            or not 0.0 <= depth <= 0.015
+        ):
+            raise ValueError("pick pad depth must be in [0, 0.015] m")
+        strategy["pick_pad_depth_m"] = float(depth)
     setup_steps = (
         value.get("post_handover_right_return_steps", 0),
         value.get("left_branch_point_steps", 0),

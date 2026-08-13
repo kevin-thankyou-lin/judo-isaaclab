@@ -21,6 +21,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _advance_pick_pad_depth,
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
@@ -204,6 +205,17 @@ def test_branch_approach_height_can_preserve_middle_branch_axis():
     assert raised[:3] == pytest.approx([0.54, -0.2, 0.93])
     with pytest.raises(ValueError, match="branch approach height"):
         _branch_approach_mug_pose(final, branch, 0.04, 0.081)
+
+
+def test_pick_pad_depth_advance_follows_eef_local_positive_z():
+    grasp = _pose(0.4, 0.1, 0.9)
+
+    advanced = _advance_pick_pad_depth(grasp, 0.007)
+
+    assert advanced[:3] == pytest.approx([0.4, 0.1, 0.907])
+    assert advanced[3:] == pytest.approx(grasp[3:])
+    with pytest.raises(ValueError, match="pick pad depth"):
+        _advance_pick_pad_depth(grasp, 0.016)
 
 
 def test_handover_contact_transfer_preserves_authored_handle_frame_relation():
