@@ -679,6 +679,10 @@ def handle_local_mpc_step(
         and (
             not depth_guarded_transverse_intercept
             or next_depth_guard_released
+            or (
+                contact_recenter_use_handle_tangent
+                and physical_contact_observed
+            )
         )
     )
     nominal_depth_completion_component_m = float(

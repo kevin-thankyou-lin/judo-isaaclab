@@ -566,6 +566,42 @@ def test_handle_tangent_contact_recenter_removes_normal_motion_and_honors_budget
     ]
 
 
+def test_handle_tangent_recenter_can_protect_margin_before_depth_guard_release():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=29,
+            observed_handle_contact_frame=handle,
+            active_pad_axes_world=[[0.6, 0.0, 0.8], [0.6, 0.0, 0.8]],
+            active_finger_forces_n=[0.0, 2.38],
+            active_pad_fractions=[np.nan, 0.094],
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=False,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    normal = np.asarray(
+        command.frame_receipt["contact_frame_guard"]["depth_axis_world"]
+    )
+    control = np.asarray(
+        command.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    assert not command.fail_closed
+    assert not command.depth_guard_released
+    assert recenter["active"]
+    assert np.dot(control, normal) == pytest.approx(0.0, abs=1.0e-12)
+    assert recenter["executed_translation_m"] == pytest.approx(0.000408)
+    assert command.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+
+
 def test_pair_15_attempt_34_exhausted_tangent_budget_completes_depth_open_jaw():
     command = handle_local_mpc_step(
         **_inputs(
