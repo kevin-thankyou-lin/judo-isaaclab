@@ -32,6 +32,7 @@ from run_hangmug_skill_program import (
     _install_grasp_assist_config,
     _handover_boundary_receipt,
     _handover_orient_clear_pose,
+    _handover_target_with_camera_clockwise_roll,
     _handover_target_with_local_pitch,
     _handover_target_with_local_seat,
     _handover_target_with_local_straddle,
@@ -763,6 +764,18 @@ def test_handover_local_pitch_rotates_only_receiver_orientation():
     )
     with pytest.raises(ValueError, match="within 45 degrees"):
         _handover_target_with_local_pitch(pose, np.pi / 4.0 + 1.0e-6)
+
+
+def test_handover_camera_clockwise_roll_preserves_receiver_position():
+    pose = _pose(0.4, -0.1, 0.9)
+    rotated = _handover_target_with_camera_clockwise_roll(pose, np.deg2rad(32.0))
+    np.testing.assert_allclose(rotated[:3], pose[:3], atol=0.0)
+    assert np.linalg.norm(rotated[3:]) == pytest.approx(1.0)
+    assert not np.allclose(rotated[3:], pose[3:])
+    with pytest.raises(ValueError, match="in \\[0, 45\\] degrees"):
+        _handover_target_with_camera_clockwise_roll(pose, -1.0e-6)
+    with pytest.raises(ValueError, match="in \\[0, 45\\] degrees"):
+        _handover_target_with_camera_clockwise_roll(pose, np.pi / 4.0 + 1.0e-6)
 
 
 def test_handover_local_straddle_translates_only_along_oriented_closing_axis():
