@@ -1591,6 +1591,91 @@ def mirror_handle_position_in_receiving_jaw_frame(
     return center_handle_between_finger_pads(result, offset), offset
 
 
+def transfer_axis_between_semantic_frames(
+    axis: Any,
+    source_frame: Any,
+    target_frame: Any,
+) -> np.ndarray:
+    """Transfer one direction through corresponding object-local frames."""
+
+    value = np.asarray(axis, dtype=np.float64)
+    if value.shape != (3,) or not np.all(np.isfinite(value)):
+        raise ValueError("axis must be one finite 3D vector")
+    norm = float(np.linalg.norm(value))
+    if norm <= 1.0e-9:
+        raise ValueError("axis must be nonzero")
+    source = _pose(source_frame, "source_frame")
+    target = _pose(target_frame, "target_frame")
+    source_local = quaternion_rotate(inverse_pose(source)[3:], value / norm)
+    transferred = quaternion_rotate(target[3:], source_local)
+    return transferred / np.linalg.norm(transferred)
+
+
+def align_object_local_gripper_prior_to_jaw_axis(
+    gripper_pose_local: Any,
+    current_jaw_axis_local: Any,
+    target_jaw_axis_local: Any,
+    current_pad_axis_local: Any,
+    *,
+    maximum_correction_rad: float = 0.35,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Apply the smallest bounded rotation that aligns a receiving jaw axis.
+
+    The complete peer wrist pose is deliberately not transferred.  Only a
+    physically observed peer jaw direction crosses the semantic handle frames;
+    the receiving arm keeps its own wrist pose and pad-axis twist.
+    """
+
+    pose = _pose(gripper_pose_local, "gripper_pose_local")
+    current = np.asarray(current_jaw_axis_local, dtype=np.float64).copy()
+    target = np.asarray(target_jaw_axis_local, dtype=np.float64).copy()
+    pad = np.asarray(current_pad_axis_local, dtype=np.float64).copy()
+    for name, value in (
+        ("current_jaw_axis_local", current),
+        ("target_jaw_axis_local", target),
+        ("current_pad_axis_local", pad),
+    ):
+        if value.shape != (3,) or not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} must be one finite 3D vector")
+        norm = float(np.linalg.norm(value))
+        if norm <= 1.0e-9:
+            raise ValueError(f"{name} must be nonzero")
+        value /= norm
+    if not np.isfinite(maximum_correction_rad) or maximum_correction_rad <= 0.0:
+        raise ValueError("maximum_correction_rad must be positive and finite")
+    dot = float(np.clip(np.dot(current, target), -1.0, 1.0))
+    angle = float(np.arccos(dot))
+    if angle > maximum_correction_rad + 1.0e-12:
+        raise ValueError("peer jaw-axis correction exceeds the bounded limit")
+    cross = np.cross(current, target)
+    cross_norm = float(np.linalg.norm(cross))
+    if cross_norm <= 1.0e-12:
+        delta = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        rotation_axis = np.zeros(3, dtype=np.float64)
+    else:
+        rotation_axis = cross / cross_norm
+        delta = np.concatenate(
+            ([np.cos(0.5 * angle)], rotation_axis * np.sin(0.5 * angle))
+        )
+    result = pose.copy()
+    result[3:] = quaternion_multiply(delta, pose[3:])
+    result[3:] /= np.linalg.norm(result[3:])
+    rotated_pad = quaternion_rotate(delta, pad)
+    receipt = {
+        "mechanism": "bounded_peer_jaw_axis_alignment",
+        "current_jaw_axis_local": current.tolist(),
+        "target_jaw_axis_local": target.tolist(),
+        "current_pad_axis_local": pad.tolist(),
+        "rotated_pad_axis_local": rotated_pad.tolist(),
+        "rotation_axis_local": rotation_axis.tolist(),
+        "correction_rad": angle,
+        "correction_deg": float(np.degrees(angle)),
+        "maximum_correction_rad": float(maximum_correction_rad),
+        "position_unchanged": bool(np.array_equal(result[:3], pose[:3])),
+    }
+    return result, rotated_pad, receipt
+
+
 def transfer_peer_contact_pose_in_receiving_jaw_frame(
     reference_pose: Any,
     reference_handle_frame: Any,

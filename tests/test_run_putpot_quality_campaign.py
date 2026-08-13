@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
+    _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
     _source_contact_requires_acquisition_only,
@@ -95,6 +96,31 @@ def test_quality_static_centering_requires_same_sequential_corridor_sample():
         left_first=True,
         same_calibration_sample=True,
     )
+
+
+def test_quality_local_mpc_requires_full_left_first_failed_trace_contract():
+    required = {
+        "requested": True,
+        "acquisition_only": False,
+        "quality_mode": True,
+        "left_first": True,
+        "has_measured_corridor": True,
+        "source_contact_requested": True,
+    }
+    assert _quality_left_first_local_mpc_enabled(**required)
+    for name in (
+        "requested",
+        "quality_mode",
+        "left_first",
+        "has_measured_corridor",
+        "source_contact_requested",
+    ):
+        rejected = dict(required)
+        rejected[name] = False
+        assert not _quality_left_first_local_mpc_enabled(**rejected)
+    acquisition_only = dict(required)
+    acquisition_only["acquisition_only"] = True
+    assert not _quality_left_first_local_mpc_enabled(**acquisition_only)
 
 
 def test_measured_static_translation_moves_both_source_corridor_endpoints():

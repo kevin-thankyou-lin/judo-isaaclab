@@ -29,6 +29,7 @@ from judo_isaaclab.put_pot import (
     apply_contact_frame_radial_clearance_waypoint,
     apply_source_demo_approach_corridor,
     apply_object_local_receiving_grasp_orientation,
+    align_object_local_gripper_prior_to_jaw_axis,
     balance_handle_contact_across_finger_pads,
     bounded_handle_pad_balance,
     cartesian_smoothness_metrics,
@@ -70,6 +71,7 @@ from judo_isaaclab.put_pot import (
     reanchor_authored_handle_in_observed_jaw,
     reanchor_bimanual_transport_from_observation,
     transport_reanchor_has_smooth_horizon,
+    transfer_axis_between_semantic_frames,
     reanchor_bimanual_contact_hold,
     compensate_retained_contact_tracking,
     reanchor_missing_finger_contact,
@@ -1654,6 +1656,59 @@ def test_peer_contact_runtime_transfer_preserves_receiving_jaw_orientation():
     assert handle_jaw_center_offset_m(result, _pose(), handle_points) == pytest.approx(
         0.0, abs=1.0e-9
     )
+
+
+def test_peer_jaw_axis_alignment_transfers_only_one_bounded_direction():
+    half_turn_x = np.asarray([0.0, 1.0, 0.0, 0.0])
+    reference_frame = _pose(x=0.2)
+    reference_frame[3:] = half_turn_x
+    receiving_frame = _pose(x=-0.2)
+    observed_reference_axis = np.asarray([0.6, -0.1, -0.8])
+    transferred = transfer_axis_between_semantic_frames(
+        observed_reference_axis,
+        reference_frame,
+        receiving_frame,
+    )
+    assert transferred == pytest.approx([0.59702231, 0.09950372, 0.79602975])
+
+    current_jaw = np.asarray([0.45, 0.08, 0.89])
+    current_pad = np.asarray([-0.86, -0.22, 0.46])
+    pose = _pose(x=-0.25, z=0.1)
+    aligned, rotated_pad, receipt = align_object_local_gripper_prior_to_jaw_axis(
+        pose,
+        current_jaw,
+        transferred,
+        current_pad,
+    )
+    assert aligned[:3] == pytest.approx(pose[:3])
+    assert receipt["position_unchanged"]
+    assert 0.0 < receipt["correction_rad"] < 0.35
+    normalized_current = current_jaw / np.linalg.norm(current_jaw)
+    normalized_target = transferred / np.linalg.norm(transferred)
+    from judo_isaaclab.put_marker import quaternion_rotate
+
+    delta = np.asarray(
+        [
+            np.cos(0.5 * receipt["correction_rad"]),
+            *(
+                np.asarray(receipt["rotation_axis_local"])
+                * np.sin(0.5 * receipt["correction_rad"])
+            ),
+        ]
+    )
+    assert quaternion_rotate(delta, normalized_current) == pytest.approx(
+        normalized_target
+    )
+    assert rotated_pad == pytest.approx(
+        quaternion_rotate(delta, current_pad / np.linalg.norm(current_pad))
+    )
+    with pytest.raises(ValueError, match="bounded limit"):
+        align_object_local_gripper_prior_to_jaw_axis(
+            pose,
+            current_jaw,
+            -transferred,
+            current_pad,
+        )
 
 
 def test_transport_contact_reanchor_uses_contact_feedback_horizon():
