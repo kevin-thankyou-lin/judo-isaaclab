@@ -604,6 +604,63 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert "--branch-orient-steps" not in command
 
 
+def test_independent_direct_choreography_audit_rejects_curved_outbound_segment():
+    names = np.asarray(
+        [
+            "carrying_rest_observer",
+            "carrying_rest_observer",
+            "direct_preinsert",
+            "direct_preinsert",
+            "direct_preinsert",
+            "branch_insert",
+            "supported_release_hold",
+            "right_release",
+            "right_release",
+            "right_release",
+            "post_release_return",
+            "post_release_return",
+            "post_release_return",
+            "stable_support",
+        ]
+    )
+    desired = np.zeros((len(names), 7), dtype=np.float64)
+    desired[:, 3] = 1.0
+    desired[:, 0] = [
+        0.0, 0.0,
+        0.1, 0.2, 0.3,
+        0.4,
+        0.4,
+        0.4, 0.4, 0.4,
+        0.3, 0.2, 0.0,
+        0.0,
+    ]
+    actions = np.zeros((len(names), 14), dtype=np.float64)
+    actions[8:, 13] = [0.0, -0.0475, -0.0475, -0.0475, -0.0475, -0.0475]
+    result = {
+        "direct_phase_contract": {"passed": True},
+        "direct_segment_collision_screening": {"passed": True},
+        "post_release_right_rest": {"passed": True},
+    }
+    trace = {
+        "semantic_waypoints": names,
+        "actions": actions,
+        "desired_right_eef_poses": desired,
+    }
+
+    assert campaign._direct_choreography_audit(result, trace)["passed"] is True
+
+    curved = desired.copy()
+    curved[2, 1] = 0.02
+    with pytest.raises(
+        RuntimeError,
+        match="'outbound_one_direct_interpolation': False",
+    ):
+        campaign._direct_choreography_audit(
+            result,
+            {**trace, "desired_right_eef_poses": curved},
+        )
+
+
 def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
     monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
