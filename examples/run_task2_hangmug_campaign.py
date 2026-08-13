@@ -47,6 +47,20 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_support_fraction",
     "branch_support_seat_down_m",
 })
+HANDOVER_SUFFIX_STRATEGY_FIELDS = frozenset({
+    "handover_contact_settle_steps",
+    "handover_contact_acquire_steps",
+    "handover_confirm_steps",
+    "handover_post_release_lift_m",
+    "handover_post_release_lift_steps",
+    "handover_target_offset_m",
+    "handover_target_local_pitch_rad",
+    "handover_straddle_local_x_m",
+    "handover_orient_clearance_m",
+    "handover_orient_steps",
+    "handover_handle_frame_transfer",
+    "left_release_retreat_m",
+})
 LD_LIBRARY_PATH = ":".join(
     (
         "/home/linke/miniforge3/envs/yam_lab/lib",
@@ -194,7 +208,8 @@ def _repair_command(
     ):
         if field in strategy:
             arguments.extend([option, str(strategy[field])])
-    if selection["actual_repair_boundary"] == "reset":
+    handover_strategy = set(strategy) & HANDOVER_SUFFIX_STRATEGY_FIELDS
+    if selection["actual_repair_boundary"] == "reset" or handover_strategy:
         arguments.extend([
             "--handover-contact-settle-steps",
             str(strategy.get("handover_contact_settle_steps", 30)),
@@ -237,11 +252,12 @@ def _repair_command(
                 "--handover-post-release-lift-steps",
                 str(strategy["handover_post_release_lift_steps"]),
             ])
-    elif selection["actual_repair_boundary"] == "pick":
-        if set(strategy) - BRANCH_SUFFIX_STRATEGY_FIELDS:
-            raise ValueError("pair repair strategy is valid only from reset")
+    if selection["actual_repair_boundary"] == "pick":
+        allowed = BRANCH_SUFFIX_STRATEGY_FIELDS | HANDOVER_SUFFIX_STRATEGY_FIELDS
+        if set(strategy) - allowed:
+            raise ValueError("Pick repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
-    else:
+    elif selection["actual_repair_boundary"] != "reset":
         raise RuntimeError(f"unsupported actual repair boundary: {selection}")
     workload[workload.index("--device"):workload.index("--device")] = arguments
     return _guarded(attempt, workload)

@@ -365,6 +365,37 @@ def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
         )
 
 
+def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    strategy = {
+        "handover_handle_frame_transfer": True,
+        "handover_orient_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+        "handover_contact_settle_steps": 30,
+        "handover_contact_acquire_steps": 12,
+        "handover_confirm_steps": 12,
+        "handover_target_offset_m": [0.0, 0.0, 0.0],
+        "handover_post_release_lift_m": 0.0,
+        "handover_post_release_lift_steps": 0,
+    }
+
+    command = campaign._repair_command(
+        27,
+        tmp_path / "attempt",
+        tmp_path / "classification/result.json",
+        campaign._repair_selection("handover", "pick"),
+        strategy,
+    )
+
+    assert "--reuse-source-pick-prefix" in command
+    assert "--handover-handle-frame-transfer" in command
+    assert command[command.index("--handover-orient-clearance-m") + 1] == "0.08"
+    assert command[command.index("--handover-orient-steps") + 1] == "30"
+    assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
+    assert command[command.index("--handover-contact-acquire-steps") + 1] == "12"
+
+
 def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
     results = tmp_path / "task2"
     candidate = results / "pairs/000004/repair_candidate.json"
