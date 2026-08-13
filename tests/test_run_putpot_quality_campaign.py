@@ -14,6 +14,7 @@ from run_putpot_skill_program import (
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
     _offset_object_contact_frame,
+    _pivot_source_corridor_grasp_endpoint,
     _pad_balance_mpc_reference_active,
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
@@ -48,6 +49,21 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     assert parsed.target_left_handle_pad_balance_limit_m == pytest.approx(
         0.01819198772819174
     )
+
+
+def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
+    pregrasp = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    grasp = np.asarray([0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0])
+    routed_pregrasp, routed_grasp, receipt = (
+        _pivot_source_corridor_grasp_endpoint(
+            pregrasp, grasp, -0.01819198772819174
+        )
+    )
+    np.testing.assert_array_equal(routed_pregrasp, pregrasp)
+    assert not np.array_equal(routed_grasp, grasp)
+    assert receipt["pregrasp_unchanged"]
+    assert receipt["grasp_orientation_changed"]
+    assert receipt["relative_balance_m"] == pytest.approx(-0.01819198772819174)
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():

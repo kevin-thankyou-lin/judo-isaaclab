@@ -374,6 +374,34 @@ def _translate_source_corridor_endpoints(
     return pregrasp, grasp
 
 
+def _pivot_source_corridor_grasp_endpoint(
+    desired_pregrasp, desired_grasp, relative_balance_m: float
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    """Apply the existing one-finger pivot to the executable grasp only."""
+
+    from judo_isaaclab.put_pot import balance_handle_contact_across_finger_pads
+
+    pregrasp = np.asarray(desired_pregrasp, dtype=np.float64).copy()
+    grasp_before = np.asarray(desired_grasp, dtype=np.float64).copy()
+    if pregrasp.shape != (7,) or grasp_before.shape != (7,):
+        raise ValueError("source corridor endpoints must be poses")
+    grasp_after = balance_handle_contact_across_finger_pads(
+        grasp_before, relative_balance_m
+    )
+    return pregrasp, grasp_after, {
+        "enabled": True,
+        "mechanism": "existing_one_finger_pivot_after_source_corridor_replacement",
+        "relative_balance_m": float(relative_balance_m),
+        "pregrasp_unchanged": bool(np.array_equal(pregrasp, desired_pregrasp)),
+        "grasp_position_delta_m": float(
+            np.linalg.norm(grasp_after[:3] - grasp_before[:3])
+        ),
+        "grasp_orientation_changed": bool(
+            not np.array_equal(grasp_after[3:], grasp_before[3:])
+        ),
+    }
+
+
 def _offset_object_contact_frame(
     observed_object_pose, observed_contact_frame, object_local_translation
 ):
@@ -3761,6 +3789,17 @@ def main(argv: list[str] | None = None) -> None:
                     frame_receipt["jaw_centering_translation_world_m"],
                     dtype=np.float64,
                 )
+                executable_pad_pivot = None
+                if args.target_left_handle_pad_balance_limit_m is not None:
+                    (
+                        desired_pregrasp,
+                        desired_grasp,
+                        executable_pad_pivot,
+                    ) = _pivot_source_corridor_grasp_endpoint(
+                        desired_pregrasp,
+                        desired_grasp,
+                        float(handle_grasp_geometry["left"]["relative_balance_m"]),
+                    )
                 if pad_balance_requested:
                     precontact_pad_balance = (
                         _critic_owned_precontact_pad_balance(
@@ -3853,6 +3892,10 @@ def main(argv: list[str] | None = None) -> None:
                 if precontact_pad_balance is not None:
                     trajectory_receipt["precontact_pad_balance"] = (
                         precontact_pad_balance
+                    )
+                if executable_pad_pivot is not None:
+                    trajectory_receipt["executable_pad_balance_pivot"] = (
+                        executable_pad_pivot
                     )
                 if preorientation_requested:
                     trajectory, preorientation_receipt = (
