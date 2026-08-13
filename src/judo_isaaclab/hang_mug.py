@@ -60,7 +60,6 @@ def geometry_conditioned_hang_pose(
     target_branches: Any,
     *,
     branch_support_fraction: float = 0.5,
-    branch_support_handle_offset_m: Any = (0.0, 0.0, 0.0),
     branch_roll_offset_rad: float = 0.0,
     target_branch_rank: int | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
@@ -72,18 +71,6 @@ def geometry_conditioned_hang_pose(
         or not 0.25 <= branch_support_fraction <= 0.75
     ):
         raise ValueError("branch support fraction must be finite and in [0.25, 0.75]")
-    support_handle_offset = np.asarray(
-        branch_support_handle_offset_m, dtype=np.float64
-    )
-    if (
-        support_handle_offset.shape != (3,)
-        or not np.all(np.isfinite(support_handle_offset))
-        or np.linalg.norm(support_handle_offset) > 0.02
-    ):
-        raise ValueError(
-            "branch support handle offset must contain three finite values "
-            "within 2 cm"
-        )
     branch_roll_offset_rad = float(branch_roll_offset_rad)
     if not np.isfinite(branch_roll_offset_rad) or abs(branch_roll_offset_rad) > np.pi / 2:
         raise ValueError("branch roll offset must be finite and within 90 degrees")
@@ -176,15 +163,10 @@ def geometry_conditioned_hang_pose(
     )
     target_support_world = compose_pose(target_tree_pose, target_support_local)
     target_handle_world[:3] = target_support_world[:3]
-    support_handle_frame = np.asarray(
-        target_parts.handle_hole_frame, dtype=np.float64
-    ).copy()
-    # Keep the collision-inferred handle frame authoritative for the proven
-    # handover grasp.  A sealed geometry diagnosis may provide a bounded,
-    # mug-local aperture-centre correction for support placement alone.
-    support_handle_frame[:3] += support_handle_offset
     return (
-        compose_pose(target_handle_world, inverse_pose(support_handle_frame)),
+        compose_pose(
+            target_handle_world, inverse_pose(target_parts.handle_hole_frame)
+        ),
         source_branch,
         target_branch,
     )

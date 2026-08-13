@@ -539,23 +539,6 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
     deeper_branch_world = compose_pose(_pose(2.0, 3.0, 0.0), deeper_support)
     assert deeper_handle_world[:3] == pytest.approx(deeper_branch_world[:3])
     assert deeper_handle_world[3:] == pytest.approx(target_handle_world[3:])
-    support_offset = np.asarray([0.01, -0.005, 0.002])
-    corrected, _, _ = geometry_conditioned_hang_pose(
-        _pose(1.0, 0.02, 1.03),
-        _pose(),
-        source_parts,
-        target_parts,
-        (branch(-1.0, 0.3, 0.8), source_branch),
-        _pose(2.0, 3.0, 0.0),
-        (branch(-1.0, 0.4, 0.9), target_branch),
-        branch_support_handle_offset_m=support_offset,
-    )
-    corrected_support_frame = target_parts.handle_hole_frame.copy()
-    corrected_support_frame[:3] += support_offset
-    corrected_handle_world = compose_pose(corrected, corrected_support_frame)
-    assert corrected_handle_world[:3] == pytest.approx(target_branch_world[:3])
-    assert corrected_handle_world[3:] == pytest.approx(target_handle_world[3:])
-    assert corrected[3:] == pytest.approx(final[3:])
     rolled, _, _ = geometry_conditioned_hang_pose(
         _pose(1.0, 0.02, 1.03),
         _pose(),
@@ -610,12 +593,6 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             (source_branch,), _pose(), (target_branch,),
             branch_roll_offset_rad=np.pi,
         )
-    with pytest.raises(ValueError, match="support handle offset"):
-        geometry_conditioned_hang_pose(
-            _pose(), _pose(), source_parts, target_parts,
-            (source_branch,), _pose(), (target_branch,),
-            branch_support_handle_offset_m=[0.021, 0.0, 0.0],
-        )
 
 
 def test_branch_support_seating_changes_only_vertical_waypoint_translation():
@@ -628,10 +605,21 @@ def test_branch_support_seating_changes_only_vertical_waypoint_translation():
 
 
 def test_branch_support_seating_starts_only_after_closed_carrier_insertion():
-    pose = _pose(0.7, -0.2, 0.96)
-    insert_mug, unload_mug = _branch_support_mug_waypoints(pose, 0.01)
+    half_yaw = np.pi / 4
+    pose = np.asarray(
+        [0.7, -0.2, 0.96, np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)]
+    )
+    handle_offset = np.asarray([0.01, -0.005, 0.002])
+    insert_mug, unload_mug = _branch_support_mug_waypoints(
+        pose, 0.01, handle_offset
+    )
     assert insert_mug == pytest.approx(pose)
-    assert unload_mug == pytest.approx([0.7, -0.2, 0.95, *pose[3:]])
+    expected_unload = pose.copy()
+    expected_unload[:3] -= quaternion_rotate(pose[3:], handle_offset)
+    expected_unload[2] -= 0.01
+    assert unload_mug == pytest.approx(expected_unload)
+    with pytest.raises(ValueError, match="support handle offset"):
+        _branch_support_mug_waypoints(pose, 0.01, [0.021, 0.0, 0.0])
 
     program = HangMugSkillProgram(_pose(), _pose())
     program.physical_handover(
@@ -662,8 +650,8 @@ def test_branch_support_seating_starts_only_after_closed_carrier_insertion():
     insert_end = trajectory.waypoint_steps["branch_insert"]
     unload_end = trajectory.waypoint_steps["branch_unload"]
     insert_start = trajectory.waypoint_steps["left_release"] + 1
-    assert trajectory.right_poses[insert_end, 2] == pytest.approx(0.96)
-    assert trajectory.right_poses[unload_end, 2] == pytest.approx(0.95)
+    assert trajectory.right_poses[insert_end] == pytest.approx(pose)
+    assert trajectory.right_poses[unload_end] == pytest.approx(expected_unload)
     assert np.allclose(
         trajectory.grippers[insert_start : unload_end + 1, 1], 0.0
     )

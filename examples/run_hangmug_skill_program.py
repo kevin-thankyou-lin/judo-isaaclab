@@ -108,8 +108,8 @@ def _parser() -> argparse.Namespace:
         nargs=3,
         default=(0.0, 0.0, 0.0),
         help=(
-            "Bounded target-mug-local aperture-centre correction used only for "
-            "branch support placement."
+            "Bounded target-mug-local aperture-centre correction applied only "
+            "during closed-carrier branch unload."
         ),
     )
     parser.add_argument(
@@ -790,14 +790,20 @@ def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
 
 
 def _branch_support_mug_waypoints(
-    value, seat_down_m: float
+    value, seat_down_m: float, handle_offset_m=(0.0, 0.0, 0.0)
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Keep insertion on-axis, then seat downward during closed-carrier unload."""
+    """Keep insertion unchanged, then correct and seat during carrier unload."""
+    from judo_isaaclab.put_marker import quaternion_rotate
+
     insert = np.asarray(value, dtype=np.float64)
     if insert.shape != (7,) or not np.all(np.isfinite(insert)):
         raise ValueError("branch support pose must contain seven finite values")
     insert = insert.copy()
-    return insert, _branch_support_seated_pose(insert, seat_down_m)
+    unload = insert.copy()
+    unload[:3] -= quaternion_rotate(
+        unload[3:], _bounded_branch_support_handle_offset(handle_offset_m)
+    )
+    return insert, _branch_support_seated_pose(unload, seat_down_m)
 
 
 def _bounded_branch_support_seat_down(value: float) -> float:
@@ -1467,14 +1473,13 @@ def _build_skill(
         branch_support_fraction=_bounded_branch_support_fraction(
             args.branch_support_fraction
         ),
-        branch_support_handle_offset_m=_bounded_branch_support_handle_offset(
-            args.branch_support_handle_offset_m
-        ),
         branch_roll_offset_rad=args.branch_roll_offset_rad,
         target_branch_rank=args.target_branch_rank,
     )
     insert_mug_pose, final_mug_pose = _branch_support_mug_waypoints(
-        final_mug_pose, args.branch_support_seat_down_m
+        final_mug_pose,
+        args.branch_support_seat_down_m,
+        args.branch_support_handle_offset_m,
     )
     target_branch_world = compose_pose(target_tree.root_pose, target_branch.frame)
     insert_mug = RigidAssetGeometry(insert_mug_pose, target_geometry.size)
