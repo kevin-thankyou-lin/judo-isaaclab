@@ -827,6 +827,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "unchanged total translation bound."
         ),
     )
+    parser.add_argument(
+        "--target-left-contact-recenter-preserve-bounded-closure",
+        action="store_true",
+        help=(
+            "During opt-in left-pad recentering, retain the nominal jaw "
+            "closure computed inside the unchanged pose and jaw-step bounds."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -2813,6 +2821,16 @@ def main(argv: list[str] | None = None) -> None:
             "left transverse-preserving recenter requires sequential quality "
             "MPC with depth guard and contact-fraction recentering"
         )
+    if args.target_left_contact_recenter_preserve_bounded_closure and not (
+        quality_left_first_local_mpc
+        and args.target_handle_local_contact_fraction_recenter
+        and args.target_handle_local_depth_guarded_intercept
+        and args.target_left_contact_recenter_preserve_transverse_centering
+    ):
+        raise ValueError(
+            "left closure-preserving recenter requires sequential quality "
+            "MPC with depth guard and transverse-preserving recentering"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -4682,6 +4700,10 @@ def main(argv: list[str] | None = None) -> None:
                                 contact_recenter_preserve_transverse_centering=bool(
                                     active_arm == "left"
                                     and args.target_left_contact_recenter_preserve_transverse_centering
+                                ),
+                                contact_recenter_preserve_bounded_closure=bool(
+                                    active_arm == "left"
+                                    and args.target_left_contact_recenter_preserve_bounded_closure
                                 ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
@@ -6818,6 +6840,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_preserves_transverse_centering": bool(
                         args.target_left_contact_recenter_preserve_transverse_centering
+                    ),
+                    "left_preserves_bounded_closure": bool(
+                        args.target_left_contact_recenter_preserve_bounded_closure
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,

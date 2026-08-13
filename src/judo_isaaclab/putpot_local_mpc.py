@@ -345,6 +345,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "enabled",
             "active",
             "preserve_transverse_centering",
+            "preserve_bounded_closure",
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
@@ -396,6 +397,7 @@ def handle_local_mpc_step(
     depth_guard_released: bool = False,
     contact_fraction_recenter: bool = False,
     contact_recenter_preserve_transverse_centering: bool = False,
+    contact_recenter_preserve_bounded_closure: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -643,7 +645,7 @@ def handle_local_mpc_step(
         if aligned_for_closure and not fail_closed and not robust_frame
         else 0.0
     )
-    if contact_recenter_active:
+    if contact_recenter_active and not contact_recenter_preserve_bounded_closure:
         jaw_increment = 0.0
     target = wrist.copy()
     target[:3] += translation_increment
@@ -739,6 +741,9 @@ def handle_local_mpc_step(
             "active": contact_recenter_active,
             "preserve_transverse_centering": bool(
                 contact_recenter_preserve_transverse_centering
+            ),
+            "preserve_bounded_closure": bool(
+                contact_recenter_preserve_bounded_closure
             ),
             "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),
             "pad_fraction_axis_extent_m": float(
