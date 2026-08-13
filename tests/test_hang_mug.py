@@ -31,6 +31,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
+    _handover_target_with_local_contact_pivot_roll,
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
@@ -761,6 +762,34 @@ def test_handover_local_pitch_rotates_only_receiver_orientation():
     )
     with pytest.raises(ValueError, match="within 45 degrees"):
         _handover_target_with_local_pitch(pose, np.pi / 4.0 + 1.0e-6)
+
+
+def test_handover_local_roll_preserves_contact_pivot_and_moves_wrist_origin():
+    pose = _pose(0.4, -0.1, 0.9)
+    pivot = np.asarray([0.4, 0.0, 0.9])
+    rolled = _handover_target_with_local_contact_pivot_roll(
+        pose, pivot, np.pi / 6.0
+    )
+    local_pivot = np.asarray([0.0, 0.1, 0.0])
+    np.testing.assert_allclose(
+        rolled[:3] + quaternion_rotate(rolled[3:], local_pivot),
+        pivot,
+        atol=1.0e-12,
+    )
+    assert np.linalg.norm(rolled[:3] - pose[:3]) > 0.0
+    np.testing.assert_allclose(
+        quaternion_rotate(rolled[3:], [1.0, 0.0, 0.0]),
+        [np.sqrt(3.0) / 2.0, 0.5, 0.0],
+        atol=1.0e-12,
+    )
+    with pytest.raises(ValueError, match="within 90 degrees"):
+        _handover_target_with_local_contact_pivot_roll(
+            pose, pivot, np.pi / 2.0 + 1.0e-6
+        )
+    with pytest.raises(ValueError, match="three finite"):
+        _handover_target_with_local_contact_pivot_roll(
+            pose, [0.0, np.nan, 0.0], 0.0
+        )
 
 
 def test_handover_local_straddle_translates_only_along_oriented_closing_axis():
