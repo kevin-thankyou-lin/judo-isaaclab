@@ -1068,6 +1068,36 @@ def _semantic_waypoint_name(trajectory, step: int) -> str:
     raise IndexError(f"semantic step {step} exceeds the skill trajectory")
 
 
+class _DynamicStepRange:
+    """Iterate until a mutable rollout horizon, including reanchored suffixes."""
+
+    def __init__(self, stop: int):
+        self.update(stop)
+
+    def update(self, stop: int) -> None:
+        stop = int(stop)
+        if stop < 0:
+            raise ValueError("rollout step horizon must be nonnegative")
+        self.stop = stop
+
+    def __iter__(self):
+        step = 0
+        while step < self.stop:
+            yield step
+            step += 1
+
+
+def _rollout_total_steps(
+    trajectory,
+    *,
+    source_prefix_steps: int,
+    source_action_count: int,
+) -> int:
+    if trajectory is None:
+        return int(source_action_count)
+    return int(source_prefix_steps) + int(trajectory.steps)
+
+
 def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
     if trajectory is None:
         return ()
@@ -3029,11 +3059,17 @@ def main() -> None:
             else None
         )
         physics_dt = float(env.sim.get_physics_dt())
-        total_steps = (
-            source_prefix_steps + _trajectory_after(trajectory, "left_lift").steps
+        initial_rollout_trajectory = (
+            _trajectory_after(trajectory, "left_lift")
             if source_prefix_steps
-            else trajectory.steps if trajectory is not None else len(source["actions"])
+            else trajectory
         )
+        total_steps = _rollout_total_steps(
+            initial_rollout_trajectory,
+            source_prefix_steps=source_prefix_steps,
+            source_action_count=len(source["actions"]),
+        )
+        rollout_steps = _DynamicStepRange(total_steps)
         from judo_isaaclab.demo_artifact import DemonstrationRecorder
 
         demo_recorder = DemonstrationRecorder()
@@ -3060,7 +3096,7 @@ def main() -> None:
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
-        for step in range(total_steps):
+        for step in rollout_steps:
             if trajectory is None:
                 action = source["actions"][step : step + 1]
                 stage = "direct_source_action_replay"
@@ -3087,6 +3123,12 @@ def main() -> None:
                         ),
                         "left_lift",
                     )
+                    total_steps = _rollout_total_steps(
+                        trajectory,
+                        source_prefix_steps=source_prefix_steps,
+                        source_action_count=len(source["actions"]),
+                    )
+                    rollout_steps.update(total_steps)
                     joint_nominal = _sparse_joint_nominal(
                         source,
                         trajectory,
@@ -3167,6 +3209,12 @@ def main() -> None:
                         samples[-1]["left_eef_pose"],
                         samples[-1]["right_eef_pose"],
                     )
+                    total_steps = _rollout_total_steps(
+                        trajectory,
+                        source_prefix_steps=source_prefix_steps,
+                        source_action_count=len(source["actions"]),
+                    )
+                    rollout_steps.update(total_steps)
                     handover_contact_acquire = {
                         **plan,
                         "entry": entry,
@@ -3317,6 +3365,12 @@ def main() -> None:
                     sample["left_eef_pose"],
                     sample["right_eef_pose"],
                 )
+                total_steps = _rollout_total_steps(
+                    trajectory,
+                    source_prefix_steps=source_prefix_steps,
+                    source_action_count=len(source["actions"]),
+                )
+                rollout_steps.update(total_steps)
             if (
                 observed_handover_reanchor
                 and semantic_step is not None
@@ -3334,6 +3388,12 @@ def main() -> None:
                     sample["mug_pose"],
                     sample["right_eef_pose"],
                 )
+                total_steps = _rollout_total_steps(
+                    trajectory,
+                    source_prefix_steps=source_prefix_steps,
+                    source_action_count=len(source["actions"]),
+                )
+                rollout_steps.update(total_steps)
             reanchor_waypoints = _branch_reanchor_waypoints(trajectory)
             if semantic_step is not None and any(
                 semantic_step == trajectory.waypoint_steps[name]
@@ -3354,6 +3414,12 @@ def main() -> None:
                     sample["right_eef_pose"],
                     completed_waypoint=completed_waypoint,
                 )
+                total_steps = _rollout_total_steps(
+                    trajectory,
+                    source_prefix_steps=source_prefix_steps,
+                    source_action_count=len(source["actions"]),
+                )
+                rollout_steps.update(total_steps)
                 nominal_right_contact = compose_pose(
                     inverse_pose(sample["mug_pose"]),
                     sample["right_eef_pose"],
