@@ -604,7 +604,11 @@ def _interpolate_open_return(
     result = interpolate_poses(start, target, steps)
     if not rotation_hold_steps:
         return result
-    clear_pose = result[clearance_rows - 1].copy()
+    # The clear row still carries rotational momentum: holding its target let
+    # the measured wrist overshoot back into the tree on the next row.  Use the
+    # immediately preceding orientation as a bounded brake target while the
+    # unchanged straight translation continues outward.
+    clear_pose = result[clearance_rows - 2].copy()
     result[clearance_rows : clearance_rows + rotation_hold_steps, 3:] = (
         clear_pose[3:]
     )
@@ -620,7 +624,7 @@ def hold_post_release_return_rotation_after_clearance(
     trajectory: SkillTrajectory,
     rotation_hold_steps: int,
 ) -> SkillTrajectory:
-    """Hold row-seven wrist clearance within the existing open return phase."""
+    """Brake row-seven wrist momentum within the existing open return phase."""
 
     if "post_release_return" not in trajectory.waypoint_steps:
         if rotation_hold_steps:

@@ -1460,7 +1460,7 @@ def test_open_return_rotation_hold_preserves_clear_prefix_translation_and_endpoi
     )
     np.testing.assert_allclose(
         segment[8:16, 3:],
-        np.repeat(original_segment[7, None, 3:], 8, axis=0),
+        np.repeat(original_segment[6, None, 3:], 8, axis=0),
     )
     np.testing.assert_allclose(segment[-1], right_start)
     np.testing.assert_array_equal(held.grippers, original.grippers)
@@ -1551,7 +1551,7 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     np.testing.assert_allclose(delayed_return[:8, 3:], ordinary_return[:8, 3:])
     np.testing.assert_allclose(
         delayed_return[8:10, 3:],
-        np.repeat(ordinary_return[7, None, 3:], 2, axis=0),
+        np.repeat(ordinary_return[6, None, 3:], 2, axis=0),
     )
     np.testing.assert_allclose(
         delayed_return[-1], trajectory.right_poses[return_end]
