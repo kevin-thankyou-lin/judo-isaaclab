@@ -425,8 +425,10 @@ def _pivot_source_corridor_from_measured_contacts(
     The correction is reconstructed from a complete pair-local trace.  It
     holds the stronger pad's measured contact point fixed and rotates the weak
     pad opposite its measured tip-to-base axis until the rigid-contact model
-    reaches the requested interior fraction.  Only the executable grasp is
-    changed; the collision-clear pregrasp remains byte-identical.
+    reaches the requested interior fraction.  The corrected orientation is
+    completed at the open pregrasp, while its collision-screened position
+    remains byte-identical, so the final handle approach does not rotate in
+    contact.
     """
 
     from judo_isaaclab.put_marker import (
@@ -563,13 +565,15 @@ def _pivot_source_corridor_from_measured_contacts(
     )
     result[3:] = quaternion_multiply(delta, grasp[3:])
     result[3:] /= np.linalg.norm(result[3:])
+    oriented_pregrasp = pregrasp.copy()
+    oriented_pregrasp[3:] = result[3:]
     transformed_pivot_world = result[:3] + quaternion_rotate(
         result[3:], pivot_local
     )
     predicted_fraction = float(
         fractions[weak] + predicted_motion(rotation_rad) / extent
     )
-    return pregrasp, result, {
+    return oriented_pregrasp, result, {
         "enabled": True,
         "mechanism": "measured_dual_contact_strong_pad_pivot",
         "trace": {
@@ -591,7 +595,16 @@ def _pivot_source_corridor_from_measured_contacts(
         "predicted_strong_contact_pivot_drift_m": float(
             np.linalg.norm(transformed_pivot_world - target_pivot_world)
         ),
-        "pregrasp_unchanged": bool(np.array_equal(pregrasp, desired_pregrasp)),
+        "pregrasp_position_unchanged": bool(
+            np.array_equal(oriented_pregrasp[:3], pregrasp[:3])
+        ),
+        "pregrasp_orientation_changed": bool(
+            not np.array_equal(oriented_pregrasp[3:], pregrasp[3:])
+        ),
+        "pregrasp_orientation_matches_grasp": bool(
+            np.array_equal(oriented_pregrasp[3:], result[3:])
+        ),
+        "final_approach_rotation_rad": 0.0,
         "grasp_orientation_changed": bool(
             not np.array_equal(result[3:], grasp[3:])
         ),

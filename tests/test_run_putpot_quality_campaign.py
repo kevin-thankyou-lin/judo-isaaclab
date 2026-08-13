@@ -123,9 +123,13 @@ def test_measured_contact_pivot_holds_strong_contact_and_deepens_weak_pad(tmp_pa
             minimum_force_n=1.0,
         )
     )
-    np.testing.assert_array_equal(routed_pregrasp, pregrasp)
+    np.testing.assert_array_equal(routed_pregrasp[:3], pregrasp[:3])
+    np.testing.assert_array_equal(routed_pregrasp[3:], routed_grasp[3:])
     assert not np.array_equal(routed_grasp, grasp)
-    assert receipt["pregrasp_unchanged"]
+    assert receipt["pregrasp_position_unchanged"]
+    assert receipt["pregrasp_orientation_changed"]
+    assert receipt["pregrasp_orientation_matches_grasp"]
+    assert receipt["final_approach_rotation_rad"] == 0.0
     assert receipt["strong_finger_index"] == 0
     assert receipt["weak_finger_index"] == 1
     assert receipt["predicted_weak_pad_fraction"] == pytest.approx(0.25)
