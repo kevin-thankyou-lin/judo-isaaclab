@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -65,6 +66,7 @@ from run_hangmug_skill_program import (
     _trajectory_after,
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
+    _write_json_atomic,
 )
 
 
@@ -88,6 +90,23 @@ def test_contact_group_force_attribution_is_body_aligned_and_sparse():
         _contact_group_body_forces(
             (ContactView(1.0),), ("right/link_1", "right/link_2"), 1.0 / 30.0
         )
+
+
+def test_atomic_result_writer_preserves_numpy_scalar_values(tmp_path):
+    receipt = tmp_path / "result.json"
+    _write_json_atomic(
+        receipt,
+        {
+            "passed": np.bool_(True),
+            "force_n": np.float32(3.5),
+            "row": np.int64(7),
+        },
+    )
+    assert json.loads(receipt.read_text()) == {
+        "passed": True,
+        "force_n": 3.5,
+        "row": 7,
+    }
 
 
 def _return_clearance_row(environment_force, mug_force, prior_rows):

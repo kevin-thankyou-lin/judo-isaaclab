@@ -300,8 +300,17 @@ def _write_json_atomic(path: str | os.PathLike[str], value: dict[str, object]) -
     destination = Path(path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True, default=_json_scalar) + "\n"
+    )
     os.replace(temporary, destination)
+
+
+def _json_scalar(value: object) -> object:
+    """Preserve NumPy scalar values when writing an execution receipt."""
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _require_proven_control_defaults(args) -> None:
@@ -3839,7 +3848,11 @@ def main() -> None:
         )
         Path(args.result_json).parent.mkdir(parents=True, exist_ok=True)
         _write_json_atomic(args.result_json, result)
-        print("HANGMUG_FINAL=" + json.dumps(result, sort_keys=True), flush=True)
+        print(
+            "HANGMUG_FINAL="
+            + json.dumps(result, sort_keys=True, default=_json_scalar),
+            flush=True,
+        )
         if result["status"] != "passed":
             raise RuntimeError(f"acceptance checks failed: {acceptance}")
     except BaseException as error:
