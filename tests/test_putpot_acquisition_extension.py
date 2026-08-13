@@ -5,6 +5,7 @@ from judo_isaaclab.put_marker import SkillTrajectory
 from run_putpot_skill_program import (
     _assert_acquisition_only_stage,
     _extend_handle_local_acquisition_window,
+    _finish_handle_local_acquisition_window_after_latch,
     _parser,
     _quality_environment_kwargs,
     _resolved_program_command,
@@ -127,6 +128,49 @@ def test_acquisition_extension_is_inserted_before_transport_suffix():
     assert extended.waypoint_steps["handle_local_acquisition_extension"] == 3
     assert extended.waypoint_steps["transport_end"] == 4
     assert extended.waypoint_steps["release"] == 5
+
+    finished, finished_nominal, removed = (
+        _finish_handle_local_acquisition_window_after_latch(
+            extended,
+            extended_nominal,
+            completion_step=2,
+        )
+    )
+    assert removed == 1
+    assert finished.stage_names == (
+        "approach",
+        "contact_hold",
+        "handle_local_acquisition_extension",
+        "smooth_transport",
+        "release",
+    )
+    np.testing.assert_array_equal(finished.left_poses[3:], poses[2:])
+    np.testing.assert_array_equal(finished_nominal[3:], nominal[2:])
+    assert finished.waypoint_steps["handle_local_acquisition_extension"] == 2
+    assert finished.waypoint_steps["transport_end"] == 3
+    assert finished.waypoint_steps["release"] == 4
+
+
+def test_four_pad_latch_before_extension_removes_all_unused_acquisition_holds():
+    trajectory = _trajectory()
+    nominal = np.arange(28, dtype=np.float64).reshape(2, 14)
+    extended, extended_nominal = _extend_handle_local_acquisition_window(
+        trajectory,
+        nominal,
+        3,
+    )
+    finished, finished_nominal, removed = (
+        _finish_handle_local_acquisition_window_after_latch(
+            extended,
+            extended_nominal,
+            completion_step=1,
+        )
+    )
+    assert removed == 3
+    assert finished.stage_names == trajectory.stage_names
+    np.testing.assert_array_equal(finished.left_poses, trajectory.left_poses)
+    np.testing.assert_array_equal(finished_nominal, nominal)
+    assert finished.waypoint_steps["handle_local_acquisition_extension"] == 1
 
 
 def test_fail_closed_base_command_routes_without_plugin_and_stage_guard_blocks_transport():

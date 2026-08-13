@@ -788,6 +788,64 @@ def _extend_handle_local_acquisition_window(
     return extended, extended_nominal
 
 
+def _finish_handle_local_acquisition_window_after_latch(
+    trajectory,
+    joint_nominal,
+    completion_step: int,
+):
+    """Remove every unused acquisition hold after the four-pad latch."""
+
+    from judo_isaaclab.put_marker import SkillTrajectory
+
+    if "handle_local_acquisition_extension" not in trajectory.waypoint_steps:
+        raise ValueError("handle-local acquisition window was not extended")
+    extension_end_step = int(
+        trajectory.waypoint_steps["handle_local_acquisition_extension"]
+    )
+    completion_step = int(completion_step)
+    if not 0 <= completion_step <= extension_end_step < trajectory.steps:
+        raise ValueError("four-pad latch completion is outside the extension window")
+    removed_steps = extension_end_step - completion_step
+    if removed_steps == 0:
+        return trajectory, joint_nominal, 0
+    removed_stages = trajectory.stage_names[
+        completion_step + 1 : extension_end_step + 1
+    ]
+    for stage in removed_stages:
+        _assert_acquisition_only_stage(stage)
+
+    def remove_rows(values):
+        return np.concatenate(
+            (
+                values[: completion_step + 1],
+                values[extension_end_step + 1 :],
+            )
+        )
+
+    shifted_waypoints = {}
+    for name, waypoint_step in trajectory.waypoint_steps.items():
+        waypoint_step = int(waypoint_step)
+        if name == "handle_local_acquisition_extension":
+            shifted_waypoints[name] = completion_step
+        elif waypoint_step > extension_end_step:
+            shifted_waypoints[name] = waypoint_step - removed_steps
+        elif waypoint_step > completion_step:
+            shifted_waypoints[name] = completion_step
+        else:
+            shifted_waypoints[name] = waypoint_step
+    finished = SkillTrajectory(
+        left_poses=remove_rows(trajectory.left_poses),
+        right_poses=remove_rows(trajectory.right_poses),
+        grippers=remove_rows(trajectory.grippers),
+        stage_names=(
+            trajectory.stage_names[: completion_step + 1]
+            + trajectory.stage_names[extension_end_step + 1 :]
+        ),
+        waypoint_steps=shifted_waypoints,
+    )
+    return finished, remove_rows(np.asarray(joint_nominal)), removed_steps
+
+
 _ACQUISITION_ONLY_FORBIDDEN_STAGE_TOKENS = (
     "transport",
     "release",
@@ -1088,7 +1146,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help=(
             "Bounded event-gated acquisition continuation after the source-timed "
-            "window; valid only with acquisition-only handle-local MPC."
+            "window; valid with acquisition-only MPC or strict sequential quality "
+            "MPC, where unused hold frames are removed at the four-pad latch."
         ),
     )
     parser.add_argument(
@@ -3353,9 +3412,13 @@ def main(argv: list[str] | None = None) -> None:
             "MPC, a measured contact pivot, and force-free preorientation"
         )
     if args.target_handle_local_mpc_acquisition_extension_steps:
-        if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
+        if not (
+            args.target_handle_local_mpc_acquisition
+            and (args.acquisition_only or quality_left_first_local_mpc)
+        ):
             raise ValueError(
-                "handle-local acquisition extension requires acquisition-only MPC"
+                "handle-local acquisition extension requires acquisition-only "
+                "MPC or strict sequential quality MPC"
             )
         if not 1 <= args.target_handle_local_mpc_acquisition_extension_steps <= 120:
             raise ValueError("handle-local acquisition extension exceeds 120 frames")
@@ -4508,10 +4571,14 @@ def main(argv: list[str] | None = None) -> None:
             )
             if trajectory is not None else None
         )
+        local_mpc_acquisition_extension_start_step = None
+        local_mpc_acquisition_extension_finished_step = None
+        local_mpc_acquisition_extension_removed_steps = 0
         if args.target_handle_local_mpc_acquisition_extension_steps:
             extension_steps = int(
                 args.target_handle_local_mpc_acquisition_extension_steps
             )
+            local_mpc_acquisition_extension_start_step = grasp_complete_step + 1
             trajectory, joint_nominal = _extend_handle_local_acquisition_window(
                 trajectory,
                 joint_nominal,
@@ -4882,6 +4949,8 @@ def main(argv: list[str] | None = None) -> None:
             debug_axis_draw = debug_draw.acquire_debug_draw_interface()
         rollout_started = time.monotonic()
         for step in range(total_steps):
+            if step >= total_steps:
+                break
             if repair_prefix_steps is not None and step < repair_prefix_steps:
                 action = source["actions"][step : step + 1]
                 stage = "source_action_prefix"
@@ -5423,6 +5492,29 @@ def main(argv: list[str] | None = None) -> None:
                                     "quality_left_handle_local_mpc_acquisition"
                                     if quality_left_first_local_mpc
                                     else "handle_local_mpc_contact_window"
+                                )
+                            if (
+                                quality_left_first_local_mpc
+                                and local_mpc_acquisition_extension_start_step
+                                is not None
+                                and local_mpc_latch_ready
+                                and local_mpc_right_latch_ready
+                                and step < grasp_complete_step
+                            ):
+                                (
+                                    trajectory,
+                                    joint_nominal,
+                                    removed_extension_steps,
+                                ) = _finish_handle_local_acquisition_window_after_latch(
+                                    trajectory,
+                                    joint_nominal,
+                                    step,
+                                )
+                                grasp_complete_step = step
+                                total_steps -= removed_extension_steps
+                                local_mpc_acquisition_extension_finished_step = step
+                                local_mpc_acquisition_extension_removed_steps = (
+                                    removed_extension_steps
                                 )
                             local_mpc_last_control_vectors_world = {
                                 "left": np.zeros(3, dtype=np.float64),
@@ -7418,8 +7510,24 @@ def main(argv: list[str] | None = None) -> None:
                         args.target_handle_local_mpc_acquisition_extension_steps
                     ),
                     "maximum_allowed_steps": 120,
-                    "executed_steps": int(
-                        args.target_handle_local_mpc_acquisition_extension_steps
+                    "executed_steps": (
+                        int(args.target_handle_local_mpc_acquisition_extension_steps)
+                        if local_mpc_acquisition_extension_finished_step is None
+                        else max(
+                            0,
+                            local_mpc_acquisition_extension_finished_step
+                            - local_mpc_acquisition_extension_start_step
+                            + 1,
+                        )
+                    ),
+                    "finished_on_four_pad_latch": bool(
+                        local_mpc_acquisition_extension_finished_step is not None
+                    ),
+                    "four_pad_latch_completion_step": (
+                        local_mpc_acquisition_extension_finished_step
+                    ),
+                    "unused_hold_steps_removed": (
+                        local_mpc_acquisition_extension_removed_steps
                     ),
                     "inserted_at_acquisition_boundary": True,
                     "transport_commands": not checks[
