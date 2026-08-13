@@ -410,6 +410,7 @@ def reanchor_handover_contact_acquire(
     observed_left_pose: Any,
     observed_right_pose: Any,
     *,
+    target_contact_mug_position_m: Any | None = None,
     maximum_translation_m: float = 0.04,
     maximum_rotation_error_rad: float = 0.12,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
@@ -438,7 +439,22 @@ def reanchor_handover_contact_acquire(
     mug = _pose(observed_mug_pose, "observed_mug_pose")
     observed_left = _pose(observed_left_pose, "observed_left_pose")
     observed_right = _pose(observed_right_pose, "observed_right_pose")
-    desired_right = compose_pose(mug, nominal_contact)
+    desired_contact = nominal_contact.copy()
+    if target_contact_mug_position_m is not None:
+        target_position = np.asarray(
+            target_contact_mug_position_m, dtype=np.float64
+        )
+        if target_position.shape != (3,) or not np.isfinite(target_position).all():
+            raise ValueError(
+                "target contact mug position must contain three finite values"
+            )
+        observed_contact = compose_pose(inverse_pose(mug), observed_right)
+        desired_contact[:3] = target_position
+        # Acquisition intentionally translates the left-held mug into the
+        # stationary closed receiver. Preserve the already-achieved live
+        # receiver orientation instead of introducing an orientation action.
+        desired_contact[3:] = observed_contact[3:]
+    desired_right = compose_pose(mug, desired_contact)
     translation = observed_right[:3] - desired_right[:3]
     norm = float(np.linalg.norm(translation))
     rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
@@ -492,6 +508,7 @@ def reanchor_handover_contact_acquire(
     receipt = {
         "strategy": "translate_left_held_mug_into_stationary_closed_receiver",
         "desired_right_contact_world": desired_right.tolist(),
+        "target_contact_mug_frame": desired_contact.tolist(),
         "observed_right_eef_world": observed_right.tolist(),
         "world_translation_m": translation.tolist(),
         "translation_norm_m": norm,

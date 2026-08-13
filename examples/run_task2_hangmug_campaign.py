@@ -219,6 +219,14 @@ def _repair_command(
                 "--handover-contact-acquire-steps",
                 str(strategy["handover_contact_acquire_steps"]),
             ])
+        if "handover_contact_acquire_target_mug_position_m" in strategy:
+            arguments.extend([
+                "--handover-contact-acquire-target-mug-position-m",
+                *map(
+                    str,
+                    strategy["handover_contact_acquire_target_mug_position_m"],
+                ),
+            ])
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
@@ -299,6 +307,7 @@ def _repair_strategy(index: int) -> dict:
         "force_semantic_regeneration",
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
+        "handover_contact_acquire_target_mug_position_m",
         "handover_confirm_steps",
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
@@ -490,6 +499,9 @@ def _repair_strategy(index: int) -> dict:
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
     acquire = value.get("handover_contact_acquire_steps", 0)
+    acquire_target = value.get(
+        "handover_contact_acquire_target_mug_position_m"
+    )
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
@@ -502,6 +514,16 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
         raise ValueError("handover contact acquire must be an integer in [0, 60]")
+    if acquire_target is not None:
+        acquire_target = np.asarray(acquire_target, dtype=float)
+        if acquire_target.shape != (3,) or not np.isfinite(acquire_target).all():
+            raise ValueError(
+                "handover contact-acquire target must contain three finite values"
+            )
+        if not acquire:
+            raise ValueError(
+                "handover contact-acquire target requires positive acquisition steps"
+            )
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
     post_release_lift = value.get("handover_post_release_lift_m", 0.0)
@@ -571,6 +593,10 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps": post_release_steps,
         "handover_target_offset_m": offset.tolist(),
     })
+    if acquire_target is not None:
+        strategy["handover_contact_acquire_target_mug_position_m"] = (
+            acquire_target.tolist()
+        )
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
     if "handover_target_local_roll_rad" in value:
