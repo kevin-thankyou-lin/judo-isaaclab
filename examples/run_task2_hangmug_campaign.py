@@ -50,6 +50,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
 HANDOVER_SUFFIX_STRATEGY_FIELDS = frozenset({
     "handover_contact_settle_steps",
     "handover_contact_acquire_steps",
+    "handover_contact_acquire_local_bias_m",
     "handover_confirm_steps",
     "handover_post_release_lift_m",
     "handover_post_release_lift_steps",
@@ -222,6 +223,14 @@ def _repair_command(
                 "--handover-contact-acquire-steps",
                 str(strategy["handover_contact_acquire_steps"]),
             ])
+        if "handover_contact_acquire_local_bias_m" in strategy:
+            arguments.extend([
+                "--handover-contact-acquire-local-bias-m",
+                *(
+                    f"{float(value):.17f}"
+                    for value in strategy["handover_contact_acquire_local_bias_m"]
+                ),
+            ])
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
@@ -309,6 +318,7 @@ def _repair_strategy(index: int) -> dict:
     allowed = {
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
+        "handover_contact_acquire_local_bias_m",
         "handover_confirm_steps",
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
@@ -415,6 +425,10 @@ def _repair_strategy(index: int) -> dict:
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
     acquire = value.get("handover_contact_acquire_steps", 0)
+    acquire_bias = np.asarray(
+        value.get("handover_contact_acquire_local_bias_m", (0, 0, 0)),
+        dtype=float,
+    )
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
@@ -428,6 +442,14 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
         raise ValueError("handover contact acquire must be an integer in [0, 60]")
+    if (
+        acquire_bias.shape != (3,)
+        or not np.all(np.isfinite(acquire_bias))
+        or np.linalg.norm(acquire_bias) > 0.005
+    ):
+        raise ValueError(
+            "handover contact-acquire local bias must be three finite values within 5 mm"
+        )
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
     post_release_lift = value.get("handover_post_release_lift_m", 0.0)
@@ -505,6 +527,8 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps": post_release_steps,
         "handover_target_offset_m": offset.tolist(),
     })
+    if "handover_contact_acquire_local_bias_m" in value:
+        strategy["handover_contact_acquire_local_bias_m"] = acquire_bias.tolist()
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
     if orient_steps:

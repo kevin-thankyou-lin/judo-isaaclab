@@ -235,6 +235,11 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 24,
+        "handover_contact_acquire_local_bias_m": [
+            0.0001979542550044889,
+            -0.0005121813033877951,
+            0.0013958812361320704,
+        ],
         "handover_confirm_steps": 20,
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
@@ -270,6 +275,12 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
+    acquire_bias_cursor = command.index("--handover-contact-acquire-local-bias-m")
+    acquire_bias = command[acquire_bias_cursor + 1 : acquire_bias_cursor + 4]
+    assert all("e" not in value.lower() for value in acquire_bias)
+    assert [float(value) for value in acquire_bias] == pytest.approx(
+        [0.0001979542550044889, -0.0005121813033877951, 0.0013958812361320704]
+    )
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
     assert float(command[command.index("--branch-approach-height-m") + 1]) == 0.0
     assert float(command[command.index("--branch-roll-offset-rad") + 1]) == pytest.approx(

@@ -1462,6 +1462,25 @@ def test_contact_acquire_rejects_unbounded_live_residual():
         program.build(), _pose(), _pose(), _pose(), _pose(0.035514)
     )
     assert receipt["translation_norm_m"] == pytest.approx(0.035514)
+    _, biased = reanchor_handover_contact_acquire(
+        program.build(),
+        _pose(),
+        _pose(),
+        _pose(),
+        _pose(0.035514),
+        desired_contact_local_bias_m=(0.001, 0.0, 0.0),
+    )
+    assert biased["translation_norm_m"] == pytest.approx(0.034514)
+    assert biased["desired_contact_local_bias_m"] == [0.001, 0.0, 0.0]
+    with pytest.raises(ValueError, match="within 5 mm"):
+        reanchor_handover_contact_acquire(
+            program.build(),
+            _pose(),
+            _pose(),
+            _pose(),
+            _pose(),
+            desired_contact_local_bias_m=(0.006, 0.0, 0.0),
+        )
     with pytest.raises(RuntimeError, match="exceeds") as failure:
         reanchor_handover_contact_acquire(
             program.build(), _pose(), _pose(), _pose(), _pose(0.040001)

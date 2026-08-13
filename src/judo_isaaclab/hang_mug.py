@@ -360,6 +360,7 @@ def reanchor_handover_contact_acquire(
     observed_left_pose: Any,
     observed_right_pose: Any,
     *,
+    desired_contact_local_bias_m: Any = (0.0, 0.0, 0.0),
     maximum_translation_m: float = 0.04,
     maximum_rotation_error_rad: float = 0.12,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
@@ -388,7 +389,16 @@ def reanchor_handover_contact_acquire(
     mug = _pose(observed_mug_pose, "observed_mug_pose")
     observed_left = _pose(observed_left_pose, "observed_left_pose")
     observed_right = _pose(observed_right_pose, "observed_right_pose")
+    local_bias = np.asarray(desired_contact_local_bias_m, dtype=np.float64)
+    if (
+        local_bias.shape != (3,)
+        or not np.all(np.isfinite(local_bias))
+        or np.linalg.norm(local_bias) > 0.005
+    ):
+        raise ValueError("contact-acquire local bias must be three finite values within 5 mm")
+    world_bias = quaternion_rotate(mug[3:], local_bias)
     desired_right = compose_pose(mug, nominal_contact)
+    desired_right[:3] += world_bias
     translation = observed_right[:3] - desired_right[:3]
     norm = float(np.linalg.norm(translation))
     rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
@@ -446,6 +456,8 @@ def reanchor_handover_contact_acquire(
     receipt = {
         "strategy": "translate_left_held_mug_into_stationary_closed_receiver",
         "desired_right_contact_world": desired_right.tolist(),
+        "desired_contact_local_bias_m": local_bias.tolist(),
+        "desired_contact_world_bias_m": world_bias.tolist(),
         "observed_right_eef_world": observed_right.tolist(),
         "world_translation_m": translation.tolist(),
         "translation_norm_m": norm,
