@@ -45,6 +45,7 @@ from run_hangmug_skill_program import (
     _install_quality_wave_contact_sensors,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
+    _handover_target_with_local_roll,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
     _handover_gripper_proxy_receipt,
@@ -1037,6 +1038,23 @@ def test_handover_local_pitch_rotates_only_receiver_orientation():
     )
     with pytest.raises(ValueError, match="within 45 degrees"):
         _handover_target_with_local_pitch(pose, np.pi / 4.0 + 1.0e-6)
+
+
+def test_handover_local_roll_rotates_pad_axis_without_moving_or_changing_closing_axis():
+    pose = _handover_target_with_local_pitch(_pose(0.4, -0.1, 0.9), 0.52)
+    rotated = _handover_target_with_local_roll(pose, 0.4)
+    np.testing.assert_allclose(rotated[:3], pose[:3], atol=0.0)
+    np.testing.assert_allclose(
+        quaternion_rotate(rotated[3:], [1.0, 0.0, 0.0]),
+        quaternion_rotate(pose[3:], [1.0, 0.0, 0.0]),
+        atol=1.0e-12,
+    )
+    assert not np.allclose(
+        quaternion_rotate(rotated[3:], [0.0, 0.0, 1.0]),
+        quaternion_rotate(pose[3:], [0.0, 0.0, 1.0]),
+    )
+    with pytest.raises(ValueError, match="within 45 degrees"):
+        _handover_target_with_local_roll(pose, np.pi / 4.0 + 1.0e-6)
 
 
 def test_handover_local_straddle_translates_only_along_oriented_closing_axis():
