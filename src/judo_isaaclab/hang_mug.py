@@ -593,6 +593,7 @@ def _interpolate_open_return(
     *,
     rotation_hold_steps: int = 0,
     brake_rotation_vector: Any | None = None,
+    brake_reference_pose: Any | None = None,
 ) -> np.ndarray:
     """Interpolate one straight return, optionally holding its clear orientation."""
 
@@ -632,7 +633,8 @@ def _interpolate_open_return(
         else:
             local_quaternion = np.asarray([1.0, 0.0, 0.0, 0.0])
         local_pose = np.concatenate((np.zeros(3), local_quaternion))
-        clear_pose[3:] = compose_pose(start, local_pose)[3:]
+        reference = start if brake_reference_pose is None else brake_reference_pose
+        clear_pose[3:] = compose_pose(reference, local_pose)[3:]
     result[clearance_rows : clearance_rows + rotation_hold_steps, 3:] = (
         clear_pose[3:]
     )
@@ -665,6 +667,39 @@ def hold_post_release_return_rotation_after_clearance(
         return_end - release_end,
         rotation_hold_steps=rotation_hold_steps,
         brake_rotation_vector=brake_rotation_vector,
+    )
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def reanchor_open_return_from_observed_release(
+    trajectory: SkillTrajectory,
+    observed_right_pose: Any,
+    *,
+    post_release_return_rotation_hold_steps: int = 0,
+    post_release_return_brake_rotation_vector: Any | None = None,
+) -> SkillTrajectory:
+    """Start the direct open return from the latest observed release pose."""
+
+    if not {"right_release", "post_release_return"} <= trajectory.waypoint_steps.keys():
+        raise ValueError("observed release reanchor requires a direct open return")
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    right = trajectory.right_poses.copy()
+    authored_release = right[release_end].copy()
+    right[release_end] = _pose(observed_right_pose, "observed_right_pose")
+    right[release_end + 1 : return_end + 1] = _interpolate_open_return(
+        right[release_end],
+        trajectory.right_poses[return_end],
+        return_end - release_end,
+        rotation_hold_steps=post_release_return_rotation_hold_steps,
+        brake_rotation_vector=post_release_return_brake_rotation_vector,
+        brake_reference_pose=authored_release,
     )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),

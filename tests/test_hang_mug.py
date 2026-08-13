@@ -16,6 +16,7 @@ from judo_isaaclab.hang_mug import (
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
     reanchor_handover_contact_acquire,
+    reanchor_open_return_from_observed_release,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
     transfer_handover_contact_by_handle_frame,
@@ -1485,6 +1486,35 @@ def test_open_return_rotation_hold_preserves_clear_prefix_translation_and_endpoi
     np.testing.assert_allclose(segment[-1], right_start)
     np.testing.assert_array_equal(held.grippers, original.grippers)
     assert held.stage_names == original.stage_names
+
+    observed_release = release.copy()
+    observed_release[:3] += [0.001, 0.008, 0.002]
+    reanchored = reanchor_open_return_from_observed_release(
+        original,
+        observed_release,
+        post_release_return_rotation_hold_steps=8,
+        post_release_return_brake_rotation_vector=brake_vector,
+    )
+    np.testing.assert_allclose(reanchored.right_poses[release_end], observed_release)
+    np.testing.assert_allclose(reanchored.right_poses[return_end], right_start)
+    reanchored_segment = reanchored.right_poses[release_end + 1 : return_end + 1]
+    line = right_start[:3] - observed_release[:3]
+    fractions = (
+        (reanchored_segment[:, :3] - observed_release[:3]) @ line
+        / (line @ line)
+    )
+    residuals = np.linalg.norm(
+        reanchored_segment[:, :3]
+        - (observed_release[:3] + fractions[:, None] * line),
+        axis=1,
+    )
+    assert np.max(residuals) < 1.0e-12
+    assert np.all(np.diff(fractions) >= -1.0e-12)
+    np.testing.assert_allclose(
+        reanchored.right_poses[release_end + 9 : release_end + 17, 3:],
+        np.repeat(expected_brake[None], 8, axis=0),
+    )
+    np.testing.assert_array_equal(reanchored.grippers, original.grippers)
     assert held.waypoint_steps == original.waypoint_steps
     path_receipt = _pose_path_step_receipt(
         held.right_poses[release_end : return_end + 1],

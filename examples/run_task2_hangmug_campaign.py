@@ -48,6 +48,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_release_return_to_rest_steps",
     "post_release_return_rotation_hold_steps",
     "post_release_return_brake_rotation_vector",
+    "post_release_return_observed_reanchor",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -225,6 +226,8 @@ def _repair_command(
                 ]
             ),
         ])
+    if strategy.get("post_release_return_observed_reanchor"):
+        arguments.append("--post-release-return-observed-reanchor")
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
@@ -333,6 +336,7 @@ def _repair_strategy(index: int) -> dict:
         "post_release_return_to_rest_steps",
         "post_release_return_rotation_hold_steps",
         "post_release_return_brake_rotation_vector",
+        "post_release_return_observed_reanchor",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -475,6 +479,14 @@ def _repair_strategy(index: int) -> dict:
         strategy["post_release_return_brake_rotation_vector"] = (
             brake_rotation_vector.tolist()
         )
+    if "post_release_return_observed_reanchor" in value:
+        enabled = value["post_release_return_observed_reanchor"]
+        if enabled is not True or not direct_steps[1]:
+            raise ValueError(
+                "post-release observed reanchor must be true and requires "
+                "direct choreography"
+            )
+        strategy["post_release_return_observed_reanchor"] = True
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
@@ -874,6 +886,16 @@ def _direct_choreography_audit(result: dict, trace) -> dict:
 
     def direct_line(previous: str, segment: str) -> dict:
         start = desired[boundaries[previous][1], :3]
+        if (
+            segment == "post_release_return"
+            and result["protocol"]["parameters"].get(
+                "post_release_return_observed_reanchor"
+            )
+        ):
+            start = np.asarray(
+                trace["right_eef_poses"][boundaries[previous][1], :3],
+                dtype=np.float64,
+            )
         rows = np.flatnonzero(names == segment)
         points = desired[rows, :3]
         direction = points[-1] - start
