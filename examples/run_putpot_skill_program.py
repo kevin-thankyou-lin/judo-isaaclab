@@ -178,8 +178,10 @@ def _critic_owned_precontact_pad_balance(
     *,
     lane_id: str,
     minimum_force_n: float,
+    minimum_pad_fraction_margin: float = 0.0,
     maximum_pre_latch_motion_m: float,
     maximum_translation_m: float,
+    applied_translation_cap_m: float | None = None,
 ) -> dict[str, object]:
     """Recover one bounded open-jaw maximin pad-depth shift from a failed trace."""
 
@@ -267,13 +269,41 @@ def _critic_owned_precontact_pad_balance(
         )
     ):
         raise ValueError("pad-balance critic has an invalid pad-axis extent")
-    translation = -fraction_delta * axis_extent * mean_axis
+    uncapped_translation = -fraction_delta * axis_extent * mean_axis
+    uncapped_translation_norm = float(np.linalg.norm(uncapped_translation))
+    if applied_translation_cap_m is None:
+        applied_translation_cap_m = maximum_translation_m
+    limits = np.asarray(
+        [
+            minimum_pad_fraction_margin,
+            maximum_translation_m,
+            applied_translation_cap_m,
+        ],
+        dtype=np.float64,
+    )
+    if (
+        not np.all(np.isfinite(limits))
+        or minimum_pad_fraction_margin < 0.0
+        or minimum_pad_fraction_margin >= 0.5
+        or maximum_translation_m <= 0.0
+        or applied_translation_cap_m <= 0.0
+        or applied_translation_cap_m > maximum_translation_m + 1.0e-12
+    ):
+        raise ValueError("pad-balance translation limits are invalid")
+    if uncapped_translation_norm <= 1.0e-12:
+        raise ValueError("maximin pad-balance translation is degenerate")
+    applied_scale = min(
+        1.0, applied_translation_cap_m / uncapped_translation_norm
+    )
+    applied_fraction_delta = fraction_delta * applied_scale
+    translation = uncapped_translation * applied_scale
     translation_norm = float(np.linalg.norm(translation))
-    predicted = fractions + fraction_delta
+    predicted = fractions + applied_fraction_delta
     predicted_margin = float(np.min(np.minimum(predicted, 1.0 - predicted)))
     if (
-        translation_norm > maximum_translation_m + 1.0e-12
-        or predicted_margin <= 0.0
+        uncapped_translation_norm > maximum_translation_m + 1.0e-12
+        or translation_norm > applied_translation_cap_m + 1.0e-12
+        or predicted_margin < minimum_pad_fraction_margin - 1.0e-12
     ):
         raise ValueError("maximin pad-balance translation exceeds its geometry bound")
     critic_translation = np.asarray(
@@ -281,7 +311,9 @@ def _critic_owned_precontact_pad_balance(
     )
     if (
         critic_translation.shape != (3,)
-        or not np.allclose(critic_translation, translation, atol=1.0e-8, rtol=0.0)
+        or not np.allclose(
+            critic_translation, uncapped_translation, atol=1.0e-8, rtol=0.0
+        )
     ):
         raise ValueError("pad-balance critic translation does not match the trace")
     return {
@@ -299,14 +331,20 @@ def _critic_owned_precontact_pad_balance(
         "finger_forces_n": forces.tolist(),
         "pad_fractions_before": fractions.tolist(),
         "fraction_delta": fraction_delta,
+        "applied_fraction_delta": applied_fraction_delta,
         "finger_pad_axis_extent_m": axis_extent,
         "mean_tip_to_base_axis_world": mean_axis.tolist(),
         "translation_world_m": translation.tolist(),
         "translation_norm_m": translation_norm,
+        "uncapped_translation_world_m": uncapped_translation.tolist(),
+        "uncapped_translation_norm_m": uncapped_translation_norm,
+        "applied_translation_cap_m": float(applied_translation_cap_m),
+        "translation_was_capped": bool(applied_scale < 1.0),
         "maximum_translation_m": float(maximum_translation_m),
-        "bound_margin_m": float(maximum_translation_m - translation_norm),
+        "bound_margin_m": float(applied_translation_cap_m - translation_norm),
         "predicted_pad_fractions": predicted.tolist(),
         "predicted_minimum_edge_margin": predicted_margin,
+        "required_minimum_edge_margin": float(minimum_pad_fraction_margin),
         "measured_pre_latch_pot_motion_m": displacement,
         "orientation_unchanged": True,
     }
@@ -657,6 +695,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--target-left-precontact-pad-balance-critic-json",
         help="Immutable critic that owns the maximin pad-balance sample.",
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-translation-cap-m",
+        type=float,
+        help=(
+            "Optional nominal-trace collision-clear cap on the critic-owned "
+            "maximin translation. The capped prediction must still retain the "
+            "configured pad-fraction margin."
+        ),
     )
     parser.add_argument(
         "--target-right-first-stabilized-acquisition",
@@ -2642,6 +2689,7 @@ def main(argv: list[str] | None = None) -> None:
             args.target_left_precontact_pad_balance_trace,
             args.target_left_precontact_pad_balance_step,
             args.target_left_precontact_pad_balance_critic_json,
+            args.target_left_precontact_pad_balance_translation_cap_m,
         )
     )
     if pad_balance_requested and not all(
@@ -3557,12 +3605,20 @@ def main(argv: list[str] | None = None) -> None:
                             minimum_force_n=float(
                                 quality_config.grasp["minimum_force_n"]
                             ),
+                            minimum_pad_fraction_margin=float(
+                                quality_config.grasp[
+                                    "minimum_pad_fraction_margin"
+                                ]
+                            ),
                             maximum_pre_latch_motion_m=float(
                                 quality_config.grasp[
                                     "maximum_pre_latch_object_motion_m"
                                 ]
                             ),
                             maximum_translation_m=args.collision_clearance_m,
+                            applied_translation_cap_m=(
+                                args.target_left_precontact_pad_balance_translation_cap_m
+                            ),
                         )
                     )
                     desired_pregrasp, desired_grasp = (

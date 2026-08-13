@@ -215,6 +215,69 @@ def test_critic_owned_precontact_pad_balance_maximizes_edge_margin(tmp_path):
     assert receipt["orientation_unchanged"]
 
 
+def test_critic_owned_precontact_pad_balance_caps_before_measured_collision(tmp_path):
+    trace = tmp_path / "trace.npz"
+    pot = np.asarray(
+        [
+            [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+            [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    np.savez_compressed(
+        trace,
+        pot_poses=pot,
+        left_finger_forces_n=[[0.0, 0.0], [3.0, 4.0]],
+        left_pad_fractions=[[np.nan, np.nan], [0.45, -0.05]],
+        left_pad_axes_world=[
+            [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        ],
+        partial_trace=np.asarray(False),
+    )
+    expected_uncapped = [0.0, -0.02041984274983406, 0.0]
+    critic = tmp_path / "critic.json"
+    critic.write_text(
+        json.dumps(
+            {
+                "lane_id": "pair15",
+                "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
+                "pad_balance_calibration": {
+                    "step": 1,
+                    "classification": "two_pad_force_backed_edge_only",
+                    "left_finger_forces_n": [3.0, 4.0],
+                    "left_pad_fractions": [0.45, -0.05],
+                    "finger_pad_axis_extent_m": 0.06806614430096655,
+                    "precontact_translation_world_m": expected_uncapped,
+                },
+            }
+        )
+    )
+
+    receipt = _critic_owned_precontact_pad_balance(
+        trace,
+        critic,
+        1,
+        lane_id="pair15",
+        minimum_force_n=1.0,
+        minimum_pad_fraction_margin=0.1,
+        maximum_pre_latch_motion_m=0.003,
+        maximum_translation_m=0.025,
+        applied_translation_cap_m=0.015,
+    )
+
+    assert receipt["uncapped_translation_world_m"] == pytest.approx(
+        expected_uncapped
+    )
+    assert receipt["translation_world_m"] == pytest.approx([0.0, -0.015, 0.0])
+    assert receipt["translation_norm_m"] == pytest.approx(0.015)
+    assert receipt["translation_was_capped"]
+    applied_delta = 0.30 * 0.015 / np.linalg.norm(expected_uncapped)
+    assert receipt["predicted_pad_fractions"] == pytest.approx(
+        np.asarray([0.45, -0.05]) + applied_delta
+    )
+    assert receipt["predicted_minimum_edge_margin"] > 0.1
+
+
 def test_measured_static_translation_moves_both_source_corridor_endpoints():
     pregrasp = [1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0]
     grasp = [4.0, 5.0, 6.0, 1.0, 0.0, 0.0, 0.0]
