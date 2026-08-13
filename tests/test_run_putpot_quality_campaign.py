@@ -306,6 +306,28 @@ def test_measured_static_translation_moves_both_source_corridor_endpoints():
     ]
 
 
+def test_measured_pad_depth_translation_can_preserve_force_free_pregrasp():
+    pregrasp = [1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0]
+    grasp = [4.0, 5.0, 6.0, 1.0, 0.0, 0.0, 0.0]
+    staged_pregrasp, translated_grasp = _translate_source_corridor_endpoints(
+        pregrasp,
+        grasp,
+        {"translation_world_m": [-0.1, 0.2, -0.3]},
+        translate_pregrasp=False,
+    )
+
+    assert staged_pregrasp.tolist() == pregrasp
+    assert translated_grasp.tolist() == [
+        3.9,
+        5.2,
+        5.7,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+
+
 def _runner_args(tmp_path):
     path = tmp_path / "runner_args.json"
     path.write_text(

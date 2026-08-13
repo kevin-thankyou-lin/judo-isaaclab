@@ -351,9 +351,13 @@ def _critic_owned_precontact_pad_balance(
 
 
 def _translate_source_corridor_endpoints(
-    desired_pregrasp, desired_grasp, static_precontact_receipt
+    desired_pregrasp,
+    desired_grasp,
+    static_precontact_receipt,
+    *,
+    translate_pregrasp: bool = True,
 ):
-    """Apply one measured open-jaw translation to both mapped endpoints."""
+    """Apply one measured translation to the mapped grasp corridor."""
 
     pregrasp = np.asarray(desired_pregrasp, dtype=np.float64).copy()
     grasp = np.asarray(desired_grasp, dtype=np.float64).copy()
@@ -364,7 +368,8 @@ def _translate_source_corridor_endpoints(
         raise ValueError("source corridor endpoints must be poses")
     if translation.shape != (3,) or not np.all(np.isfinite(translation)):
         raise ValueError("static source-corridor translation must be finite")
-    pregrasp[:3] += translation
+    if translate_pregrasp:
+        pregrasp[:3] += translation
     grasp[:3] += translation
     return pregrasp, grasp
 
@@ -703,6 +708,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "Optional nominal-trace collision-clear cap on the critic-owned "
             "maximin translation. The capped prediction must still retain the "
             "configured pad-fraction margin."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-preserve-pregrasp",
+        action="store_true",
+        help=(
+            "Preserve the measured force-free mapped left pregrasp and ramp "
+            "the critic-owned pad-depth translation only toward the grasp "
+            "endpoint."
         ),
     )
     parser.add_argument(
@@ -2683,7 +2697,9 @@ def main(argv: list[str] | None = None) -> None:
             "collision-clear right pregrasp requires strict quality left-first "
             "handle-local MPC"
         )
-    pad_balance_requested = any(
+    pad_balance_requested = bool(
+        args.target_left_precontact_pad_balance_preserve_pregrasp
+    ) or any(
         value is not None
         for value in (
             args.target_left_precontact_pad_balance_trace,
@@ -3626,7 +3642,17 @@ def main(argv: list[str] | None = None) -> None:
                             desired_pregrasp,
                             desired_grasp,
                             precontact_pad_balance,
+                            translate_pregrasp=not bool(
+                                args.target_left_precontact_pad_balance_preserve_pregrasp
+                            ),
                         )
+                    )
+                    precontact_pad_balance["pregrasp_translation_applied"] = not bool(
+                        args.target_left_precontact_pad_balance_preserve_pregrasp
+                    )
+                    precontact_pad_balance["grasp_translation_applied"] = True
+                    precontact_pad_balance["collision_clear_pregrasp_preserved"] = bool(
+                        args.target_left_precontact_pad_balance_preserve_pregrasp
                     )
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
