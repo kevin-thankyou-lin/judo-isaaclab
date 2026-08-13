@@ -58,7 +58,6 @@ from run_hangmug_skill_program import (
     _source_pick_prefix_steps,
     _source_dataset_receipt,
     _sparse_joint_nominal,
-    _set_authored_assist_release_deferral,
     _schema_aware_success_acceptance,
     _semantic_stage_receipt,
     _select_grasp_assist_config,
@@ -977,20 +976,6 @@ def test_authored_boundaries_release_both_grasp_assists():
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [True])
-
-
-def test_authored_giver_assist_defers_only_until_left_release():
-    env = SimpleNamespace(defer_left_grasp_assist_release=False)
-    trajectory = SimpleNamespace(waypoint_steps={"left_release": 5})
-
-    assert _set_authored_assist_release_deferral(env, trajectory, 4) is True
-    assert env.defer_left_grasp_assist_release is True
-
-    assert _set_authored_assist_release_deferral(env, trajectory, 5) is False
-    assert env.defer_left_grasp_assist_release is False
-
-    assert _set_authored_assist_release_deferral(env, None, None) is False
-    assert env.defer_left_grasp_assist_release is False
 
 
 def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
