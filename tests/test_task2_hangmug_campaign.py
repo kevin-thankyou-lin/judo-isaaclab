@@ -218,6 +218,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "branch_approach_height_m": 0.0,
         "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
+        "stable_support_steps": 180,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -238,6 +239,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         0.5235987755982988
     )
     assert float(command[command.index("--branch-support-fraction") + 1]) == 0.75
+    assert command[command.index("--stable-support-steps") + 1] == "180"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
@@ -269,6 +271,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"pick_lift_margin_m": 0.031}))
     with pytest.raises(ValueError, match="pick lift margin"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"stable_support_steps": 241}))
+    with pytest.raises(ValueError, match="stable support steps"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_handle_frame_transfer": False}))
     with pytest.raises(ValueError, match="must be true"):

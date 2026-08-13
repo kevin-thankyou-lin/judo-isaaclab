@@ -46,6 +46,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_roll_offset_rad",
     "branch_support_fraction",
     "branch_support_seat_down_m",
+    "stable_support_steps",
 })
 LD_LIBRARY_PATH = ":".join(
     (
@@ -190,6 +191,7 @@ def _repair_command(
         ("branch_roll_offset_rad", "--branch-roll-offset-rad"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
+        ("stable_support_steps", "--stable-support-steps"),
         ("target_branch_rank", "--target-branch-rank"),
     ):
         if field in strategy:
@@ -294,6 +296,7 @@ def _repair_strategy(index: int) -> dict:
         "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
+        "stable_support_steps",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
@@ -376,6 +379,15 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch support seat-down must be in [0, 0.03] m")
         strategy["branch_support_seat_down_m"] = float(seat_down)
+    if "stable_support_steps" in value:
+        steps = value["stable_support_steps"]
+        if (
+            isinstance(steps, bool)
+            or not isinstance(steps, int)
+            or not 60 <= steps <= 240
+        ):
+            raise ValueError("stable support steps must be in [60, 240]")
+        strategy["stable_support_steps"] = steps
     if not (set(value) & handover_fields):
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
