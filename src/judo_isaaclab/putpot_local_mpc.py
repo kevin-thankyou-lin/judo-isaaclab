@@ -346,6 +346,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "active",
             "preserve_transverse_centering",
             "preserve_bounded_closure",
+            "bounded_closure_priority_active",
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
@@ -521,6 +522,8 @@ def handle_local_mpc_step(
     rotation_increment = _clip_norm(
         rotation_residual / remaining, config.maximum_rotation_step_rad
     )
+    nominal_translation_increment = translation_increment.copy()
+    nominal_rotation_increment = rotation_increment.copy()
 
     active_margin_ok = _pad_margin_ok(forces, fractions, config)
     peer_margin_ok = _pad_margin_ok(peer_forces, peer_fractions, config)
@@ -647,6 +650,14 @@ def handle_local_mpc_step(
     )
     if contact_recenter_active and not contact_recenter_preserve_bounded_closure:
         jaw_increment = 0.0
+    bounded_closure_priority_active = bool(
+        contact_recenter_active
+        and contact_recenter_preserve_bounded_closure
+        and jaw_increment != 0.0
+    )
+    if bounded_closure_priority_active:
+        translation_increment = nominal_translation_increment
+        rotation_increment = nominal_rotation_increment
     target = wrist.copy()
     target[:3] += translation_increment
     target = _apply_axis_angle(target, rotation_increment)
@@ -745,6 +756,7 @@ def handle_local_mpc_step(
             "preserve_bounded_closure": bool(
                 contact_recenter_preserve_bounded_closure
             ),
+            "bounded_closure_priority_active": bounded_closure_priority_active,
             "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),
             "pad_fraction_axis_extent_m": float(
                 active_pad_fraction_axis_extent_m
@@ -752,7 +764,9 @@ def handle_local_mpc_step(
             "contact_fraction_delta": contact_fraction_delta,
             "requested_translation_m": requested_recenter_translation_m,
             "executed_translation_m": (
-                executed_recenter_translation_m if contact_recenter_active else 0.0
+                executed_recenter_translation_m
+                if contact_recenter_active and not bounded_closure_priority_active
+                else 0.0
             ),
             "retained_transverse_translation_world_m": (
                 retained_transverse_translation.tolist()

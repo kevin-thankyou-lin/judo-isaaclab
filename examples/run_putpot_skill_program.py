@@ -4726,7 +4726,9 @@ def main(argv: list[str] | None = None) -> None:
                             )
                             if local_command.frame_receipt[
                                 "contact_fraction_recenter"
-                            ]["active"]:
+                            ]["active"] and not local_command.frame_receipt[
+                                "contact_fraction_recenter"
+                            ]["bounded_closure_priority_active"]:
                                 local_mpc_pending_recenter_measurements[
                                     active_arm
                                 ] = {

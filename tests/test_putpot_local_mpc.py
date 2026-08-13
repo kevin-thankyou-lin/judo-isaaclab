@@ -127,6 +127,7 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     assert np.dot(translation, contact_pad_axis) == pytest.approx(-0.001)
     assert not recenter["preserve_transverse_centering"]
     assert not recenter["preserve_bounded_closure"]
+    assert not recenter["bounded_closure_priority_active"]
     np.testing.assert_allclose(
         recenter["retained_transverse_translation_world_m"], 0.0
     )
@@ -154,6 +155,7 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     np.testing.assert_allclose(centered_translation, [0.003, 0.002, -0.001])
     assert np.linalg.norm(centered_translation) < 0.004
     assert not centered_recenter["preserve_bounded_closure"]
+    assert not centered_recenter["bounded_closure_priority_active"]
     assert centered.frame_receipt["executed_control"]["jaw_increment"] == 0.0
 
     centered_closing = handle_local_mpc_step(
@@ -172,11 +174,13 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
         "contact_fraction_recenter"
     ]
     assert closing_recenter["preserve_bounded_closure"]
+    assert closing_recenter["bounded_closure_priority_active"]
+    assert closing_recenter["executed_translation_m"] == 0.0
     np.testing.assert_allclose(
         centered_closing.frame_receipt["executed_control"][
             "translation_world_m"
         ],
-        centered_translation,
+        [0.003, 0.002, 0.0],
     )
     assert centered_closing.frame_receipt["executed_control"][
         "jaw_increment"
