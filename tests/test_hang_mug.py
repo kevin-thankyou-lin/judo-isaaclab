@@ -53,6 +53,7 @@ from run_hangmug_skill_program import (
     _require_reusable_pick_boundary,
     _source_pick_prefix_steps,
     _source_dataset_receipt,
+    _sample_has_unassisted_broad_contact,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
     _semantic_stage_receipt,
@@ -816,7 +817,7 @@ def test_right_handover_assist_uses_zero_delay_contact_backed_joint():
     assert config.keys() == {"left"}
 
 
-def test_authored_boundaries_release_both_grasp_assists():
+def test_quality_wave_handover_and_authored_unload_own_assist_transitions():
     import torch
 
     class Assist:
@@ -840,16 +841,33 @@ def test_authored_boundaries_release_both_grasp_assists():
     trajectory = SimpleNamespace(
         waypoint_steps={"right_grasp": 4, "left_release": 5, "branch_unload": 7}
     )
+    raw_broad = {
+        "right_grasp": True,
+        "grasp_assist_engaged": {"left": True, "right": False},
+        "right_finger_forces_n": [2.0, 2.0],
+        "right_pad_fractions": [0.5, 0.5],
+    }
+    assisted_broad = {
+        **raw_broad,
+        "grasp_assist_engaged": {"left": True, "right": True},
+    }
+    asymmetric_overlap = {
+        **raw_broad,
+        "right_pad_fractions": [0.901, 0.393],
+    }
 
-    _update_authored_assist_releases(env, trajectory, 4)
+    assert _sample_has_unassisted_broad_contact(asymmetric_overlap, "right") is False
+    assert _sample_has_unassisted_broad_contact(raw_broad, "right") is True
+
+    _update_authored_assist_releases(env, trajectory, 4, raw_broad)
     assert left.calls == []
     assert right.calls[-1] == ([True], [False])
 
-    _update_authored_assist_releases(env, trajectory, 5)
+    _update_authored_assist_releases(env, trajectory, 5, assisted_broad)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [False])
 
-    _update_authored_assist_releases(env, trajectory, 8)
+    _update_authored_assist_releases(env, trajectory, 8, assisted_broad)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [True])
 

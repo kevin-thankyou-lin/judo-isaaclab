@@ -847,29 +847,25 @@ def _validate_datagen_grasp_assists(env, expected_config) -> str:
     return "task_config:" + ",".join(entries)
 
 
-def _update_authored_assist_releases(env, trajectory, step: int) -> None:
-    """Release grasp assists at the coded handover and unload boundaries.
+def _update_authored_assist_releases(
+    env, trajectory, step: int, sample: dict[str, object]
+) -> None:
+    """Advance quality-gated handover assists and authored unload release.
 
     The task manager normally drops the left friction assist while both hands
     overlap during handover.  Some valid geometries transition directly from
-    left to right contact without a simultaneous-grasp controller sample, so
-    that event alone is not a reliable release signal.  The semantic program's
-    left-release boundary is deterministic and already commands the left hand
-    open; use it as a fail-closed release signal without advancing the left
-    assist state machine twice during the grasp phase.
+    left to right contact without a simultaneous-grasp controller sample, so a
+    raw overlap alone is not a reliable release signal.  Let the open approach
+    and closing fingers establish force-backed bilateral pad contact before the
+    right fixed joint engages.  Release the left assist only after a subsequent
+    sampled row proves that same broad contact with the receiver assist active.
+    The carrier assist still releases only at the authored supported boundary.
     """
     import torch
 
     left_grasping, right_grasping = env.robot.is_grasping()
     left_assist = env.grasp_assists.get("left")
-    waypoint_names = list(trajectory.waypoint_steps)
-    release_index = waypoint_names.index("left_release")
-    release_start = (
-        0
-        if release_index == 0
-        else trajectory.waypoint_steps[waypoint_names[release_index - 1]] + 1
-    )
-    releasing_left = step >= release_start
+    releasing_left = _sample_has_broad_contact(sample, "right")
     if left_assist is not None and releasing_left:
         left_assist.update(
             engage=left_grasping,
@@ -884,8 +880,10 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
             else "branch_unload"
         )
         releasing_right = step > trajectory.waypoint_steps[support_boundary]
+        acquiring_right = _sample_has_unassisted_broad_contact(sample, "right")
         right_assist.update(
-            engage=right_grasping,
+            engage=right_grasping
+            & torch.full_like(right_grasping, acquiring_right),
             disable=torch.full_like(right_grasping, releasing_right),
         )
 
@@ -1428,6 +1426,24 @@ def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
     return bool(
         sample[f"{side}_grasp"]
         and sample["grasp_assist_engaged"].get(side, False)
+        and fractions.shape == (2,)
+        and forces.shape == (2,)
+        and np.isfinite(fractions).all()
+        and np.isfinite(forces).all()
+        and (fractions >= 0.15).all()
+        and (fractions <= 0.85).all()
+        and (forces > 0.0).all()
+    )
+
+
+def _sample_has_unassisted_broad_contact(
+    sample: dict[str, object], side: str
+) -> bool:
+    """Gate assist acquisition from the unchanged physical pad criterion."""
+    fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=np.float64)
+    forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=np.float64)
+    return bool(
+        sample[f"{side}_grasp"]
         and fractions.shape == (2,)
         and forces.shape == (2,)
         and np.isfinite(fractions).all()
@@ -3039,8 +3055,6 @@ def main() -> None:
                 )
                 desired_left.append(trajectory.left_poses[semantic_step]); desired_right.append(trajectory.right_poses[semantic_step])
             observation, _, _, _, info = env.step(action)
-            if semantic_step is not None:
-                _update_authored_assist_releases(env, trajectory, semantic_step)
             sample = _sample(env, step, stage, info)
             stop_after_row = False
             if waypoint == "handover_receiver_lift":
@@ -3147,6 +3161,10 @@ def main() -> None:
                 progress = {key: sample[key] for key in ("step", "program_stage", "stage1", "stage2", "stage3", "task_success", "left_grasp", "right_grasp", "grasp_assist_engaged", "mug_pose", "mug_tree_xy_error_m")}
                 print("HANGMUG_PROGRESS=" + json.dumps(progress, sort_keys=True), flush=True)
                 print(f"STEP_PROGRESS step={step} stage={stage}", flush=True)
+            if semantic_step is not None:
+                _update_authored_assist_releases(
+                    env, trajectory, semantic_step, sample
+                )
             if stop_after_row:
                 break
         if encoder is not None:
