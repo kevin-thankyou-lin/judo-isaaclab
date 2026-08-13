@@ -63,7 +63,11 @@ def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
     assert not np.array_equal(routed_grasp, grasp)
     assert receipt["pregrasp_unchanged"]
     assert receipt["grasp_orientation_changed"]
-    assert receipt["relative_balance_m"] == pytest.approx(-0.01819198772819174)
+    assert receipt["preliminary_relative_balance_m"] == pytest.approx(
+        -0.01819198772819174
+    )
+    assert receipt["relative_balance_m"] == pytest.approx(0.01819198772819174)
+    assert receipt["source_corridor_sign_reversed"]
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():

@@ -375,9 +375,9 @@ def _translate_source_corridor_endpoints(
 
 
 def _pivot_source_corridor_grasp_endpoint(
-    desired_pregrasp, desired_grasp, relative_balance_m: float
+    desired_pregrasp, desired_grasp, preliminary_relative_balance_m: float
 ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
-    """Apply the existing one-finger pivot to the executable grasp only."""
+    """Apply the one-finger pivot in the executable corridor convention."""
 
     from judo_isaaclab.put_pot import balance_handle_contact_across_finger_pads
 
@@ -385,13 +385,20 @@ def _pivot_source_corridor_grasp_endpoint(
     grasp_before = np.asarray(desired_grasp, dtype=np.float64).copy()
     if pregrasp.shape != (7,) or grasp_before.shape != (7,):
         raise ValueError("source corridor endpoints must be poses")
+    # Attempt 024 measured the executable source-corridor convention directly:
+    # its preliminary negative pivot moved the weak pad from +0.0268 to
+    # -0.0041 at first dual contact.  The corridor pose therefore uses the
+    # opposite sign from the preliminary geometry pose.
+    executable_relative_balance_m = -float(preliminary_relative_balance_m)
     grasp_after = balance_handle_contact_across_finger_pads(
-        grasp_before, relative_balance_m
+        grasp_before, executable_relative_balance_m
     )
     return pregrasp, grasp_after, {
         "enabled": True,
         "mechanism": "existing_one_finger_pivot_after_source_corridor_replacement",
-        "relative_balance_m": float(relative_balance_m),
+        "preliminary_relative_balance_m": float(preliminary_relative_balance_m),
+        "relative_balance_m": executable_relative_balance_m,
+        "source_corridor_sign_reversed": True,
         "pregrasp_unchanged": bool(np.array_equal(pregrasp, desired_pregrasp)),
         "grasp_position_delta_m": float(
             np.linalg.norm(grasp_after[:3] - grasp_before[:3])
