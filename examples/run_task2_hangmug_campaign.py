@@ -787,8 +787,7 @@ def independent_audit(index: int, attempt: Path) -> dict:
         and source["actions_sha256"] == SOURCE_ACTIONS_SHA256
         and source["action_dataset"] == "actions"
         and provenance["target_state_template"]["actions_executed"] is False
-        and {name: value["path"] for name, value in provenance["target_assets"].items()}
-        == {name: str(path) for name, path in assets.items()}
+        and _asset_provenance_matches(provenance["target_assets"], assets)
         and action_binding
         and protocol["candidate_sampling"] is False
         and protocol["physics_device_actual"] == "cpu"
@@ -882,6 +881,20 @@ def independent_audit(index: int, attempt: Path) -> dict:
         "contact_policy": semantic_audit["contact_policy"],
         "guard": guard,
     }
+
+
+def _asset_provenance_matches(recorded: dict, expected: dict[str, Path]) -> bool:
+    """Compare asset identities after resolving lane-local data symlinks."""
+    if set(recorded) != set(expected):
+        return False
+    try:
+        return all(
+            Path(recorded[name]["path"]).resolve(strict=True)
+            == Path(expected[name]).resolve(strict=True)
+            for name in expected
+        )
+    except (KeyError, OSError, TypeError):
+        return False
 
 
 def classification_audit(index: int, attempt: Path) -> dict:

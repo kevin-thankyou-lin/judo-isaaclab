@@ -59,6 +59,45 @@ def test_atomic_immutable_receipt_never_overwrites(tmp_path):
     assert json.loads(path.read_text()) == {"value": 1}
 
 
+def test_asset_provenance_matches_lane_symlink_to_canonical_assets(tmp_path):
+    canonical = tmp_path / "canonical"
+    mug = canonical / "MugHangable/mug_teacup_000010"
+    tree = canonical / "ThreeLayerMugTree/mug_tree_000010"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    alias = tmp_path / "lane-data"
+    alias.symlink_to(canonical, target_is_directory=True)
+    expected = {
+        "mug": alias / "MugHangable/mug_teacup_000010",
+        "mug_tree": alias / "ThreeLayerMugTree/mug_tree_000010",
+    }
+    recorded = {
+        "mug": {"path": str(mug)},
+        "mug_tree": {"path": str(tree)},
+    }
+    assert campaign._asset_provenance_matches(recorded, expected)
+
+
+def test_asset_provenance_rejects_wrong_or_incomplete_assets(tmp_path):
+    mug = tmp_path / "MugHangable/mug_teacup_000010"
+    tree = tmp_path / "ThreeLayerMugTree/mug_tree_000010"
+    wrong = tmp_path / "ThreeLayerMugTree/mug_tree_000011"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    wrong.mkdir(parents=True)
+    expected = {"mug": mug, "mug_tree": tree}
+    assert not campaign._asset_provenance_matches(
+        {"mug": {"path": str(mug)}}, expected
+    )
+    assert not campaign._asset_provenance_matches(
+        {
+            "mug": {"path": str(mug)},
+            "mug_tree": {"path": str(wrong)},
+        },
+        expected,
+    )
+
+
 def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatch):
     results = tmp_path / "task2"
     results.mkdir()
