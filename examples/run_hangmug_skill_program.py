@@ -1143,6 +1143,36 @@ def _pose_path_step_receipt(
     }
 
 
+_YAM_OPEN_GRIPPER_ENVELOPE_RADIUS_M = 0.14
+
+
+def _handover_gripper_proxy_receipt(
+    collision_report: dict[str, object],
+    *,
+    first_allowed_contact_step: int | None,
+) -> dict[str, object]:
+    """Reject gripper-proxy collisions before the intended contact approach.
+
+    The open YAM fingers extend substantially beyond the wrist origin.  A
+    wrist-only screen therefore cannot prove that a nominal pregrasp is clear.
+    Mug contact is permitted only after the explicit open contact-approach
+    waypoint begins; tree contact is never permitted.
+    """
+    collision_steps = [int(step) for step in collision_report["collision_steps"]]
+    if first_allowed_contact_step is None:
+        unexpected = collision_steps
+    else:
+        unexpected = [
+            step for step in collision_steps if step < first_allowed_contact_step
+        ]
+    return {
+        **collision_report,
+        "first_allowed_contact_step": first_allowed_contact_step,
+        "unexpected_collision_steps": unexpected,
+        "passed": not unexpected,
+    }
+
+
 def _handover_wave_plan_screen(
     trajectory,
     sample: dict[str, object],
@@ -1221,6 +1251,33 @@ def _handover_wave_plan_screen(
         obstacles={"mug_tree": (tree_mesh, tree_pose)},
         sample_stride=1,
     )
+    right_gripper_tree = sphere_path_collision_report(
+        right_path[:, :3],
+        radius_m=_YAM_OPEN_GRIPPER_ENVELOPE_RADIUS_M,
+        obstacles={"mug_tree": (tree_mesh, tree_pose)},
+        sample_stride=1,
+    )
+    right_gripper_mug_raw = sphere_path_collision_report(
+        right_path[:, :3],
+        radius_m=_YAM_OPEN_GRIPPER_ENVELOPE_RADIUS_M,
+        obstacles={"held_mug": (mug_mesh, mug_pose)},
+        sample_stride=1,
+    )
+    first_allowed_contact_step = None
+    if phase == "open_approach":
+        contact_start = (
+            trajectory.waypoint_steps.get(
+                "handover_orient_clear",
+                trajectory.waypoint_steps["handover_pregrasp"],
+            )
+            + 1
+        )
+        # right_path[0] is the live pose immediately before trajectory[start].
+        first_allowed_contact_step = 1 + contact_start - start
+    right_gripper_mug = _handover_gripper_proxy_receipt(
+        right_gripper_mug_raw,
+        first_allowed_contact_step=first_allowed_contact_step,
+    )
     wrist_separation = np.linalg.norm(
         right_path[:, :3] - left_path[:, :3], axis=1
     )
@@ -1245,6 +1302,10 @@ def _handover_wave_plan_screen(
         "right_wrist_tree_proxy_clear": bool(right_wrist["valid"]),
         "right_wrist_camera_mug_and_tree_proxy_clear": bool(
             right_camera_screen["valid"]
+        ),
+        "right_open_gripper_tree_proxy_clear": bool(right_gripper_tree["valid"]),
+        "right_open_gripper_mug_clear_until_contact_approach": bool(
+            right_gripper_mug["passed"]
         ),
         "left_wrist_camera_tree_proxy_clear": bool(left_camera_screen["valid"]),
         "bilateral_wrist_and_camera_clearance_positive": bool(
@@ -1273,6 +1334,8 @@ def _handover_wave_plan_screen(
             "held_mug_vs_tree": mug_tree,
             "right_wrist_origin_vs_tree": right_wrist,
             "right_wrist_camera_vs_mug_and_tree": right_camera_screen,
+            "right_open_gripper_envelope_vs_tree": right_gripper_tree,
+            "right_open_gripper_envelope_vs_mug": right_gripper_mug,
             "left_wrist_camera_vs_tree": left_camera_screen,
         },
         "checks": checks,

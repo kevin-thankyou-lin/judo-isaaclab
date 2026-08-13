@@ -38,6 +38,7 @@ from run_hangmug_skill_program import (
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
+    _handover_gripper_proxy_receipt,
     _handover_lift_guard_receipt,
     _handover_wave_contract_receipt,
     _pose_path_step_receipt,
@@ -1225,6 +1226,32 @@ def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
     )
     assert receipt["passed"] is False
     assert receipt["discontinuous_wrist_jump"] is True
+
+
+def test_handover_gripper_proxy_requires_clear_standoff_before_contact_phase():
+    report = {
+        "collision_steps": [8, 9, 10],
+        "valid": False,
+        "proxy_radius_m": 0.14,
+    }
+
+    clear_standoff = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=None
+    )
+    assert clear_standoff["passed"] is False
+    assert clear_standoff["unexpected_collision_steps"] == [8, 9, 10]
+
+    open_contact_approach = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=8
+    )
+    assert open_contact_approach["passed"] is True
+    assert open_contact_approach["unexpected_collision_steps"] == []
+
+    early_contact = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=9
+    )
+    assert early_contact["passed"] is False
+    assert early_contact["unexpected_collision_steps"] == [8]
 
 
 def test_handover_wave_contract_requires_screened_contact_before_release():
