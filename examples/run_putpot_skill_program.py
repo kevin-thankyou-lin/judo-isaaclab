@@ -69,6 +69,58 @@ def _quality_source_contact_requires_sequential_corridor(
     )
 
 
+def _static_precontact_requires_acquisition_only(
+    *, requested: bool, acquisition_only: bool, quality_mode: bool
+) -> bool:
+    """Keep standalone static centering in the legacy diagnostic corridor."""
+
+    return bool(requested and not acquisition_only and not quality_mode)
+
+
+def _quality_static_centering_contract_missing(
+    *,
+    requested: bool,
+    acquisition_only: bool,
+    quality_mode: bool,
+    source_contact_requested: bool,
+    has_measured_corridor: bool,
+    left_first: bool,
+    same_calibration_sample: bool,
+) -> bool:
+    """Bind full-task centering to one critic-owned sequential corridor."""
+
+    return bool(
+        requested
+        and not acquisition_only
+        and quality_mode
+        and not (
+            source_contact_requested
+            and has_measured_corridor
+            and left_first
+            and same_calibration_sample
+        )
+    )
+
+
+def _translate_source_corridor_endpoints(
+    desired_pregrasp, desired_grasp, static_precontact_receipt
+):
+    """Apply one measured open-jaw translation to both mapped endpoints."""
+
+    pregrasp = np.asarray(desired_pregrasp, dtype=np.float64).copy()
+    grasp = np.asarray(desired_grasp, dtype=np.float64).copy()
+    translation = np.asarray(
+        static_precontact_receipt.get("translation_world_m"), dtype=np.float64
+    )
+    if pregrasp.shape != (7,) or grasp.shape != (7,):
+        raise ValueError("source corridor endpoints must be poses")
+    if translation.shape != (3,) or not np.all(np.isfinite(translation)):
+        raise ValueError("static source-corridor translation must be finite")
+    pregrasp[:3] += translation
+    grasp[:3] += translation
+    return pregrasp, grasp
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -295,7 +347,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-left-precontact-calibration-trace",
         help=(
             "Immutable prior trace whose open-jaw sample measures the static "
-            "left precontact jaw-axis translation. Acquisition-only mode only."
+            "left precontact jaw-axis translation. Full quality mode may use "
+            "it only with the same critic-owned left-first source corridor."
         ),
     )
     parser.add_argument(
@@ -2148,7 +2201,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     if args.acquisition_only and not args.source_demo_card:
         raise ValueError("--acquisition-only requires an immutable source-demo card")
-    if calibration_requested and not args.acquisition_only:
+    if _static_precontact_requires_acquisition_only(
+        requested=calibration_requested,
+        acquisition_only=args.acquisition_only,
+        quality_mode=quality_config is not None,
+    ):
         raise ValueError("static precontact calibration is acquisition-only")
     source_contact_requested = any(
         value is not None
@@ -2186,7 +2243,37 @@ def main(argv: list[str] | None = None) -> None:
             "quality source-contact correction requires a left-first measured "
             "source corridor"
         )
-    if source_contact_requested and calibration_requested:
+    same_calibration_sample = bool(
+        calibration_requested
+        and source_contact_requested
+        and Path(args.target_left_precontact_calibration_trace).resolve()
+        == Path(args.target_left_source_contact_calibration_trace).resolve()
+        and args.target_left_precontact_calibration_step
+        == args.target_left_source_contact_calibration_step
+    )
+    quality_combined_centering = bool(
+        calibration_requested
+        and not args.acquisition_only
+        and quality_config is not None
+    )
+    if _quality_static_centering_contract_missing(
+        requested=calibration_requested,
+        acquisition_only=args.acquisition_only,
+        quality_mode=quality_config is not None,
+        source_contact_requested=source_contact_requested,
+        has_measured_corridor=args.target_left_source_approach_corridor,
+        left_first=args.target_source_left_first_acquisition,
+        same_calibration_sample=same_calibration_sample,
+    ):
+        raise ValueError(
+            "quality static centering requires the same critic-owned sample "
+            "as a left-first measured source corridor"
+        )
+    if (
+        source_contact_requested
+        and calibration_requested
+        and not quality_combined_centering
+    ):
         raise ValueError(
             "source-contact correction cannot reuse static translation calibration"
         )
@@ -2662,7 +2749,7 @@ def main(argv: list[str] | None = None) -> None:
             maximum_translation_m = (
                 collision_free_pregrasp_m + HANDLE_PAD_DEPTH_MARGIN_M
             )
-            trajectory, static_precontact_jaw_translation = (
+            centered_trajectory, static_precontact_jaw_translation = (
                 apply_static_precontact_jaw_axis_translation(
                     trajectory,
                     jaw_axis_world,
@@ -2670,6 +2757,12 @@ def main(argv: list[str] | None = None) -> None:
                     maximum_translation_m,
                 )
             )
+            if not quality_combined_centering:
+                trajectory = centered_trajectory
+            else:
+                static_precontact_jaw_translation[
+                    "deferred_to_source_contact_corridor"
+                ] = True
             calibration_root = calibration_path.parent
             calibration_result = calibration_root / "skill_result.json"
             calibration_video = calibration_root / "skill.mp4"
@@ -2970,6 +3063,17 @@ def main(argv: list[str] | None = None) -> None:
                     frame_receipt["jaw_centering_translation_world_m"],
                     dtype=np.float64,
                 )
+                if quality_combined_centering:
+                    desired_pregrasp, desired_grasp = (
+                        _translate_source_corridor_endpoints(
+                            desired_pregrasp,
+                            desired_grasp,
+                            static_precontact_jaw_translation,
+                        )
+                    )
+                    static_precontact_jaw_translation[
+                        "combined_with_source_contact_corridor"
+                    ] = True
                 trajectory, trajectory_receipt = (
                     apply_source_demo_approach_corridor(
                         trajectory,
