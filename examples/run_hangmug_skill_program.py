@@ -989,8 +989,16 @@ def _handover_contact_acquire_guard_receipt(
         "pick_latched": bool(sample["stage1"]),
     }
     if phase == "entry":
-        checks["left_assist_secure"] = bool(
+        left_assist_secure = bool(
             sample["grasp_assist_engaged"].get("left", False)
+        )
+        broad_receiver_assist_secure = bool(
+            sample["right_grasp"]
+            and sample["grasp_assist_engaged"].get("right", False)
+            and _sample_has_broad_pad_contact(sample, "right")
+        )
+        checks["giver_or_broad_receiver_assist_secure"] = bool(
+            left_assist_secure or broad_receiver_assist_secure
         )
     elif phase == "row":
         receiver_secure = bool(
@@ -1119,25 +1127,32 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     }
 
 
+def _sample_has_broad_pad_contact(sample, side: str) -> bool:
+    if side not in {"left", "right"}:
+        raise ValueError("side must be left or right")
+    interior_low, interior_high = 0.15, 0.85
+    fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=float)
+    forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=float)
+    return bool(
+        sample[f"{side}_grasp"]
+        and fractions.shape == (2,)
+        and forces.shape == (2,)
+        and np.isfinite(fractions).all()
+        and (fractions >= interior_low).all()
+        and (fractions <= interior_high).all()
+        and (forces > 0.0).all()
+    )
+
+
 def _broad_pad_contact_receipt(
     samples, side: str, *, required_steps: int = 8
 ) -> dict[str, object]:
     if side not in {"left", "right"}:
         raise ValueError("side must be left or right")
     interior_low, interior_high = 0.15, 0.85
-    qualifying = []
-    for row in samples:
-        fractions = np.asarray(row[f"{side}_pad_fractions"], dtype=float)
-        forces = np.asarray(row[f"{side}_finger_forces_n"], dtype=float)
-        qualifying.append(
-            bool(row[f"{side}_grasp"])
-            and fractions.shape == (2,)
-            and forces.shape == (2,)
-            and bool(np.isfinite(fractions).all())
-            and bool((fractions >= interior_low).all())
-            and bool((fractions <= interior_high).all())
-            and bool((forces > 0.0).all())
-        )
+    qualifying = [
+        _sample_has_broad_pad_contact(row, side) for row in samples
+    ]
     longest = current = 0
     for value in qualifying:
         current = current + 1 if value else 0

@@ -1536,6 +1536,26 @@ def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
     assert not _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
 
 
+def test_contact_acquire_entry_accepts_only_broad_transferred_receiver_support():
+    sample = {
+        "step": 429,
+        "stage1": True,
+        "left_grasp": True,
+        "right_grasp": True,
+        "right_finger_forces_n": [6.13, 5.17],
+        "right_pad_fractions": [0.569, 0.168],
+        "grasp_assist_engaged": {"left": False, "right": True},
+    }
+    receipt = _handover_contact_acquire_guard_receipt(sample, phase="entry")
+    assert receipt["passed"]
+    assert receipt["checks"]["giver_or_broad_receiver_assist_secure"]
+
+    sample["right_pad_fractions"] = [0.569, 0.149]
+    receipt = _handover_contact_acquire_guard_receipt(sample, phase="entry")
+    assert not receipt["passed"]
+    assert not receipt["checks"]["giver_or_broad_receiver_assist_secure"]
+
+
 def test_receiver_lift_requires_target_and_follows_release():
     program = HangMugSkillProgram(_pose(), _pose())
     with pytest.raises(ValueError, match="requires a right-wrist target"):
