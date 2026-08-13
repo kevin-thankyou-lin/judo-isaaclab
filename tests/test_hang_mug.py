@@ -37,6 +37,7 @@ from run_hangmug_skill_program import (
     _handover_target_with_local_seat,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
+    _stationary_handover_contact_acquire,
     _handover_lift_guard_receipt,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
@@ -1460,6 +1461,49 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
         {"actions": actions}, trajectory, {"semantic_indices": indices}
     )
     assert nominal[acquire_end] == pytest.approx(actions.value[5])
+
+
+def test_stationary_contact_acquire_holds_broad_seated_targets_before_release():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.physical_handover(
+        _pose(0.4, 0.1, 0.8),
+        _pose(0.3, -0.1, 0.9),
+        _pose(0.4, -0.1, 0.9),
+        _pose(0.4, 0.2, 0.8),
+        approach_steps=2,
+        close_steps=2,
+        contact_acquire_steps=4,
+        release_steps=3,
+    )
+    trajectory = program.build()
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    acquire_end = trajectory.waypoint_steps["handover_contact_acquire"]
+    release_end = trajectory.waypoint_steps["left_release"]
+    release_target = trajectory.left_poses[release_end].copy()
+    trajectory.left_poses[grasp_end + 1 : release_end + 1, 0] = np.linspace(
+        trajectory.left_poses[grasp_end, 0],
+        release_target[0],
+        release_end - grasp_end,
+    )
+
+    adjusted, receipt = _stationary_handover_contact_acquire(trajectory)
+
+    assert np.all(
+        adjusted.left_poses[grasp_end + 1 : acquire_end + 1]
+        == adjusted.left_poses[grasp_end]
+    )
+    assert np.all(
+        adjusted.right_poses[grasp_end + 1 : acquire_end + 1]
+        == adjusted.right_poses[grasp_end]
+    )
+    assert adjusted.left_poses[release_end] == pytest.approx(release_target)
+    assert receipt == {
+        "strategy": "stationary_broad_contact_hold",
+        "acquire_steps": 4,
+        "left_target_unchanged": True,
+        "right_target_unchanged": True,
+        "gripper_transition_during_hold": False,
+    }
 
 
 def test_contact_acquire_rejects_unbounded_live_residual():

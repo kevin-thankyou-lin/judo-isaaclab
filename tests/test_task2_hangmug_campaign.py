@@ -343,6 +343,13 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
     with pytest.raises(ValueError, match="contact acquire"):
         campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_contact_acquire_steps": 30,
+        "handover_contact_acquire_stationary": True,
+        "handover_contact_acquire_local_bias_m": [0.001, 0.0, 0.0],
+    }))
+    with pytest.raises(ValueError, match="stationary handover contact acquire"):
+        campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
     with pytest.raises(ValueError, match="within 45 degrees"):
         campaign._repair_strategy(2)
@@ -428,6 +435,7 @@ def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeyp
         "handover_orient_steps": 30,
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 12,
+        "handover_contact_acquire_stationary": True,
         "handover_confirm_steps": 12,
         "handover_seat_local_z_m": 0.018739788666255294,
         "handover_target_offset_m": [0.0, 0.0, 0.0],
@@ -451,6 +459,7 @@ def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeyp
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "12"
+    assert "--handover-contact-acquire-stationary" in command
     assert command[command.index("--handover-seat-local-z-m") + 1] == (
         "0.018739788666255294"
     )
