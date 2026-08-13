@@ -30,6 +30,7 @@ from judo_isaaclab.put_marker import (
 from run_hangmug_skill_program import (
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
+    _bounded_branch_final_offset,
     _branch_reanchor_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
@@ -895,6 +896,17 @@ def test_branch_support_seating_changes_only_vertical_waypoint_translation():
     assert pose[2] == pytest.approx(0.96)
     with pytest.raises(ValueError, match="seat-down"):
         _branch_support_seated_pose(pose, 0.031)
+
+
+def test_branch_final_offset_is_bounded_without_mutating_input_pose():
+    pose = _pose(0.7, -0.2, 0.96)
+    offset = _bounded_branch_final_offset((-0.001, 0.003, -0.0007))
+    shifted = pose.copy()
+    shifted[:3] += offset
+    assert shifted == pytest.approx([0.699, -0.197, 0.9593, *pose[3:]])
+    assert pose == pytest.approx(_pose(0.7, -0.2, 0.96))
+    with pytest.raises(ValueError, match="exceeds 1 cm"):
+        _bounded_branch_final_offset((0.0101, 0.0, 0.0))
 
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():
