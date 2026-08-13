@@ -930,8 +930,8 @@ def _asset_root_usd(asset_directory: str) -> str:
     return str(candidates[0])
 
 
-def _direct_segment_contact_views(env, target_assets) -> dict[str, object]:
-    """Create fail-closed live link-contact views for direct motion only."""
+def _quality_wave_contact_views(env, target_assets) -> dict[str, object]:
+    """Create fail-closed live link-contact views for quality-wave motion."""
     from dc_study.utils.assets import find_contact_body_link
 
     right_names = tuple(env.scene["right_arm"].body_names)
@@ -952,6 +952,7 @@ def _direct_segment_contact_views(env, target_assets) -> dict[str, object]:
     physics_view = env.scene["right_arm"]._physics_sim_view
     environment_filters = [[tree_path, *left_paths] for _ in right_paths]
     mug_filters = [[mug_path] for _ in right_paths]
+    left_tree_filters = [[tree_path] for _ in left_paths]
     environment = physics_view.create_rigid_contact_view(
         right_paths,
         filter_patterns=environment_filters,
@@ -962,18 +963,30 @@ def _direct_segment_contact_views(env, target_assets) -> dict[str, object]:
         filter_patterns=mug_filters,
         max_contact_data_count=1024,
     )
-    if environment.sensor_count != len(right_paths) or mug.sensor_count != len(
-        right_paths
+    left_tree = physics_view.create_rigid_contact_view(
+        left_paths,
+        filter_patterns=left_tree_filters,
+        max_contact_data_count=1024,
+    )
+    if (
+        environment.sensor_count != len(right_paths)
+        or mug.sensor_count != len(right_paths)
+        or left_tree.sensor_count != len(left_paths)
     ):
-        raise RuntimeError("direct collision contact views resolved incomplete arms")
+        raise RuntimeError("quality-wave contact views resolved incomplete arms")
     return {
         "environment": environment,
         "mug": mug,
+        "left_tree": left_tree,
         "right_body_paths": right_paths,
         "left_body_paths": left_paths,
         "tree_body_path": tree_path,
         "mug_body_path": mug_path,
     }
+
+
+# Retain the narrow name used by the direct-segment tests and old callers.
+_direct_segment_contact_views = _quality_wave_contact_views
 
 
 def _contact_view_max_force(view, physics_dt: float) -> float:
@@ -982,6 +995,340 @@ def _contact_view_max_force(view, physics_dt: float) -> float:
         values = values.detach().cpu().numpy()
     array = np.asarray(values, dtype=np.float64)
     return float(np.linalg.norm(array, axis=-1).max(initial=0.0))
+
+
+def _pose_path_step_receipt(
+    poses: np.ndarray,
+    *,
+    maximum_translation_m: float,
+    maximum_rotation_rad: float,
+) -> dict[str, object]:
+    """Prove that every commanded pose increment is bounded and continuous."""
+    values = np.asarray(poses, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != 7 or len(values) < 2:
+        raise ValueError("pose path must contain at least two seven-value poses")
+    if not np.isfinite(values).all():
+        raise ValueError("pose path must be finite")
+    position_steps = np.linalg.norm(np.diff(values[:, :3], axis=0), axis=1)
+    quaternions = values[:, 3:]
+    quaternions = quaternions / np.linalg.norm(quaternions, axis=1)[:, None]
+    dots = np.abs(np.sum(quaternions[:-1] * quaternions[1:], axis=1))
+    rotation_steps = 2.0 * np.arccos(np.clip(dots, 0.0, 1.0))
+    max_position = float(position_steps.max(initial=0.0))
+    max_rotation = float(rotation_steps.max(initial=0.0))
+    return {
+        "rows": int(len(values) - 1),
+        "maximum_translation_step_m": max_position,
+        "translation_limit_m": float(maximum_translation_m),
+        "maximum_rotation_step_rad": max_rotation,
+        "rotation_limit_rad": float(maximum_rotation_rad),
+        "discontinuous_wrist_jump": bool(
+            max_position > maximum_translation_m
+            or max_rotation > maximum_rotation_rad
+        ),
+        "passed": bool(
+            max_position <= maximum_translation_m
+            and max_rotation <= maximum_rotation_rad
+        ),
+    }
+
+
+def _handover_wave_plan_screen(
+    trajectory,
+    sample: dict[str, object],
+    target_assets: dict[str, str],
+    nominal_right_contact,
+    args,
+    *,
+    phase: str,
+) -> dict[str, object]:
+    """Screen the live-geometry receiver path without adding motion phases."""
+    from judo_isaaclab.collision_screening import (
+        load_usd_collision_mesh,
+        object_path_clearance_reports,
+        sphere_path_collision_report,
+    )
+    from judo_isaaclab.put_marker import compose_pose
+
+    if phase == "clear_pregrasp":
+        previous = "left_lift" if "left_lift" in trajectory.waypoint_steps else None
+        endpoint = "handover_pregrasp"
+        start = 0 if previous is None else trajectory.waypoint_steps[previous] + 1
+    elif phase == "open_approach":
+        previous = "handover_pregrasp"
+        endpoint = (
+            "right_grasp_settle"
+            if "right_grasp_settle" in trajectory.waypoint_steps
+            else "right_grasp"
+        )
+        start = trajectory.waypoint_steps[previous] + 1
+    else:
+        raise ValueError(f"unknown handover plan-screen phase: {phase}")
+    end = trajectory.waypoint_steps[endpoint]
+    current_right = np.asarray(sample["right_eef_pose"], dtype=np.float64)
+    current_left = np.asarray(sample["left_eef_pose"], dtype=np.float64)
+    right_path = np.concatenate(
+        (current_right[None], trajectory.right_poses[start : end + 1]), axis=0
+    )
+    left_path = np.concatenate(
+        (current_left[None], trajectory.left_poses[start : end + 1]), axis=0
+    )
+    mug_pose = np.asarray(sample["mug_pose"], dtype=np.float64)
+    tree_pose = np.asarray(sample["tree_pose"], dtype=np.float64)
+    mug_mesh = load_usd_collision_mesh(_asset_root_usd(target_assets["mug"]))
+    tree_mesh = load_usd_collision_mesh(_asset_root_usd(target_assets["mug_tree"]))
+    mug_tree = object_path_clearance_reports(
+        np.repeat(mug_pose[None], len(right_path), axis=0),
+        tree_pose=tree_pose,
+        object_mesh=mug_mesh,
+        tree_mesh=tree_mesh,
+        required_clearance_m=0.002,
+        sample_stride=1,
+        maximum_vertices=3000,
+    )[0]
+    camera_local = np.asarray([0.0035, 0.073, 0.073, 1.0, 0.0, 0.0, 0.0])
+    right_camera = np.stack(
+        [compose_pose(pose, camera_local)[:3] for pose in right_path]
+    )
+    left_camera = np.stack(
+        [compose_pose(pose, camera_local)[:3] for pose in left_path]
+    )
+    right_wrist = sphere_path_collision_report(
+        right_path[:, :3],
+        radius_m=0.01,
+        obstacles={"mug_tree": (tree_mesh, tree_pose)},
+        sample_stride=1,
+    )
+    right_camera_screen = sphere_path_collision_report(
+        right_camera,
+        radius_m=0.012,
+        obstacles={"mug_tree": (tree_mesh, tree_pose), "held_mug": (mug_mesh, mug_pose)},
+        sample_stride=1,
+    )
+    left_camera_screen = sphere_path_collision_report(
+        left_camera,
+        radius_m=0.012,
+        obstacles={"mug_tree": (tree_mesh, tree_pose)},
+        sample_stride=1,
+    )
+    wrist_separation = np.linalg.norm(
+        right_path[:, :3] - left_path[:, :3], axis=1
+    )
+    camera_separation = np.linalg.norm(right_camera - left_camera, axis=1)
+    smoothness = _pose_path_step_receipt(
+        right_path,
+        maximum_translation_m=args.max_position_step,
+        maximum_rotation_rad=args.max_rotation_step,
+    )
+    selected_contact = np.asarray(nominal_right_contact, dtype=np.float64)
+    expected_grasp = compose_pose(mug_pose, selected_contact)
+    planned_grasp = trajectory.right_poses[trajectory.waypoint_steps["right_grasp"]]
+    grasp_position_error = float(np.linalg.norm(expected_grasp[:3] - planned_grasp[:3]))
+    grasp_quaternion_alignment = float(
+        abs(np.dot(expected_grasp[3:], planned_grasp[3:]))
+    )
+    gripper_open = bool(np.all(trajectory.grippers[start : end + 1, 1] <= -0.04749))
+    checks = {
+        "full_swept_path_sampled": len(right_path) == end - start + 2,
+        "smooth_bounded_pose_interpolation": bool(smoothness["passed"]),
+        "held_mug_tree_clearance_positive": bool(mug_tree["valid"]),
+        "right_wrist_tree_proxy_clear": bool(right_wrist["valid"]),
+        "right_wrist_camera_mug_and_tree_proxy_clear": bool(
+            right_camera_screen["valid"]
+        ),
+        "left_wrist_camera_tree_proxy_clear": bool(left_camera_screen["valid"]),
+        "bilateral_wrist_and_camera_clearance_positive": bool(
+            min(wrist_separation.min(), camera_separation.min()) >= 0.04
+        ),
+        "right_gripper_open_until_contact_pose": gripper_open,
+        "selected_grasp_reanchored_from_live_mug_geometry": bool(
+            grasp_position_error <= 1.0e-6
+            and grasp_quaternion_alignment >= 1.0 - 1.0e-9
+        ),
+    }
+    return {
+        "phase": phase,
+        "motion_subphases_added": False,
+        "selection_method": "live mug frame plus pinned broad-contact transform",
+        "live_mug_pose": mug_pose.tolist(),
+        "selected_right_contact_mug_frame": selected_contact.tolist(),
+        "planned_right_grasp_pose": np.asarray(planned_grasp).tolist(),
+        "planned_rows": int(len(right_path) - 1),
+        "smoothness": smoothness,
+        "minimum_bilateral_wrist_separation_m": float(wrist_separation.min()),
+        "minimum_bilateral_camera_separation_m": float(camera_separation.min()),
+        "grasp_reanchor_position_error_m": grasp_position_error,
+        "grasp_reanchor_quaternion_alignment": grasp_quaternion_alignment,
+        "reports": {
+            "held_mug_vs_tree": mug_tree,
+            "right_wrist_origin_vs_tree": right_wrist,
+            "right_wrist_camera_vs_mug_and_tree": right_camera_screen,
+            "left_wrist_camera_vs_tree": left_camera_screen,
+        },
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _handover_wave_live_row(
+    views: dict[str, object], sample: dict[str, object], waypoint: str, physics_dt: float
+) -> dict[str, object]:
+    environment_force = _contact_view_max_force(views["environment"], physics_dt)
+    mug_force = _contact_view_max_force(views["mug"], physics_dt)
+    left_tree_force = _contact_view_max_force(views["left_tree"], physics_dt)
+    intended_contact = waypoint in {
+        "right_grasp_settle",
+        "right_grasp",
+        "handover_contact_acquire",
+    }
+    checks = {
+        "right_arm_tree_and_left_arm_contact_free": environment_force <= 1.0e-6,
+        "left_arm_tree_contact_free": left_tree_force <= 1.0e-6,
+        "right_gripper_mug_contact_only_at_contact_pose": bool(
+            intended_contact or mug_force <= 1.0e-6
+        ),
+    }
+    return {
+        "waypoint": waypoint,
+        "checked_after_step": int(sample["step"]),
+        "maximum_environment_contact_force_n": environment_force,
+        "maximum_right_mug_contact_force_n": mug_force,
+        "maximum_left_tree_contact_force_n": left_tree_force,
+        "intended_right_mug_contact": intended_contact,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
+    fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=np.float64)
+    forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=np.float64)
+    return bool(
+        sample[f"{side}_grasp"]
+        and sample["grasp_assist_engaged"].get(side, False)
+        and fractions.shape == (2,)
+        and forces.shape == (2,)
+        and np.isfinite(fractions).all()
+        and np.isfinite(forces).all()
+        and (fractions >= 0.15).all()
+        and (fractions <= 0.85).all()
+        and (forces > 0.0).all()
+    )
+
+
+def _handover_wave_contract_receipt(
+    trajectory,
+    trace_waypoints,
+    actions,
+    samples,
+    plan_screens: dict[str, object],
+    live_rows: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if trajectory is None or "direct_preinsert" not in trajectory.waypoint_steps:
+        return None
+    handover_names = (
+        "handover_pregrasp",
+        "handover_orient_clear",
+        "right_grasp_settle",
+        "right_grasp",
+        "handover_contact_acquire",
+    )
+    names = np.asarray(trace_waypoints, dtype=str)
+    sample_rows = samples[1:]
+    action_array = np.asarray(actions, dtype=np.float64)
+    aligned = len(names) == len(sample_rows) == len(action_array)
+    observed_handover_rows = np.flatnonzero(np.isin(names, handover_names))
+    preclose_rows = np.flatnonzero(
+        np.isin(
+            names,
+            ("handover_pregrasp", "handover_orient_clear", "right_grasp_settle"),
+        )
+    )
+    close_rows = np.flatnonzero(names == "right_grasp")
+    secure_rows = (
+        [
+            int(row)
+            for row in close_rows
+            if aligned and _sample_has_broad_contact(sample_rows[row], "right")
+        ]
+        if aligned
+        else []
+    )
+    first_secure = None if not secure_rows else secure_rows[0]
+    giver_held_until_secure = bool(
+        first_secure is not None
+        and all(
+            sample_rows[row]["left_grasp"]
+            and sample_rows[row]["grasp_assist_engaged"].get("left", False)
+            for row in observed_handover_rows
+            if row <= first_secure
+        )
+    )
+    right_gripper = (
+        action_array[:, 13]
+        if action_array.ndim == 2 and action_array.shape[1] >= 14
+        else np.empty((0,), dtype=np.float64)
+    )
+    preclose_open = bool(
+        len(preclose_rows)
+        and len(right_gripper) == len(names)
+        and np.all(right_gripper[preclose_rows] <= -0.04749)
+    )
+    close_monotone = bool(
+        len(close_rows)
+        and len(right_gripper) == len(names)
+        and np.all(np.diff(right_gripper[close_rows]) >= -1.0e-9)
+        and right_gripper[close_rows[-1]] >= -1.0e-8
+    )
+    first_contact = next(
+        (
+            row
+            for row in live_rows
+            if row["maximum_right_mug_contact_force_n"] > 1.0e-6
+        ),
+        None,
+    )
+    expected_live_rows = int(len(observed_handover_rows))
+    checks = {
+        "trace_arrays_row_aligned": aligned,
+        "both_swept_plan_screens_passed": bool(
+            set(plan_screens) == {"clear_pregrasp", "open_approach"}
+            and all(receipt is not None and receipt["passed"] for receipt in plan_screens.values())
+        ),
+        "all_handover_rows_live_guarded": bool(
+            len(live_rows) == expected_live_rows
+            and all(row["passed"] for row in live_rows)
+        ),
+        "first_right_mug_contact_at_contact_pose": bool(
+            first_contact is not None
+            and first_contact["waypoint"] in {"right_grasp_settle", "right_grasp"}
+        ),
+        "right_gripper_open_through_open_approach": preclose_open,
+        "right_close_monotone_at_grasp_pose": close_monotone,
+        "broad_force_backed_right_contact_before_giver_release": bool(secure_rows),
+        "left_giver_held_until_right_contact_secure": giver_held_until_secure,
+    }
+    return {
+        "selection": {
+            "candidate_sampling": False,
+            "source": "live mug geometry reanchored pinned contact transform",
+            "broad_contact_accepted_only_from_runtime_pad_receipt": True,
+        },
+        "plan_screens": plan_screens,
+        "live_physx_contact_guard": {
+            "expected_rows": expected_live_rows,
+            "observed_rows": len(live_rows),
+            "first_right_mug_contact": first_contact,
+            "rows": live_rows,
+            "passed": bool(
+                len(live_rows) == expected_live_rows
+                and all(row["passed"] for row in live_rows)
+            ),
+        },
+        "first_broad_right_contact_trace_row": first_secure,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
 
 
 def _direct_segment_live_row(
@@ -1031,7 +1378,7 @@ def _direct_segment_plan_screen(
     """Screen the exact next direct interpolation without adding a phase."""
     from judo_isaaclab.collision_screening import (
         load_usd_collision_mesh,
-        object_path_collision_reports,
+        object_path_clearance_reports,
         rigid_weld_object_poses,
         sphere_path_collision_report,
     )
@@ -1057,12 +1404,14 @@ def _direct_segment_plan_screen(
     reports = {}
     if phase == "outbound":
         object_path = rigid_weld_object_poses(eef_path, current_eef, mug_pose)
-        object_report = object_path_collision_reports(
+        object_report = object_path_clearance_reports(
             object_path,
             tree_pose=tree_pose,
             object_mesh=mug_mesh,
             tree_mesh=tree_mesh,
+            required_clearance_m=0.002,
             sample_stride=1,
+            maximum_vertices=3000,
         )[0]
         reports["rigidly_carried_mug_vs_tree"] = object_report
         checks["rigidly_carried_mug_tree_collision_free"] = bool(
@@ -2217,7 +2566,8 @@ def main() -> None:
         observed_handover_reanchor = bool(
             trajectory is not None
             and (
-                source_prefix_steps
+                "direct_preinsert" in trajectory.waypoint_steps
+                or source_prefix_steps
                 or _requires_observed_handover_reanchor(
                     target_parts,
                     handle_frame_transfer=args.handover_handle_frame_transfer,
@@ -2225,7 +2575,7 @@ def main() -> None:
             )
         )
         direct_contact_views = (
-            _direct_segment_contact_views(env, target_assets)
+            _quality_wave_contact_views(env, target_assets)
             if trajectory is not None
             and "direct_preinsert" in trajectory.waypoint_steps
             else None
@@ -2252,6 +2602,11 @@ def main() -> None:
         handover_contact_acquire_rows = []
         handover_lift_boundary = None
         handover_lift_rows = []
+        handover_wave_plan_screens = {
+            "clear_pregrasp": None,
+            "open_approach": None,
+        }
+        handover_wave_live_rows = []
         direct_plan_screens = {"outbound": None, "return": None}
         direct_live_rows = []
         if args.render:
@@ -2297,6 +2652,51 @@ def main() -> None:
                 ):
                     pick_boundary = _pick_boundary_receipt(samples[-1])
                     if not pick_boundary["safe_to_continue"]:
+                        break
+                clear_pregrasp_boundary = bool(
+                    "direct_preinsert" in trajectory.waypoint_steps
+                    and "handover_pregrasp" in trajectory.waypoint_steps
+                    and (
+                        (
+                            "left_lift" in trajectory.waypoint_steps
+                            and semantic_step
+                            == trajectory.waypoint_steps["left_lift"] + 1
+                        )
+                        or (
+                            "left_lift" not in trajectory.waypoint_steps
+                            and semantic_step == 0
+                        )
+                    )
+                )
+                if clear_pregrasp_boundary:
+                    handover_wave_plan_screens["clear_pregrasp"] = (
+                        _handover_wave_plan_screen(
+                            trajectory,
+                            samples[-1],
+                            target_assets,
+                            nominal_right_contact,
+                            args,
+                            phase="clear_pregrasp",
+                        )
+                    )
+                    if not handover_wave_plan_screens["clear_pregrasp"]["passed"]:
+                        break
+                if (
+                    "direct_preinsert" in trajectory.waypoint_steps
+                    and semantic_step
+                    == trajectory.waypoint_steps["handover_pregrasp"] + 1
+                ):
+                    handover_wave_plan_screens["open_approach"] = (
+                        _handover_wave_plan_screen(
+                            trajectory,
+                            samples[-1],
+                            target_assets,
+                            nominal_right_contact,
+                            args,
+                            phase="open_approach",
+                        )
+                    )
+                    if not handover_wave_plan_screens["open_approach"]["passed"]:
                         break
                 if (
                     "handover_contact_acquire" in trajectory.waypoint_steps
@@ -2418,6 +2818,18 @@ def main() -> None:
                 )
                 handover_contact_acquire_rows.append(acquire_row)
                 stop_after_row = stop_after_row or not acquire_row["passed"]
+            if waypoint in {
+                "handover_pregrasp",
+                "handover_orient_clear",
+                "right_grasp_settle",
+                "right_grasp",
+                "handover_contact_acquire",
+            } and direct_contact_views is not None:
+                wave_row = _handover_wave_live_row(
+                    direct_contact_views, sample, waypoint, physics_dt
+                )
+                handover_wave_live_rows.append(wave_row)
+                stop_after_row = stop_after_row or not wave_row["passed"]
             if waypoint in {"direct_preinsert", "post_release_return"}:
                 live_row = _direct_segment_live_row(
                     direct_contact_views, sample, waypoint, physics_dt
@@ -2642,6 +3054,14 @@ def main() -> None:
         direct_phase_contract = _direct_phase_contract_receipt(
             trajectory, trace_waypoints, actions, samples
         )
+        handover_wave_contract = _handover_wave_contract_receipt(
+            trajectory,
+            trace_waypoints,
+            actions,
+            samples,
+            handover_wave_plan_screens,
+            handover_wave_live_rows,
+        )
         direct_collision_screening = None
         post_release_right_rest = None
         if direct_phase_contract is not None:
@@ -2768,6 +3188,9 @@ def main() -> None:
                 right_start_configuration["passed"]
             )
         if direct_phase_contract is not None:
+            checks["handover_wave_contract"] = bool(
+                handover_wave_contract and handover_wave_contract["passed"]
+            )
             checks["direct_phase_contract"] = bool(
                 direct_phase_contract["passed"]
             )
@@ -2887,6 +3310,7 @@ def main() -> None:
                 "required": bool(args.require_broad_pad_contact),
                 "broad_pad_contact": broad_pad_contact,
             },
+            "handover_wave_contract": handover_wave_contract,
             "post_handover_setup": {
                 "right_start_configuration": right_start_configuration,
                 "left_branch_point_ordered_after_right_return": bool(

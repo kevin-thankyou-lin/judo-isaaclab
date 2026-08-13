@@ -880,6 +880,104 @@ def _direct_choreography_audit(result: dict, trace) -> dict:
     }
 
 
+def _handover_wave_audit(result: dict, trace) -> dict:
+    """Recompute the wave handover ordering/contact contract from the trace."""
+    receipt = result.get("handover_wave_contract") or {}
+    names = trace["semantic_waypoints"].astype(str)
+    actions = np.asarray(trace["actions"], dtype=np.float64)
+    if len(names) != len(actions):
+        raise RuntimeError("handover wave trace arrays are not row aligned")
+    handover_names = (
+        "handover_pregrasp",
+        "handover_orient_clear",
+        "right_grasp_settle",
+        "right_grasp",
+        "handover_contact_acquire",
+    )
+    handover_rows = np.flatnonzero(np.isin(names, handover_names))
+    preclose_rows = np.flatnonzero(
+        np.isin(
+            names,
+            ("handover_pregrasp", "handover_orient_clear", "right_grasp_settle"),
+        )
+    )
+    close_rows = np.flatnonzero(names == "right_grasp")
+    required_arrays = (
+        "left_grasp",
+        "left_assist_engaged",
+        "right_grasp",
+        "right_assist_engaged",
+        "right_finger_forces_n",
+        "right_pad_fractions",
+    )
+    if any(len(trace[name]) != len(names) for name in required_arrays):
+        raise RuntimeError("handover contact arrays are not row aligned")
+    forces = np.asarray(trace["right_finger_forces_n"], dtype=np.float64)
+    fractions = np.asarray(trace["right_pad_fractions"], dtype=np.float64)
+    secure = (
+        np.asarray(trace["right_grasp"], dtype=bool)
+        & np.asarray(trace["right_assist_engaged"], dtype=bool)
+        & np.isfinite(forces).all(axis=1)
+        & np.isfinite(fractions).all(axis=1)
+        & (forces > 0.0).all(axis=1)
+        & (fractions >= 0.15).all(axis=1)
+        & (fractions <= 0.85).all(axis=1)
+        & (names == "right_grasp")
+    )
+    secure_rows = np.flatnonzero(secure)
+    first_secure = None if not len(secure_rows) else int(secure_rows[0])
+    giver_held = bool(
+        first_secure is not None
+        and np.asarray(trace["left_grasp"], dtype=bool)[
+            handover_rows[handover_rows <= first_secure]
+        ].all()
+        and np.asarray(trace["left_assist_engaged"], dtype=bool)[
+            handover_rows[handover_rows <= first_secure]
+        ].all()
+    )
+    right_gripper = actions[:, 13]
+    plan_screens = receipt.get("plan_screens") or {}
+    live = receipt.get("live_physx_contact_guard") or {}
+    checks = {
+        "runner_wave_receipt_passed": bool(receipt.get("passed")),
+        "both_live_geometry_swept_screens_passed": bool(
+            set(plan_screens) == {"clear_pregrasp", "open_approach"}
+            and all(plan_screens[name].get("passed") for name in plan_screens)
+        ),
+        "all_handover_rows_live_guarded": bool(
+            live.get("passed")
+            and live.get("expected_rows") == len(handover_rows)
+            and live.get("observed_rows") == len(handover_rows)
+        ),
+        "right_open_through_pregrasp_and_approach": bool(
+            len(preclose_rows)
+            and np.all(right_gripper[preclose_rows] <= -0.04749)
+        ),
+        "right_close_monotone_only_at_grasp_pose": bool(
+            len(close_rows)
+            and np.all(np.diff(right_gripper[close_rows]) >= -1.0e-9)
+            and right_gripper[close_rows[-1]] >= -1.0e-8
+        ),
+        "broad_force_backed_contact_reached_while_giver_held": bool(
+            len(secure_rows) and giver_held
+        ),
+        "first_contact_at_contact_pose": bool(
+            (live.get("first_right_mug_contact") or {}).get("waypoint")
+            in {"right_grasp_settle", "right_grasp"}
+        ),
+    }
+    if not all(checks.values()):
+        raise RuntimeError(f"handover wave audit failed: {checks}")
+    return {
+        "passed": True,
+        "first_broad_right_contact_trace_row": first_secure,
+        "handover_trace_rows": int(len(handover_rows)),
+        "checks": checks,
+        "plan_screens": plan_screens,
+        "live_physx_contact_guard": live,
+    }
+
+
 def independent_audit(index: int, attempt: Path) -> dict:
     guard = _guard_lifecycle(attempt)
     result_path, trace_path = attempt / "result.json", attempt / "trace.npz"
@@ -984,7 +1082,9 @@ def independent_audit(index: int, attempt: Path) -> dict:
     if not semantic_audit["contact_policy"]["contact_policy_held"]:
         raise RuntimeError("bounded-contact policy failed")
     direct_choreography = None
+    handover_wave = None
     if manifest.get("repair_strategy", {}).get("direct_rest_to_preinsert_steps"):
+        handover_wave = _handover_wave_audit(result, trace)
         direct_choreography = _direct_choreography_audit(result, trace)
     return {
         "accepted": True,
@@ -1044,6 +1144,7 @@ def independent_audit(index: int, attempt: Path) -> dict:
         "ordered_semantic_stages": semantic_audit["ordered_semantic_stages"],
         "contact_policy": semantic_audit["contact_policy"],
         "direct_choreography": direct_choreography,
+        "handover_wave": handover_wave,
         "guard": guard,
     }
 

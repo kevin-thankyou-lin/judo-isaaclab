@@ -37,6 +37,8 @@ from run_hangmug_skill_program import (
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
     _handover_lift_guard_receipt,
+    _handover_wave_contract_receipt,
+    _pose_path_step_receipt,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
@@ -1076,6 +1078,115 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     assert receipt["passed"] is True
     assert receipt["right_opening_transition_runs"] == 1
+
+
+def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
+    smooth = np.stack([_pose(0.0), _pose(0.01), _pose(0.02)])
+    jump = smooth.copy()
+    jump[-1, 0] = 0.2
+
+    assert _pose_path_step_receipt(
+        smooth, maximum_translation_m=0.02, maximum_rotation_rad=0.1
+    )["passed"]
+    receipt = _pose_path_step_receipt(
+        jump, maximum_translation_m=0.02, maximum_rotation_rad=0.1
+    )
+    assert receipt["passed"] is False
+    assert receipt["discontinuous_wrist_jump"] is True
+
+
+def test_handover_wave_contract_requires_screened_contact_before_release():
+    program = HangMugSkillProgram(_pose(), _pose(0.0, -0.5, 0.9))
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(),
+        _pose(0.0, -0.4, 0.9),
+        _pose(0.0, -0.3, 0.9),
+        _pose(0.0, 0.05, 0.0),
+        approach_steps=3,
+        contact_settle_steps=2,
+        close_steps=4,
+        release_steps=2,
+    )
+    program.post_handover_rest_and_observe(
+        _pose(0.0, -0.5, 0.9), _pose(0.4, 0.0, 1.0), steps=2
+    )
+    program.direct_rest_to_branch_insert(
+        _pose(0.5, -0.2, 1.0),
+        _pose(0.6, -0.2, 0.9),
+        direct_steps=2,
+        insert_steps=2,
+    )
+    program.release_and_return_to_rest(
+        _pose(0.6, -0.2, 0.9),
+        _pose(0.0, -0.5, 0.9),
+        support_steps=1,
+        release_steps=2,
+        return_steps=2,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    samples = []
+    close_rows = np.flatnonzero(np.asarray(names) == "right_grasp")
+    secure_row = int(close_rows[-1])
+    for row, name in enumerate(names):
+        secure = row == secure_row
+        samples.append(
+            {
+                "left_grasp": row <= secure_row,
+                "right_grasp": secure,
+                "grasp_assist_engaged": {
+                    "left": row <= secure_row,
+                    "right": secure,
+                },
+                "left_finger_forces_n": [2.0, 2.0],
+                "left_pad_fractions": [0.5, 0.5],
+                "right_finger_forces_n": [2.0, 2.0] if secure else [0.0, 0.0],
+                "right_pad_fractions": [0.5, 0.5] if secure else [float("nan")] * 2,
+            }
+        )
+    handover = {
+        "handover_pregrasp",
+        "right_grasp_settle",
+        "right_grasp",
+    }
+    live_rows = [
+        {
+            "waypoint": name,
+            "maximum_right_mug_contact_force_n": (
+                1.0 if name in {"right_grasp_settle", "right_grasp"} else 0.0
+            ),
+            "passed": True,
+        }
+        for name in names
+        if name in handover
+    ]
+    receipt = _handover_wave_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{}, *samples],
+        {
+            "clear_pregrasp": {"passed": True},
+            "open_approach": {"passed": True},
+        },
+        live_rows,
+    )
+
+    assert receipt["passed"] is True
+    assert receipt["first_broad_right_contact_trace_row"] == secure_row
+    assert receipt["live_physx_contact_guard"]["first_right_mug_contact"][
+        "waypoint"
+    ] == "right_grasp_settle"
 
 
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():

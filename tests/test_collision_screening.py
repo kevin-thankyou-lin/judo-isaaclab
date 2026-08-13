@@ -147,7 +147,9 @@ def test_sphere_path_screen_reports_only_proxy_obstacle_contacts():
     tree_pose = IDENTITY.copy()
     mug_pose = IDENTITY.copy()
     mug_pose[0] = 0.04  # Obstacles overlap, which must not implicate the proxy.
-    points = np.asarray([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    # Use an exact mesh vertex because the dependency-free fallback samples
+    # vertices and face centroids instead of relying on python-fcl.
+    points = np.asarray([[0.5, 0.0, 0.0], [-0.05, -0.05, -0.05]])
 
     report = sphere_path_collision_report(
         points,
@@ -157,7 +159,7 @@ def test_sphere_path_screen_reports_only_proxy_obstacle_contacts():
 
     assert report["valid"] is False
     assert report["collision_steps"] == [1]
-    assert set(report["collided_obstacles_by_step"][1]) == {"mug", "tree"}
+    assert report["collided_obstacles_by_step"][1] == ["tree"]
 
 
 def test_robot_feasible_selection_prefers_less_terminal_rotation():
