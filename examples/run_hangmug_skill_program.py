@@ -847,6 +847,22 @@ def _validate_datagen_grasp_assists(env, expected_config) -> str:
     return "task_config:" + ",".join(entries)
 
 
+def _set_authored_assist_release_deferral(env, trajectory, step: int | None) -> bool:
+    """Keep the giver assist through handover, up to the authored release."""
+
+    if not hasattr(env, "defer_left_grasp_assist_release"):
+        raise RuntimeError(
+            "Gear environment does not support authored grasp-assist release"
+        )
+    defer = bool(
+        trajectory is not None
+        and step is not None
+        and step < trajectory.waypoint_steps["left_release"]
+    )
+    env.defer_left_grasp_assist_release = defer
+    return defer
+
+
 def _update_authored_assist_releases(env, trajectory, step: int) -> None:
     """Release grasp assists at the coded handover and unload boundaries.
 
@@ -3027,6 +3043,7 @@ def main() -> None:
                     },
                 )
                 desired_left.append(trajectory.left_poses[semantic_step]); desired_right.append(trajectory.right_poses[semantic_step])
+            _set_authored_assist_release_deferral(env, trajectory, semantic_step)
             observation, _, _, _, info = env.step(action)
             if semantic_step is not None:
                 _update_authored_assist_releases(env, trajectory, semantic_step)
