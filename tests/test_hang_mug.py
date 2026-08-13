@@ -31,6 +31,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
+    _handover_contact_acquire_entry_step,
     _handover_target_with_local_contact_pivot_roll,
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
@@ -46,6 +47,7 @@ from run_hangmug_skill_program import (
     _source_dataset_receipt,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
+    _semantic_waypoint_name,
     _semantic_stage_receipt,
     _select_grasp_assist_config,
     _support_preserving_target_state,
@@ -1482,6 +1484,32 @@ def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
     sample["right_grasp"] = False
     sample["grasp_assist_engaged"]["right"] = False
     assert not _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
+
+
+def test_contact_acquire_checks_giver_support_before_receiver_closure():
+    program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    program.semantic_left_grasp(
+        _pose(z=1), _pose(z=1), _pose(z=1),
+        approach_steps=1, close_steps=1, lift_steps=1,
+    )
+    program.physical_handover(
+        _pose(z=1), _pose(0.2, -0.1, 1), _pose(0.2, -0.2, 1),
+        _pose(0.1, z=1),
+        right_orient_clear=_pose(0.2, -0.2, 1.1),
+        orient_steps=2,
+        approach_steps=2,
+        contact_settle_steps=3,
+        close_steps=4,
+        contact_acquire_steps=5,
+        release_steps=2,
+    )
+    trajectory = program.build()
+
+    entry = _handover_contact_acquire_entry_step(trajectory)
+
+    assert entry == trajectory.waypoint_steps["right_grasp_settle"] + 1
+    assert _semantic_waypoint_name(trajectory, entry) == "right_grasp"
+    assert entry < trajectory.waypoint_steps["right_grasp"]
 
 
 def test_receiver_lift_requires_target_and_follows_release():

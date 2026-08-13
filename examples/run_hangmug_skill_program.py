@@ -853,6 +853,32 @@ def _semantic_waypoint_name(trajectory, step: int) -> str:
     raise IndexError(f"semantic step {step} exceeds the skill trajectory")
 
 
+def _handover_contact_acquire_entry_step(trajectory) -> int:
+    """Check giver support immediately before receiver closure starts.
+
+    The task manager intentionally releases the giver assist on the first
+    two-hand grasp sample.  Waiting until receiver closure has finished would
+    therefore reject a successful receiver grasp for lacking the giver assist.
+    Keep the existing entry predicate, but evaluate it at the last supported
+    pre-close boundary while the receiver is still open.
+    """
+
+    steps = trajectory.waypoint_steps
+    if "handover_contact_acquire" not in steps:
+        raise ValueError("trajectory has no handover contact-acquire segment")
+    for preceding in (
+        "right_grasp_settle",
+        "handover_orient_clear",
+        "handover_pregrasp",
+    ):
+        if preceding in steps:
+            entry_step = int(steps[preceding]) + 1
+            if _semantic_waypoint_name(trajectory, entry_step) != "right_grasp":
+                raise ValueError("contact-acquire entry must precede receiver closure")
+            return entry_step
+    raise ValueError("trajectory has no supported receiver pre-close boundary")
+
+
 def _branch_reanchor_waypoints(trajectory) -> tuple[str, ...]:
     if trajectory is None:
         return ()
@@ -1858,7 +1884,8 @@ def main() -> None:
                         break
                 if (
                     "handover_contact_acquire" in trajectory.waypoint_steps
-                    and semantic_step == trajectory.waypoint_steps["right_grasp"] + 1
+                    and semantic_step
+                    == _handover_contact_acquire_entry_step(trajectory)
                 ):
                     entry = _handover_contact_acquire_guard_receipt(
                         samples[-1], phase="entry"
