@@ -955,10 +955,12 @@ def handle_local_mpc_step(
         # Pair 15 measured that a 4 mm Cartesian pivot command realizes only
         # 1.557 mm along the live jaw axis.  A simultaneous 4 mm jaw command
         # retracts the loaded finger 1.663 mm on the first frame and 2.769 mm
-        # on the next, immediately dropping its force.  Retain the bounded
-        # 4 mm wrist pivot but halve only this pair-opted closure increment so
-        # the realized motion preloads the loaded pad while the peer pad closes.
-        loaded_pad_pivot_jaw_scale = 0.5
+        # on the next, immediately dropping its force.  Across all four finite
+        # geometric-contact responses the minimum measured wrist-to-finger
+        # ratio is 0.441.  Retain the bounded 4 mm wrist pivot but scale only
+        # this pair-opted jaw increment to 40%, keeping positive loaded-pad
+        # preload while the peer pad closes.
+        loaded_pad_pivot_jaw_scale = 0.4
         unscaled_jaw_increment = jaw_increment
         jaw_increment *= loaded_pad_pivot_jaw_scale
         pivot_sign = (

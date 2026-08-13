@@ -1313,7 +1313,7 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Pair-owned opt-in that executes the transverse-aligned jaw close "
             "as a measured-tracking-compensated pivot about the loaded left "
-            "pad 1, retaining the bounded wrist step while halving the jaw step."
+            "pad 1, retaining the bounded wrist step while scaling the jaw step."
         ),
     )
     return parser.parse_args(argv)
@@ -7752,7 +7752,7 @@ def main(argv: list[str] | None = None) -> None:
                         args.target_left_quality_loaded_pad_pivot_closure
                     ),
                     "left_loaded_pad_pivot_jaw_scale": (
-                        0.5
+                        0.4
                         if args.target_left_quality_loaded_pad_pivot_closure
                         else 1.0
                     ),
