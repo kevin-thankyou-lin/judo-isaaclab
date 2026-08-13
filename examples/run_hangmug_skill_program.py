@@ -641,14 +641,20 @@ def _activate_quality_wave_contact_reports(scene) -> tuple[str, ...]:
 
 def _preserve_quality_wave_contact_reports_across_arm_rebuild(scene) -> None:
     """Re-enable reports after Gear rebuilds both articulation configs."""
-    original_build = scene.build_from_spec
-
-    def build_with_contact_reports(*args, **kwargs):
-        result = original_build(*args, **kwargs)
+    scene_type = type(scene)
+    marker = "_cpgen_quality_wave_contact_reports_wrapped"
+    if getattr(scene_type, marker, False):
         _activate_quality_wave_contact_reports(scene)
+        return
+    original_build = scene_type.build_from_spec
+
+    def build_with_contact_reports(instance, *args, **kwargs):
+        result = original_build(instance, *args, **kwargs)
+        _activate_quality_wave_contact_reports(instance)
         return result
 
-    scene.build_from_spec = build_with_contact_reports
+    scene_type.build_from_spec = build_with_contact_reports
+    setattr(scene_type, marker, True)
     _activate_quality_wave_contact_reports(scene)
 
 

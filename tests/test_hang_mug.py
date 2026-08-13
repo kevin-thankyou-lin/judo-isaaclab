@@ -83,20 +83,21 @@ def test_quality_wave_contact_reports_survive_gear_arm_rebuild():
     def spawn():
         return SimpleNamespace(activate_contact_sensors=False)
 
-    scene = SimpleNamespace(
-        left_arm=SimpleNamespace(spawn=spawn()),
-        right_arm=SimpleNamespace(spawn=spawn()),
-        mug_tree=SimpleNamespace(spawn=spawn()),
-    )
+    class Scene:
+        def __init__(self):
+            self.left_arm = SimpleNamespace(spawn=spawn())
+            self.right_arm = SimpleNamespace(spawn=spawn())
+            self.mug_tree = SimpleNamespace(spawn=spawn())
 
-    def build_from_spec(_spec):
-        scene.left_arm = SimpleNamespace(spawn=spawn())
-        scene.right_arm = SimpleNamespace(spawn=spawn())
+        def build_from_spec(self, _spec):
+            self.left_arm = SimpleNamespace(spawn=spawn())
+            self.right_arm = SimpleNamespace(spawn=spawn())
 
-    scene.build_from_spec = build_from_spec
+    scene = Scene()
     _preserve_quality_wave_contact_reports_across_arm_rebuild(scene)
     scene.build_from_spec("task-specific spec")
 
+    assert "build_from_spec" not in vars(scene)
     assert scene.left_arm.spawn.activate_contact_sensors is True
     assert scene.right_arm.spawn.activate_contact_sensors is True
     assert scene.mug_tree.spawn.activate_contact_sensors is True
