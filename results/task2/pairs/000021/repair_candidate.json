@@ -8,7 +8,7 @@
   "handover_orient_steps": 30,
   "handover_standoff_outside_m": 0.04,
   "handover_target_local_pitch_rad": -0.3,
-  "handover_target_offset_m": [0.009, -0.022, -0.025],
+  "handover_target_offset_m": [0.0088, -0.0227, -0.0248],
   "post_handover_rest_observer_steps": 60,
   "post_release_return_to_rest_steps": 60,
   "require_broad_pad_contact": true
