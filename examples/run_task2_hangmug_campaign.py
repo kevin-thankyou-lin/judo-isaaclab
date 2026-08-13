@@ -819,6 +819,51 @@ def independent_audit(index: int, attempt: Path) -> dict:
     }
 
 
+def _effective_classification_progress(receipt: dict) -> tuple[list[str], str | None]:
+    """Return the clean semantic prefix after terminal-policy failures.
+
+    Semantic latches describe task progress, but they cannot make a stage clean
+    when the rollout's independent terminal/contact policy first fails inside
+    that stage.  Map a step-indexed contact failure to the first stage whose
+    completion is not strictly earlier than the failure.  A terminal-only
+    failure belongs to the final release-and-hang stage.
+    """
+
+    ordered = receipt.get("ordered_stages")
+    if ordered != [
+        "pick", "handover", "alignment", "insertion_and_support",
+        "release_and_hang",
+    ]:
+        raise RuntimeError("classification lacks the ordered completed-stage receipt")
+    completed = receipt.get("completed_stages", [])
+    failed = receipt.get("first_failed_stage")
+    if completed != ordered[: len(completed)]:
+        raise RuntimeError("classification completed stages are not a contiguous prefix")
+    if failed != (None if len(completed) == len(ordered) else ordered[len(completed)]):
+        raise RuntimeError("classification first failed stage disagrees with completed prefix")
+
+    failed_index = None if failed is None else len(completed)
+    terminal_checks = receipt.get("terminal_checks", {})
+    if not terminal_checks or not all(value is True for value in terminal_checks.values()):
+        policy_index = len(ordered) - 1
+        contact = receipt.get("contact_policy", {})
+        failure_step = contact.get("failure_step")
+        first_completed_steps = receipt.get("first_completed_steps", {})
+        if terminal_checks.get("contact_policy") is False and isinstance(failure_step, int):
+            for stage_index, stage in enumerate(ordered):
+                completion_step = first_completed_steps.get(stage)
+                if completion_step is None or int(completion_step) >= failure_step:
+                    policy_index = stage_index
+                    break
+        failed_index = (
+            policy_index if failed_index is None else min(failed_index, policy_index)
+        )
+
+    if failed_index is None:
+        return list(completed), None
+    return list(ordered[:failed_index]), ordered[failed_index]
+
+
 def classification_audit(index: int, attempt: Path) -> dict:
     guard = _guard_lifecycle(attempt)
     result = _load(attempt / "result.json")
@@ -842,16 +887,9 @@ def classification_audit(index: int, attempt: Path) -> dict:
     if video["codec"] != "h264" or video["full_decode_returncode"] != 0 or video["frame_count"] != len(source_actions):
         raise RuntimeError("classification video failed decode/frame alignment")
     receipt = result.get("semantic_stage_receipt")
-    if not receipt or receipt.get("ordered_stages") != [
-        "pick", "handover", "alignment", "insertion_and_support", "release_and_hang"
-    ]:
+    if not receipt:
         raise RuntimeError("classification lacks the ordered completed-stage receipt")
-    completed = receipt.get("completed_stages", [])
-    failed = receipt.get("first_failed_stage")
-    if completed != receipt["ordered_stages"][: len(completed)]:
-        raise RuntimeError("classification completed stages are not a contiguous prefix")
-    if failed != (None if len(completed) == 5 else receipt["ordered_stages"][len(completed)]):
-        raise RuntimeError("classification first failed stage disagrees with completed prefix")
+    completed, failed = _effective_classification_progress(receipt)
     gains = result["controller_gains"]
     resets = result["reset_counts"]
     source = result["provenance"]["source_dataset"]
@@ -866,10 +904,14 @@ def classification_audit(index: int, attempt: Path) -> dict:
     ):
         raise RuntimeError("classification source/gain/reset pins failed")
     return {
-        "status": "direct_success" if failed is None and result["terminal"]["task_success"] else "repair_required",
+        "status": (
+            "direct_success"
+            if failed is None and result["terminal"]["task_success"]
+            else "repair_required"
+        ),
         "pair_index": index,
         "completed_stages": completed,
-        "last_completed_stage": receipt.get("last_completed_stage"),
+        "last_completed_stage": completed[-1] if completed else None,
         "first_failed_stage": failed,
         "first_completed_steps": receipt["first_completed_steps"],
         "terminal_checks": receipt["terminal_checks"],

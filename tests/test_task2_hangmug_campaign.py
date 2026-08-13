@@ -575,6 +575,79 @@ def test_direct_success_skips_repair(tmp_path, monkeypatch):
     assert events == ["classification", "classification_audit", "accepted"]
 
 
+def test_contact_failure_reclassifies_semantic_latch_as_failed_stage():
+    receipt = {
+        "ordered_stages": [
+            "pick", "handover", "alignment", "insertion_and_support",
+            "release_and_hang",
+        ],
+        "completed_stages": [
+            "pick", "handover", "alignment", "insertion_and_support",
+            "release_and_hang",
+        ],
+        "first_failed_stage": None,
+        "first_completed_steps": {
+            "pick": 221,
+            "handover": 448,
+            "alignment": 724,
+            "insertion_and_support": 793,
+            "release_and_hang": 849,
+        },
+        "terminal_checks": {
+            "contact_policy": False,
+            "released": True,
+            "stable": True,
+            "task_success": True,
+        },
+        "contact_policy": {
+            "failure_reason": "sustained_deep_body_post_overlap",
+            "failure_step": 823,
+        },
+    }
+
+    completed, failed = campaign._effective_classification_progress(receipt)
+
+    assert completed == [
+        "pick", "handover", "alignment", "insertion_and_support",
+    ]
+    assert failed == "release_and_hang"
+
+
+def test_terminal_failure_after_all_latches_reopens_final_stage():
+    receipt = {
+        "ordered_stages": [
+            "pick", "handover", "alignment", "insertion_and_support",
+            "release_and_hang",
+        ],
+        "completed_stages": [
+            "pick", "handover", "alignment", "insertion_and_support",
+            "release_and_hang",
+        ],
+        "first_failed_stage": None,
+        "first_completed_steps": {
+            "pick": 10,
+            "handover": 20,
+            "alignment": 30,
+            "insertion_and_support": 40,
+            "release_and_hang": 50,
+        },
+        "terminal_checks": {
+            "contact_policy": True,
+            "released": True,
+            "stable": False,
+            "task_success": False,
+        },
+        "contact_policy": {"failure_step": None},
+    }
+
+    completed, failed = campaign._effective_classification_progress(receipt)
+
+    assert completed == [
+        "pick", "handover", "alignment", "insertion_and_support",
+    ]
+    assert failed == "release_and_hang"
+
+
 def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
     seen = []
     def fail(index):
