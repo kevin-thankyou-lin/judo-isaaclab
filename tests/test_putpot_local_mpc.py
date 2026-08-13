@@ -474,6 +474,54 @@ def test_transverse_aligned_two_pad_closure_waits_for_guard_release():
     assert motion_guard.frame_receipt["executed_control"]["jaw_increment"] == 0.0
 
 
+def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.005, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    values = _inputs(
+        contact_window_step=22,
+        observed_handle_contact_frame=handle,
+        active_finger_forces_n=[0.0, 4.5],
+        active_pad_fractions=[np.nan, 0.474],
+    )
+    command = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_alignment_streak=2,
+        allow_bounded_closure_commit=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_interior_single_pad_transverse_intercept=True,
+        allow_transverse_aligned_two_pad_closure=True,
+        transverse_aligned_closure_pivot_pad_index=1,
+    )
+    closure = command.frame_receipt["closure"]
+    jaw_axis = np.asarray(
+        command.frame_receipt["observed_frames"]["jaw_axis"]
+    )
+    expected_translation = 0.5 * 0.004 * jaw_axis
+    assert command.closure_committed
+    assert closure["loaded_pad_pivot_closure_enabled"]
+    assert closure["loaded_pad_pivot_closure_active"]
+    assert closure["loaded_pad_pivot_index"] == 1
+    assert not closure["wrist_frozen_for_transverse_aligned_two_pad_closure"]
+    np.testing.assert_allclose(
+        closure["loaded_pad_pivot_translation_world_m"], expected_translation
+    )
+    assert closure["loaded_pad_pivot_translation_norm_m"] == pytest.approx(0.002)
+    np.testing.assert_allclose(
+        command.wrist_target_pose[:3], _pose()[:3] + expected_translation
+    )
+    assert command.jaw_command == pytest.approx(-0.0435)
+
+    with pytest.raises(ValueError, match="requires transverse-aligned"):
+        handle_local_mpc_step(
+            **values,
+            transverse_aligned_closure_pivot_pad_index=1,
+        )
+
+
 def test_handle_normal_depth_guard_removes_inward_handle_motion():
     half_sqrt_two = np.sqrt(0.5)
     handle = np.asarray(

@@ -392,6 +392,11 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "transverse_aligned_two_pad_triggered",
             "transverse_aligned_two_pad_closure_hold_active",
             "wrist_frozen_for_transverse_aligned_two_pad_closure",
+            "loaded_pad_pivot_closure_enabled",
+            "loaded_pad_pivot_closure_active",
+            "loaded_pad_pivot_index",
+            "loaded_pad_pivot_translation_world_m",
+            "loaded_pad_pivot_translation_norm_m",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -448,6 +453,7 @@ def handle_local_mpc_step(
     allow_interior_single_pad_closure: bool = False,
     allow_interior_single_pad_transverse_intercept: bool = False,
     allow_transverse_aligned_two_pad_closure: bool = False,
+    transverse_aligned_closure_pivot_pad_index: int | None = None,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -462,6 +468,15 @@ def handle_local_mpc_step(
     ) < 0:
         raise ValueError(
             "contact-window, robust, and depth-guard streaks must be nonnegative"
+        )
+    if transverse_aligned_closure_pivot_pad_index not in (None, 0, 1):
+        raise ValueError("closure pivot pad index must be 0, 1, or None")
+    if (
+        transverse_aligned_closure_pivot_pad_index is not None
+        and not allow_transverse_aligned_two_pad_closure
+    ):
+        raise ValueError(
+            "closure pivot pad requires transverse-aligned two-pad closure"
         )
     pot = _pose(observed_pot_pose, "observed_pot_pose")
     handle = _pose(observed_handle_contact_frame, "observed_handle_contact_frame")
@@ -926,6 +941,31 @@ def handle_local_mpc_step(
     if bounded_closure_priority_active:
         translation_increment = nominal_translation_increment
         rotation_increment = nominal_rotation_increment
+    loaded_pad_pivot_closure_active = bool(
+        transverse_aligned_closure_pivot_pad_index is not None
+        and transverse_aligned_two_pad_closure_hold_active
+        and jaw_increment != 0.0
+        and not fail_closed
+        and not dual_force_backed
+    )
+    loaded_pad_pivot_translation = np.zeros(3, dtype=np.float64)
+    if loaded_pad_pivot_closure_active:
+        # The two fingers move symmetrically about the wrist as the jaw closes.
+        # A fixed wrist therefore retracts the already-loaded pad by half the
+        # jaw stroke, which Pair 15 measured as an immediate contact dropout.
+        # Translate the wrist by the equal and opposite half-stroke so closure
+        # pivots about that pad while the peer pad traverses the full stroke.
+        pivot_sign = (
+            1.0 if transverse_aligned_closure_pivot_pad_index == 1 else -1.0
+        )
+        loaded_pad_pivot_translation = (
+            pivot_sign * 0.5 * jaw_increment * jaw_axis
+        )
+        translation_increment = _clip_norm(
+            loaded_pad_pivot_translation,
+            config.maximum_translation_step_m,
+        )
+        rotation_increment = np.zeros(3, dtype=np.float64)
     actual_recenter_translation_m = (
         max(
             0.0,
@@ -1141,6 +1181,21 @@ def handle_local_mpc_step(
                 transverse_aligned_two_pad_closure_hold_active
                 and np.allclose(translation_increment, 0.0, atol=1.0e-12)
                 and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
+            ),
+            "loaded_pad_pivot_closure_enabled": bool(
+                transverse_aligned_closure_pivot_pad_index is not None
+            ),
+            "loaded_pad_pivot_closure_active": (
+                loaded_pad_pivot_closure_active
+            ),
+            "loaded_pad_pivot_index": (
+                transverse_aligned_closure_pivot_pad_index
+            ),
+            "loaded_pad_pivot_translation_world_m": (
+                loaded_pad_pivot_translation.tolist()
+            ),
+            "loaded_pad_pivot_translation_norm_m": float(
+                np.linalg.norm(loaded_pad_pivot_translation)
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,
