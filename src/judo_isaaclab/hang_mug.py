@@ -392,17 +392,35 @@ def reanchor_handover_contact_acquire(
     translation = observed_right[:3] - desired_right[:3]
     norm = float(np.linalg.norm(translation))
     rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
+    rotation_error_quaternion = rotation_error[3:].copy()
+    if rotation_error_quaternion[0] < 0.0:
+        rotation_error_quaternion *= -1.0
+    half_sine = float(np.linalg.norm(rotation_error_quaternion[1:]))
     rotation_error_rad = float(
-        2.0 * np.arccos(np.clip(abs(rotation_error[3]), 0.0, 1.0))
+        2.0
+        * np.arctan2(
+            half_sine,
+            np.clip(rotation_error_quaternion[0], 0.0, 1.0),
+        )
+    )
+    rotation_error_local_axis_angle = (
+        np.zeros(3, dtype=np.float64)
+        if half_sine <= 1.0e-12
+        else rotation_error_quaternion[1:]
+        * (rotation_error_rad / half_sine)
     )
     if norm > limit:
         raise RuntimeError(
             f"live handover contact residual {norm:.6f} m exceeds {limit:.6f} m"
         )
     if rotation_error_rad > rotation_limit:
+        axis_angle_text = ", ".join(
+            f"{value:.6f}" for value in rotation_error_local_axis_angle
+        )
         raise RuntimeError(
             "live handover contact rotation error "
-            f"{rotation_error_rad:.6f} rad exceeds {rotation_limit:.6f} rad"
+            f"{rotation_error_rad:.6f} rad exceeds {rotation_limit:.6f} rad; "
+            f"local_axis_angle_rad=[{axis_angle_text}]"
         )
 
     steps = trajectory.waypoint_steps
@@ -447,6 +465,12 @@ def reanchor_handover_contact_acquire(
         "translation_norm_m": norm,
         "maximum_translation_m": limit,
         "rotation_error_rad": rotation_error_rad,
+        "rotation_error_local_axis_angle_rad": (
+            rotation_error_local_axis_angle.tolist()
+        ),
+        "rotation_error_local_quaternion_wxyz": (
+            rotation_error_quaternion.tolist()
+        ),
         "maximum_rotation_error_rad": rotation_limit,
         "orientation_unchanged": True,
         "acquire_steps": acquire_end - grasp_end,

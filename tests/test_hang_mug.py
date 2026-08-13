@@ -1383,6 +1383,12 @@ def test_contact_acquire_moves_held_mug_by_live_residual_before_release():
     assert receipt["translation_norm_m"] == pytest.approx(np.linalg.norm(translation))
     assert receipt["maximum_translation_m"] == pytest.approx(0.04)
     assert receipt["rotation_error_rad"] == pytest.approx(0.0)
+    assert receipt["rotation_error_local_axis_angle_rad"] == pytest.approx(
+        [0.0, 0.0, 0.0]
+    )
+    assert receipt["rotation_error_local_quaternion_wxyz"] == pytest.approx(
+        [1.0, 0.0, 0.0, 0.0]
+    )
     assert receipt["orientation_unchanged"] is True
 
     class Actions:
@@ -1427,6 +1433,28 @@ def test_contact_acquire_rejects_unbounded_live_residual():
     with pytest.raises(RuntimeError, match="exceeds"):
         reanchor_handover_contact_acquire(
             program.build(), _pose(), _pose(), _pose(), _pose(0.040001)
+        )
+
+
+def test_contact_acquire_rotation_failure_reports_local_axis_angle():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1,
+        close_steps=1,
+        contact_acquire_steps=2,
+        release_steps=1,
+    )
+    angle = 0.13
+    observed_right = np.asarray(
+        [0.0, 0.0, 0.0, np.cos(angle / 2.0), 0.0, np.sin(angle / 2.0), 0.0]
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"local_axis_angle_rad=\[0.000000, 0.130000, 0.000000\]",
+    ):
+        reanchor_handover_contact_acquire(
+            program.build(), _pose(), _pose(), _pose(), observed_right
         )
 
 
