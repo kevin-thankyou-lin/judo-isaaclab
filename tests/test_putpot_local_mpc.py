@@ -1207,6 +1207,53 @@ def test_committed_closure_pauses_only_while_both_pads_are_force_backed():
     ] == pytest.approx(0.004)
 
 
+def test_pair_15_committed_single_pad_closure_respects_remaining_motion_budget():
+    values = _inputs(
+        contact_window_step=20,
+        observed_handle_contact_frame=_pose(x=0.030),
+        current_jaw_command=-0.0275,
+        active_finger_forces_n=[0.0, 14.2],
+        active_pad_fractions=[np.nan, 0.1275],
+        pre_peer_pot_displacement_m=0.0026016814898068784,
+    )
+    legacy = handle_local_mpc_step(
+        **values,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+    )
+    legacy_control = legacy.frame_receipt["executed_control"]
+    assert np.linalg.norm(legacy_control["translation_world_m"]) == pytest.approx(
+        0.004
+    )
+
+    budgeted = handle_local_mpc_step(
+        **values,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        budget_committed_closure_by_pre_peer_motion=True,
+    )
+    closure = budgeted.frame_receipt["closure"]
+    control = budgeted.frame_receipt["executed_control"]
+    remaining_m = 0.003 - values["pre_peer_pot_displacement_m"]
+    assert not budgeted.fail_closed
+    assert closure["pre_peer_motion_budgeted_closure_enabled"]
+    assert closure["pre_peer_motion_budgeted_closure_active"]
+    assert closure["pre_peer_motion_remaining_m"] == pytest.approx(remaining_m)
+    assert closure["pre_peer_motion_control_scale"] == pytest.approx(
+        remaining_m / 0.004
+    )
+    assert np.linalg.norm(control["translation_world_m"]) == pytest.approx(
+        remaining_m
+    )
+    assert control["jaw_increment"] == pytest.approx(0.004)
+    assert handle_local_mpc_frame_receipt_complete(budgeted.frame_receipt)
+
+    unopted_closure = legacy.frame_receipt["closure"]
+    assert not unopted_closure["pre_peer_motion_budgeted_closure_enabled"]
+    assert not unopted_closure["pre_peer_motion_budgeted_closure_active"]
+    assert unopted_closure["pre_peer_motion_control_scale"] == pytest.approx(1.0)
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None

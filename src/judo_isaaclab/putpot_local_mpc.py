@@ -422,6 +422,12 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "dual_force_pad_margin_pivot_translation_world_m",
             "dual_force_pad_margin_pivot_rotation_axis_angle_world_rad",
             "dual_force_pad_margin_pivot_point_world_m",
+            "pre_peer_motion_budgeted_closure_enabled",
+            "pre_peer_motion_budgeted_closure_active",
+            "pre_peer_motion_remaining_m",
+            "pre_peer_motion_control_scale",
+            "pre_peer_motion_unbudgeted_translation_world_m",
+            "pre_peer_motion_unbudgeted_rotation_axis_angle_world_rad",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -480,6 +486,7 @@ def handle_local_mpc_step(
     allow_transverse_aligned_two_pad_closure: bool = False,
     transverse_aligned_closure_pivot_pad_index: int | None = None,
     allow_dual_force_pad_margin_pivot: bool = False,
+    budget_committed_closure_by_pre_peer_motion: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -1236,6 +1243,42 @@ def handle_local_mpc_step(
         translation_increment = dual_force_pad_margin_pivot_translation.copy()
         rotation_increment = dual_force_pad_margin_pivot_rotation.copy()
         jaw_increment = 0.0
+    pre_peer_motion_remaining_m = max(
+        0.0,
+        config.maximum_pre_peer_pot_motion_m - pre_peer_pot_displacement_m,
+    )
+    pre_peer_motion_budgeted_closure_active = bool(
+        budget_committed_closure_by_pre_peer_motion
+        and closure_committed
+        and np.count_nonzero(contacting) == 1
+        and active_margin_ok
+        and jaw_increment != 0.0
+        and not fail_closed
+    )
+    pre_peer_motion_unbudgeted_translation = translation_increment.copy()
+    pre_peer_motion_unbudgeted_rotation = rotation_increment.copy()
+    pre_peer_motion_control_scale = 1.0
+    unbudgeted_translation_norm_m = float(
+        np.linalg.norm(pre_peer_motion_unbudgeted_translation)
+    )
+    if (
+        pre_peer_motion_budgeted_closure_active
+        and unbudgeted_translation_norm_m > pre_peer_motion_remaining_m
+    ):
+        # Attempt 55 issued another full 4 mm Cartesian correction with only
+        # 0.398 mm left under the unchanged 3 mm pre-peer object-motion guard.
+        # The resulting observation reached dual force one frame too late,
+        # after the pot had already moved 3.621 mm.  Conservatively treat the
+        # remaining object-motion allowance as a prospective upper bound on
+        # the simultaneous wrist correction.  Scale translation and rotation
+        # together so the path direction is preserved; the existing bounded
+        # jaw stroke remains unchanged and the ordinary guard still fails
+        # closed on the next measured observation.
+        pre_peer_motion_control_scale = float(
+            pre_peer_motion_remaining_m / unbudgeted_translation_norm_m
+        )
+        translation_increment *= pre_peer_motion_control_scale
+        rotation_increment *= pre_peer_motion_control_scale
     actual_recenter_translation_m = (
         max(
             0.0,
@@ -1527,6 +1570,20 @@ def handle_local_mpc_step(
             ),
             "dual_force_pad_margin_pivot_point_world_m": (
                 dual_force_pad_margin_pivot_point.tolist()
+            ),
+            "pre_peer_motion_budgeted_closure_enabled": bool(
+                budget_committed_closure_by_pre_peer_motion
+            ),
+            "pre_peer_motion_budgeted_closure_active": (
+                pre_peer_motion_budgeted_closure_active
+            ),
+            "pre_peer_motion_remaining_m": pre_peer_motion_remaining_m,
+            "pre_peer_motion_control_scale": pre_peer_motion_control_scale,
+            "pre_peer_motion_unbudgeted_translation_world_m": (
+                pre_peer_motion_unbudgeted_translation.tolist()
+            ),
+            "pre_peer_motion_unbudgeted_rotation_axis_angle_world_rad": (
+                pre_peer_motion_unbudgeted_rotation.tolist()
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,

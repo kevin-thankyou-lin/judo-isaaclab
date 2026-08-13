@@ -81,6 +81,11 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     )
     assert parsed.target_left_quality_dual_force_pad_margin_pivot is True
     parsed = _parser(
+        required
+        + ["--target-left-quality-pre-peer-motion-budgeted-closure"]
+    )
+    assert parsed.target_left_quality_pre_peer_motion_budgeted_closure is True
+    parsed = _parser(
         required + ["--target-left-quality-handle-normal-jaw-refinement"]
     )
     assert parsed.target_left_quality_handle_normal_jaw_refinement is True
