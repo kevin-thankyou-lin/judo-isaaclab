@@ -666,6 +666,47 @@ def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
     assert binding["quality_regeneration_from_direct_success"] is True
 
 
+def test_reset_only_strategy_promotes_pick_boundary_to_reset():
+    binding = {
+        "requested_failed_stage": "handover",
+        "requested_last_completed_stage": "pick",
+        "actual_repair_boundary": "pick",
+        "coarse_fallback": False,
+        "quality_regeneration_from_direct_success": False,
+    }
+    strategy = {
+        "handover_contact_settle_steps": 30,
+        "handover_confirm_steps": 12,
+        "post_handover_right_return_steps": 60,
+        "left_branch_point_steps": 45,
+        "require_broad_pad_contact": True,
+    }
+    promoted = campaign._apply_strategy_repair_boundary(binding, strategy)
+    assert promoted["requested_failed_stage"] == "handover"
+    assert promoted["requested_last_completed_stage"] == "pick"
+    assert promoted["actual_repair_boundary"] == "reset"
+    assert promoted["coarse_fallback"] is False
+    assert promoted["quality_regeneration_from_direct_success"] is False
+    assert promoted["strategy_regeneration_from_reset"] is True
+    assert promoted["strategy_reset_fields"] == [
+        "handover_confirm_steps", "handover_contact_settle_steps"
+    ]
+
+
+def test_branch_suffix_strategy_preserves_pick_boundary():
+    binding = {
+        "actual_repair_boundary": "pick",
+        "coarse_fallback": True,
+    }
+    strategy = {
+        "post_handover_right_return_steps": 60,
+        "left_branch_point_steps": 45,
+        "require_broad_pad_contact": True,
+        "stable_support_steps": 90,
+    }
+    assert campaign._apply_strategy_repair_boundary(binding, strategy) == binding
+
+
 def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
     seen = []
     def fail(index):

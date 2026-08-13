@@ -1077,6 +1077,32 @@ def _classification_binding(
     }
 
 
+def _apply_strategy_repair_boundary(
+    classification: dict, strategy: dict,
+) -> dict:
+    """Restart from reset when selected controls precede the pick boundary.
+
+    A handover failure normally reuses the proven pick prefix.  Pair candidates
+    can, however, intentionally select handover approach/contact controls that
+    must execute before that resume point.  Preserve the diagnosed stage while
+    promoting only the executable repair boundary so those controls are not
+    silently dropped or rejected after the classification run.
+    """
+    reset_only_fields = set(strategy) - BRANCH_SUFFIX_STRATEGY_FIELDS
+    if (
+        classification["actual_repair_boundary"] != "pick"
+        or not reset_only_fields
+    ):
+        return dict(classification)
+    return {
+        **classification,
+        "actual_repair_boundary": "reset",
+        "coarse_fallback": False,
+        "strategy_regeneration_from_reset": True,
+        "strategy_reset_fields": sorted(reset_only_fields),
+    }
+
+
 def _manifest(
     index: int,
     attempt: Path,
@@ -1259,6 +1285,9 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
         ),
     )
     repair_strategy = _repair_strategy(index)
+    classification_binding = _apply_strategy_repair_boundary(
+        classification_binding, repair_strategy
+    )
     command = _repair_command(
         index, repair_attempt, Path(classification["result_path"]),
         classification_binding, repair_strategy,
