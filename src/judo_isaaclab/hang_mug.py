@@ -520,7 +520,7 @@ def reanchor_branch_transport_contact(
     observed_right_pose: Any,
     *,
     completed_waypoint: str = "left_release",
-    post_release_return_rotation_delay_steps: int = 0,
+    post_release_return_rotation_hold_steps: int = 0,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -573,7 +573,7 @@ def reanchor_branch_transport_contact(
             right[release_end],
             trajectory.right_poses[direct_return],
             direct_return - release_end,
-            rotation_delay_steps=post_release_return_rotation_delay_steps,
+            rotation_hold_steps=post_release_return_rotation_hold_steps,
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -589,39 +589,42 @@ def _interpolate_open_return(
     target: Any,
     steps: int,
     *,
-    rotation_delay_steps: int = 0,
+    rotation_hold_steps: int = 0,
 ) -> np.ndarray:
-    """Interpolate one straight open return, optionally rotating after clearance."""
+    """Interpolate one straight return, optionally holding its clear orientation."""
 
+    clearance_rows = 8
     if (
-        isinstance(rotation_delay_steps, bool)
-        or not isinstance(rotation_delay_steps, int)
-        or not 0 <= rotation_delay_steps < steps
+        isinstance(rotation_hold_steps, bool)
+        or not isinstance(rotation_hold_steps, int)
+        or rotation_hold_steps < 0
+        or (rotation_hold_steps and clearance_rows + rotation_hold_steps >= steps)
     ):
-        raise ValueError("rotation delay must be an integer in [0, steps)")
+        raise ValueError("rotation hold must leave rows to reach the rest endpoint")
     result = interpolate_poses(start, target, steps)
-    if not rotation_delay_steps:
+    if not rotation_hold_steps:
         return result
-    start_pose = _pose(start, "start")
-    target_pose = _pose(target, "target")
-    result[:rotation_delay_steps, 3:] = start_pose[3:]
-    result[rotation_delay_steps:, 3:] = interpolate_poses(
-        start_pose,
-        target_pose,
-        steps - rotation_delay_steps,
+    clear_pose = result[clearance_rows - 1].copy()
+    result[clearance_rows : clearance_rows + rotation_hold_steps, 3:] = (
+        clear_pose[3:]
+    )
+    result[clearance_rows + rotation_hold_steps :, 3:] = interpolate_poses(
+        clear_pose,
+        target,
+        steps - clearance_rows - rotation_hold_steps,
     )[:, 3:]
     return result
 
 
-def delay_post_release_return_rotation(
+def hold_post_release_return_rotation_after_clearance(
     trajectory: SkillTrajectory,
-    rotation_delay_steps: int,
+    rotation_hold_steps: int,
 ) -> SkillTrajectory:
-    """Delay wrist rotation within the existing straight, open return phase."""
+    """Hold row-seven wrist clearance within the existing open return phase."""
 
     if "post_release_return" not in trajectory.waypoint_steps:
-        if rotation_delay_steps:
-            raise ValueError("rotation delay requires a post-release return phase")
+        if rotation_hold_steps:
+            raise ValueError("rotation hold requires a post-release return phase")
         return trajectory
     release_end = trajectory.waypoint_steps["right_release"]
     return_end = trajectory.waypoint_steps["post_release_return"]
@@ -630,7 +633,7 @@ def delay_post_release_return_rotation(
         right[release_end],
         right[return_end],
         return_end - release_end,
-        rotation_delay_steps=rotation_delay_steps,
+        rotation_hold_steps=rotation_hold_steps,
     )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),

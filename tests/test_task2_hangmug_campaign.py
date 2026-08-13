@@ -511,7 +511,7 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "post_handover_rest_observer_steps": 60,
         "direct_rest_to_preinsert_steps": 170,
         "post_release_return_to_rest_steps": 120,
-        "post_release_return_rotation_delay_steps": 8,
+        "post_release_return_rotation_hold_steps": 8,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -529,7 +529,7 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert command[command.index("--direct-rest-to-preinsert-steps") + 1] == "170"
     assert command[command.index("--post-release-return-to-rest-steps") + 1] == "120"
     assert command[
-        command.index("--post-release-return-rotation-delay-steps") + 1
+        command.index("--post-release-return-rotation-hold-steps") + 1
     ] == "8"
     assert "--branch-orient-steps" not in command
 
@@ -537,9 +537,9 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "post_handover_rest_observer_steps": 60,
         "direct_rest_to_preinsert_steps": 170,
         "post_release_return_to_rest_steps": 8,
-        "post_release_return_rotation_delay_steps": 8,
+        "post_release_return_rotation_hold_steps": 8,
     }))
-    with pytest.raises(ValueError, match="rotation delay"):
+    with pytest.raises(ValueError, match="rotation hold"):
         campaign._repair_strategy(2)
 
 
