@@ -61,6 +61,7 @@ from run_hangmug_skill_program import (
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
     _require_reusable_pick_boundary,
+    _right_release_clear_with_local_pitch,
     _source_pick_prefix_steps,
     _source_dataset_receipt,
     _sparse_joint_nominal,
@@ -1315,6 +1316,7 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     left_observer = _pose(0.6, 0.1, 1.0)
     preinsert = _pose(0.7, -0.2, 0.95)
     insert = _pose(0.75, -0.15, 0.85)
+    release_clear = _pose(0.74, -0.17, 0.88)
     program = HangMugSkillProgram(_pose(), right_start)
     program.physical_handover(
         _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
@@ -1329,7 +1331,7 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     program.release_and_return_to_rest(
         insert, right_start, support_steps=2, release_steps=3,
-        return_steps=5, settle_steps=2,
+        return_steps=5, settle_steps=2, right_release_pose=release_clear,
     )
     trajectory = program.build()
 
@@ -1343,6 +1345,10 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
         "tree_transport", "branch_orient_clear", "branch_approach", "branch_unload"
     } & trajectory.waypoint_steps.keys()
     return_end = trajectory.waypoint_steps["post_release_return"]
+    support_end = trajectory.waypoint_steps["supported_release_hold"]
+    release_end = trajectory.waypoint_steps["right_release"]
+    np.testing.assert_allclose(trajectory.right_poses[support_end], insert)
+    np.testing.assert_allclose(trajectory.right_poses[release_end], release_clear)
     np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
     return_start = trajectory.waypoint_steps["right_release"] + 1
     np.testing.assert_allclose(trajectory.grippers[return_start:, 1], -0.0475)
@@ -1407,6 +1413,8 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     insert = preinsert.copy()
     insert[:3] = [0.75, -0.15, 0.85]
+    release_clear = insert.copy()
+    release_clear[:3] += [-0.01, -0.02, 0.03]
     program = HangMugSkillProgram(_pose(), right_start)
     program.physical_handover(
         _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
@@ -1419,7 +1427,7 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     program.release_and_return_to_rest(
         insert, right_start, support_steps=2, release_steps=3,
-        return_steps=5, settle_steps=2,
+        return_steps=5, settle_steps=2, right_release_pose=release_clear,
     )
     trajectory = program.build()
     planned_contact = _pose(0.05, -0.02, 0.03)
@@ -1452,6 +1460,40 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     assert residuals.max() <= 1.0e-12
     assert np.all(np.diff(fractions) >= -1.0e-12)
+
+    release_end = adjusted.waypoint_steps["right_release"]
+    return_end = adjusted.waypoint_steps["post_release_return"]
+    return_points = adjusted.right_poses[release_end + 1 : return_end + 1, :3]
+    return_start = adjusted.right_poses[release_end, :3]
+    return_direction = return_points[-1] - return_start
+    return_fractions = (
+        (return_points - return_start) @ return_direction
+        / float(return_direction @ return_direction)
+    )
+    return_residuals = np.linalg.norm(
+        return_points
+        - (return_start + return_fractions[:, None] * return_direction),
+        axis=1,
+    )
+    assert return_residuals.max() <= 1.0e-12
+    assert np.all(np.diff(return_fractions) >= -1.0e-12)
+
+
+def test_release_clear_pitch_changes_only_the_final_opening_target():
+    pivot = np.asarray([0.7, -0.2, 0.9])
+    baseline_roll = 0.4
+    inserted = _handover_target_with_local_contact_pivot_roll(
+        _pose(0.6, -0.25, 0.85), pivot, baseline_roll
+    )
+    clear = _right_release_clear_with_local_pitch(
+        inserted, pivot, baseline_roll, -0.15
+    )
+
+    assert np.linalg.norm(clear - inserted) > 0.01
+    with pytest.raises(ValueError, match="within 45 degrees"):
+        _right_release_clear_with_local_pitch(
+            inserted, pivot, baseline_roll, np.pi / 3.0
+        )
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():

@@ -917,6 +917,7 @@ class HangMugSkillProgram:
         right_insert: Any,
         right_rest: Any,
         *,
+        right_release_pose: Any | None = None,
         support_steps: int,
         release_steps: int,
         return_steps: int,
@@ -936,6 +937,9 @@ class HangMugSkillProgram:
             "right_release",
             "release_support",
             release_steps,
+            right_pose=(
+                right_insert if right_release_pose is None else right_release_pose
+            ),
             right_gripper=opened,
         )
         self._append(

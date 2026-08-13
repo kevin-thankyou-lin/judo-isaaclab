@@ -46,6 +46,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_handover_rest_observer_steps",
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
+    "right_release_clear_local_pitch_rad",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -198,6 +199,7 @@ def _repair_command(
         ("post_handover_rest_observer_steps", "--post-handover-rest-observer-steps"),
         ("direct_rest_to_preinsert_steps", "--direct-rest-to-preinsert-steps"),
         ("post_release_return_to_rest_steps", "--post-release-return-to-rest-steps"),
+        ("right_release_clear_local_pitch_rad", "--right-release-clear-local-pitch-rad"),
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
         ("branch_approach_height_m", "--branch-approach-height-m"),
@@ -318,6 +320,7 @@ def _repair_strategy(index: int) -> dict:
         "post_handover_rest_observer_steps",
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
+        "right_release_clear_local_pitch_rad",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -418,6 +421,18 @@ def _repair_strategy(index: int) -> dict:
             )
         strategy["direct_rest_to_preinsert_steps"] = direct_steps[0]
         strategy["post_release_return_to_rest_steps"] = direct_steps[1]
+    if "right_release_clear_local_pitch_rad" in value:
+        pitch = value["right_release_clear_local_pitch_rad"]
+        if (
+            isinstance(pitch, bool)
+            or not isinstance(pitch, (int, float))
+            or not np.isfinite(pitch)
+            or abs(pitch) > np.pi / 4.0
+        ):
+            raise ValueError("right release clear local pitch must be within 45 degrees")
+        if not direct_steps[0]:
+            raise ValueError("right release clear pitch requires direct choreography")
+        strategy["right_release_clear_local_pitch_rad"] = float(pitch)
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
