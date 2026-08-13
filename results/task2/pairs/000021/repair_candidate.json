@@ -1,4 +1,5 @@
 {
+  "branch_orient_steps": 60,
   "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.08,
   "handover_orient_steps": 30,
