@@ -397,7 +397,11 @@ def reanchor_handover_contact_acquire(
     )
     if norm > limit:
         raise RuntimeError(
-            f"live handover contact residual {norm:.6f} m exceeds {limit:.6f} m"
+            f"live handover contact residual {norm:.6f} m exceeds {limit:.6f} m; "
+            f"world_translation_m={translation.tolist()}; "
+            f"desired_right_contact_world={desired_right.tolist()}; "
+            f"observed_right_eef_world={observed_right.tolist()}; "
+            f"rotation_error_rad={rotation_error_rad:.9f}"
         )
     if rotation_error_rad > rotation_limit:
         raise RuntimeError(

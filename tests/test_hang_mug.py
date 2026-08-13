@@ -1462,10 +1462,14 @@ def test_contact_acquire_rejects_unbounded_live_residual():
         program.build(), _pose(), _pose(), _pose(), _pose(0.035514)
     )
     assert receipt["translation_norm_m"] == pytest.approx(0.035514)
-    with pytest.raises(RuntimeError, match="exceeds"):
+    with pytest.raises(RuntimeError, match="exceeds") as failure:
         reanchor_handover_contact_acquire(
             program.build(), _pose(), _pose(), _pose(), _pose(0.040001)
         )
+    assert "world_translation_m=[0.040001, 0.0, 0.0]" in str(failure.value)
+    assert "desired_right_contact_world=[0.0, 0.0, 0.0" in str(failure.value)
+    assert "observed_right_eef_world=[0.040001, 0.0, 0.0" in str(failure.value)
+    assert "rotation_error_rad=0.000000000" in str(failure.value)
 
 
 def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
