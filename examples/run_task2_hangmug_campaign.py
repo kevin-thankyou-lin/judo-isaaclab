@@ -40,12 +40,19 @@ TIMING = Path("results/task2/pairs/000001/attempt_004_handover_confirm_hold/acce
 RESULTS = Path("results/task2")
 MIDDLE_ROW_BRANCHES = frozenset({"branch_layer_2_a", "branch_layer_2_b"})
 BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
+    "require_broad_pad_contact",
+    "post_handover_right_return_steps",
+    "left_branch_point_steps",
+    "post_handover_rest_observer_steps",
+    "direct_rest_to_preinsert_steps",
+    "post_release_return_to_rest_steps",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
     "branch_roll_offset_rad",
     "branch_support_fraction",
     "branch_support_seat_down_m",
+    "stable_support_steps",
 })
 LD_LIBRARY_PATH = ":".join(
     (
@@ -177,6 +184,8 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
+    if strategy.get("require_broad_pad_contact"):
+        arguments.append("--require-broad-pad-contact")
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -184,12 +193,18 @@ def _repair_command(
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
     for field, option in (
+        ("post_handover_right_return_steps", "--post-handover-right-return-steps"),
+        ("left_branch_point_steps", "--left-branch-point-steps"),
+        ("post_handover_rest_observer_steps", "--post-handover-rest-observer-steps"),
+        ("direct_rest_to_preinsert_steps", "--direct-rest-to-preinsert-steps"),
+        ("post_release_return_to_rest_steps", "--post-release-return-to-rest-steps"),
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
         ("branch_approach_height_m", "--branch-approach-height-m"),
         ("branch_roll_offset_rad", "--branch-roll-offset-rad"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
+        ("stable_support_steps", "--stable-support-steps"),
         ("target_branch_rank", "--target-branch-rank"),
     ):
         if field in strategy:
@@ -222,6 +237,7 @@ def _repair_command(
         for field, option in (
             ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
             ("handover_orient_steps", "--handover-orient-steps"),
+            ("handover_standoff_outside_m", "--handover-standoff-outside-m"),
         ):
             if field in strategy:
                 arguments.extend([option, str(strategy[field])])
@@ -275,6 +291,7 @@ def _repair_strategy(index: int) -> dict:
         return {}
     value = _load(path)
     allowed = {
+        "force_semantic_regeneration",
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
         "handover_confirm_steps",
@@ -285,21 +302,42 @@ def _repair_strategy(index: int) -> dict:
         "handover_straddle_local_x_m",
         "handover_orient_clearance_m",
         "handover_orient_steps",
+        "handover_standoff_outside_m",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
+        "require_broad_pad_contact",
+        "post_handover_right_return_steps",
+        "left_branch_point_steps",
+        "post_handover_rest_observer_steps",
+        "direct_rest_to_preinsert_steps",
+        "post_release_return_to_rest_steps",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
         "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
+        "stable_support_steps",
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
-    handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
+    handover_fields = allowed - late_support_fields - {
+        "force_semantic_regeneration", "pick_lift_margin_m"
+    }
     strategy = {}
+    if "force_semantic_regeneration" in value:
+        if value["force_semantic_regeneration"] is not True:
+            raise ValueError(
+                "semantic regeneration must be true when selected"
+            )
+    if "require_broad_pad_contact" in value:
+        if value["require_broad_pad_contact"] is not True:
+            raise ValueError(
+                "broad pad contact must be true when selected"
+            )
+        strategy["require_broad_pad_contact"] = True
     if "handover_handle_frame_transfer" in value:
         enabled = value["handover_handle_frame_transfer"]
         if enabled is not True:
@@ -317,6 +355,63 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("pick lift margin must be in [0, 0.03] m")
         strategy["pick_lift_margin_m"] = float(margin)
+    setup_steps = (
+        value.get("post_handover_right_return_steps", 0),
+        value.get("left_branch_point_steps", 0),
+    )
+    if any(
+        isinstance(steps, bool)
+        or not isinstance(steps, int)
+        or not 0 <= steps <= 120
+        for steps in setup_steps
+    ):
+        raise ValueError("post-handover setup steps must be integers in [0, 120]")
+    if bool(setup_steps[0]) != bool(setup_steps[1]):
+        raise ValueError(
+            "right return and left branch-point steps must be selected together"
+        )
+    if setup_steps[0]:
+        strategy["post_handover_right_return_steps"] = setup_steps[0]
+        strategy["left_branch_point_steps"] = setup_steps[1]
+    simultaneous_setup = value.get("post_handover_rest_observer_steps", 0)
+    if (
+        isinstance(simultaneous_setup, bool)
+        or not isinstance(simultaneous_setup, int)
+        or not 0 <= simultaneous_setup <= 120
+    ):
+        raise ValueError("simultaneous rest/observer steps must be in [0, 120]")
+    if simultaneous_setup and any(setup_steps):
+        raise ValueError(
+            "simultaneous and sequential post-handover setup cannot be combined"
+        )
+    if simultaneous_setup:
+        strategy["post_handover_rest_observer_steps"] = simultaneous_setup
+    direct_steps = (
+        value.get("direct_rest_to_preinsert_steps", 0),
+        value.get("post_release_return_to_rest_steps", 0),
+    )
+    if any(
+        isinstance(steps, bool)
+        or not isinstance(steps, int)
+        or not 0 <= steps <= 240
+        for steps in direct_steps
+    ):
+        raise ValueError("direct choreography steps must be integers in [0, 240]")
+    if bool(direct_steps[0]) != bool(direct_steps[1]):
+        raise ValueError(
+            "direct rest-to-preinsert and post-release return steps must be selected together"
+        )
+    if direct_steps[0]:
+        if not simultaneous_setup or any(setup_steps):
+            raise ValueError(
+                "direct choreography requires simultaneous right-rest and left-observer setup"
+            )
+        if value.get("branch_orient_steps", 0):
+            raise ValueError(
+                "direct choreography forbids branch orientation subphases"
+            )
+        strategy["direct_rest_to_preinsert_steps"] = direct_steps[0]
+        strategy["post_release_return_to_rest_steps"] = direct_steps[1]
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
@@ -376,6 +471,15 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch support seat-down must be in [0, 0.03] m")
         strategy["branch_support_seat_down_m"] = float(seat_down)
+    if "stable_support_steps" in value:
+        steps = value["stable_support_steps"]
+        if (
+            isinstance(steps, bool)
+            or not isinstance(steps, int)
+            or not 60 <= steps <= 240
+        ):
+            raise ValueError("stable support steps must be in [60, 240]")
+        strategy["stable_support_steps"] = steps
     if not (set(value) & handover_fields):
         return strategy
     settle = value.get("handover_contact_settle_steps", 30)
@@ -386,6 +490,7 @@ def _repair_strategy(index: int) -> dict:
     straddle = value.get("handover_straddle_local_x_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
+    outside_standoff = value.get("handover_standoff_outside_m", 0.0)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
@@ -435,9 +540,14 @@ def _repair_strategy(index: int) -> dict:
         or not isinstance(orient_steps, int)
         or not 0 <= orient_steps <= 60
         or bool(orient_clearance) != bool(orient_steps)
+        or isinstance(outside_standoff, bool)
+        or not isinstance(outside_standoff, (int, float))
+        or not np.isfinite(outside_standoff)
+        or not 0.0 <= outside_standoff <= 0.12
+        or bool(outside_standoff) and not orient_steps
     ):
         raise ValueError(
-            "handover orient clearance and steps must both be zero or bounded positive values"
+            "handover orient clearance/steps and outside standoff must be bounded"
         )
     strategy.update({
         "handover_contact_settle_steps": settle,
@@ -452,6 +562,8 @@ def _repair_strategy(index: int) -> dict:
     if orient_steps:
         strategy["handover_orient_clearance_m"] = float(orient_clearance)
         strategy["handover_orient_steps"] = orient_steps
+    if outside_standoff:
+        strategy["handover_standoff_outside_m"] = float(outside_standoff)
     if straddle:
         if not orient_steps:
             raise ValueError(
@@ -469,6 +581,17 @@ def _repair_strategy(index: int) -> dict:
             raise ValueError("left release retreat must be in [0.02, 0.12] m")
         strategy["left_release_retreat_m"] = float(retreat)
     return strategy
+
+
+def _force_semantic_regeneration(index: int) -> bool:
+    """Require a fresh reset-to-finish skill after direct replay diagnosis."""
+    path = RESULTS / "pairs" / f"{index:06d}" / "repair_candidate.json"
+    if not path.is_file():
+        return False
+    value = _load(path).get("force_semantic_regeneration", False)
+    if value not in (False, True):
+        raise ValueError("force_semantic_regeneration must be boolean")
+    return value
 
 
 def _worker_pids() -> list[int]:
@@ -654,6 +777,217 @@ def _semantic_audit(
     }
 
 
+def _direct_choreography_audit(result: dict, trace) -> dict:
+    """Recompute the direct phase/gripper contract from immutable trace data."""
+    required = (
+        "carrying_rest_observer",
+        "direct_preinsert",
+        "branch_insert",
+        "supported_release_hold",
+        "right_release",
+        "post_release_return",
+        "stable_support",
+    )
+    forbidden = ("tree_transport", "branch_orient_clear", "branch_approach", "branch_unload")
+    names = trace["semantic_waypoints"].astype(str)
+    actions = np.asarray(trace["actions"], dtype=np.float64)
+    desired = np.asarray(trace["desired_right_eef_poses"], dtype=np.float64)
+    if len(names) != len(actions) or len(desired) != len(names):
+        raise RuntimeError("direct choreography trace arrays are not row aligned")
+    compressed = tuple(
+        name
+        for row, name in enumerate(names.tolist())
+        if row == 0 or name != names[row - 1]
+    )
+    if "carrying_rest_observer" not in compressed:
+        raise RuntimeError("direct choreography lacks the carrying-rest boundary")
+    suffix = compressed[compressed.index("carrying_rest_observer") :]
+    boundaries = {}
+    for name in required:
+        rows = np.flatnonzero(names == name)
+        if not len(rows):
+            raise RuntimeError(f"direct choreography lacks {name}")
+        boundaries[name] = (int(rows[0]), int(rows[-1]))
+
+    def direct_line(previous: str, segment: str) -> dict:
+        start = desired[boundaries[previous][1], :3]
+        rows = np.flatnonzero(names == segment)
+        points = desired[rows, :3]
+        direction = points[-1] - start
+        squared = float(direction @ direction)
+        if squared <= 0.0:
+            raise RuntimeError(f"{segment} has no Cartesian displacement")
+        fractions = (points - start) @ direction / squared
+        residuals = np.linalg.norm(
+            points - (start + fractions[:, None] * direction), axis=1
+        )
+        return {
+            "rows": int(len(rows)),
+            "maximum_line_residual_m": float(residuals.max(initial=0.0)),
+            "fractions_monotone": bool(np.all(np.diff(fractions) >= -1.0e-9)),
+            "endpoint_fraction": float(fractions[-1]),
+            "passed": bool(
+                residuals.max(initial=0.0) <= 1.0e-6
+                and np.all(np.diff(fractions) >= -1.0e-9)
+                and abs(float(fractions[-1]) - 1.0) <= 1.0e-6
+            ),
+        }
+
+    outbound = direct_line("carrying_rest_observer", "direct_preinsert")
+    returning = direct_line("right_release", "post_release_return")
+    right_gripper = actions[:, 13]
+    carrier_start = boundaries["carrying_rest_observer"][0]
+    hold_end = boundaries["supported_release_hold"][1]
+    release_start, release_end = boundaries["right_release"]
+    return_start = boundaries["post_release_return"][0]
+    deltas = np.diff(right_gripper[carrier_start:])
+    opening_rows = np.flatnonzero(deltas < -1.0e-8)
+    opening_runs = int(
+        bool(len(opening_rows)) + np.count_nonzero(np.diff(opening_rows) > 1)
+    )
+    runner_contract = result.get("direct_phase_contract") or {}
+    collision = result.get("direct_segment_collision_screening") or {}
+    return_rest = result.get("post_release_right_rest") or {}
+    checks = {
+        "exact_named_suffix": suffix == required,
+        "forbidden_intermediate_phases_absent": not any(
+            np.any(names == name) for name in forbidden
+        ),
+        "outbound_one_direct_interpolation": outbound["passed"],
+        "return_one_direct_interpolation": returning["passed"],
+        "closed_carrier_through_supported_hold": bool(
+            np.all(np.abs(right_gripper[carrier_start : hold_end + 1]) <= 1.0e-6)
+        ),
+        "one_final_monotone_opening": bool(
+            opening_runs == 1
+            and np.all(np.diff(right_gripper[release_start : release_end + 1]) <= 1.0e-9)
+            and right_gripper[release_end] <= -0.04749
+        ),
+        "no_reclose_and_open_return": bool(
+            np.all(deltas <= 1.0e-8)
+            and np.all(right_gripper[return_start:] <= -0.04749)
+        ),
+        "runner_phase_receipt_passed": bool(runner_contract.get("passed")),
+        "both_full_segment_screens_passed": bool(collision.get("passed")),
+        "open_return_reached_demonstrated_rest": bool(return_rest.get("passed")),
+    }
+    if not all(checks.values()):
+        raise RuntimeError(f"direct choreography audit failed: {checks}")
+    return {
+        "passed": True,
+        "required_suffix": list(required),
+        "observed_suffix": list(suffix),
+        "phase_boundaries": {
+            name: {"first_row": first, "last_row": last}
+            for name, (first, last) in boundaries.items()
+        },
+        "outbound_interpolation": outbound,
+        "post_release_return_interpolation": returning,
+        "right_opening_transition_runs": opening_runs,
+        "checks": checks,
+        "collision_screening": collision,
+        "post_release_right_rest": return_rest,
+    }
+
+
+def _handover_wave_audit(result: dict, trace) -> dict:
+    """Recompute the wave handover ordering/contact contract from the trace."""
+    receipt = result.get("handover_wave_contract") or {}
+    names = trace["semantic_waypoints"].astype(str)
+    actions = np.asarray(trace["actions"], dtype=np.float64)
+    if len(names) != len(actions):
+        raise RuntimeError("handover wave trace arrays are not row aligned")
+    handover_names = (
+        "handover_pregrasp",
+        "handover_orient_clear",
+        "right_grasp_settle",
+        "right_grasp",
+        "handover_contact_acquire",
+    )
+    handover_rows = np.flatnonzero(np.isin(names, handover_names))
+    preclose_rows = np.flatnonzero(
+        np.isin(
+            names,
+            ("handover_pregrasp", "handover_orient_clear", "right_grasp_settle"),
+        )
+    )
+    close_rows = np.flatnonzero(names == "right_grasp")
+    required_arrays = (
+        "left_grasp",
+        "left_assist_engaged",
+        "right_grasp",
+        "right_assist_engaged",
+        "right_finger_forces_n",
+        "right_pad_fractions",
+    )
+    if any(len(trace[name]) != len(names) for name in required_arrays):
+        raise RuntimeError("handover contact arrays are not row aligned")
+    forces = np.asarray(trace["right_finger_forces_n"], dtype=np.float64)
+    fractions = np.asarray(trace["right_pad_fractions"], dtype=np.float64)
+    secure = (
+        np.asarray(trace["right_grasp"], dtype=bool)
+        & np.asarray(trace["right_assist_engaged"], dtype=bool)
+        & np.isfinite(forces).all(axis=1)
+        & np.isfinite(fractions).all(axis=1)
+        & (forces > 0.0).all(axis=1)
+        & (fractions >= 0.15).all(axis=1)
+        & (fractions <= 0.85).all(axis=1)
+        & (names == "right_grasp")
+    )
+    secure_rows = np.flatnonzero(secure)
+    first_secure = None if not len(secure_rows) else int(secure_rows[0])
+    giver_held = bool(
+        first_secure is not None
+        and np.asarray(trace["left_grasp"], dtype=bool)[
+            handover_rows[handover_rows <= first_secure]
+        ].all()
+        and np.asarray(trace["left_assist_engaged"], dtype=bool)[
+            handover_rows[handover_rows <= first_secure]
+        ].all()
+    )
+    right_gripper = actions[:, 13]
+    plan_screens = receipt.get("plan_screens") or {}
+    live = receipt.get("live_physx_contact_guard") or {}
+    checks = {
+        "runner_wave_receipt_passed": bool(receipt.get("passed")),
+        "both_live_geometry_swept_screens_passed": bool(
+            set(plan_screens) == {"clear_pregrasp", "open_approach"}
+            and all(plan_screens[name].get("passed") for name in plan_screens)
+        ),
+        "all_handover_rows_live_guarded": bool(
+            live.get("passed")
+            and live.get("expected_rows") == len(handover_rows)
+            and live.get("observed_rows") == len(handover_rows)
+        ),
+        "right_open_through_pregrasp_and_approach": bool(
+            len(preclose_rows)
+            and np.all(right_gripper[preclose_rows] <= -0.04749)
+        ),
+        "right_close_monotone_only_at_grasp_pose": bool(
+            len(close_rows)
+            and np.all(np.diff(right_gripper[close_rows]) >= -1.0e-9)
+            and right_gripper[close_rows[-1]] >= -1.0e-8
+        ),
+        "broad_force_backed_contact_reached_while_giver_held": bool(
+            len(secure_rows) and giver_held
+        ),
+        "first_contact_at_contact_pose": bool(
+            (live.get("first_right_mug_contact") or {}).get("waypoint")
+            in {"right_grasp_settle", "right_grasp"}
+        ),
+    }
+    if not all(checks.values()):
+        raise RuntimeError(f"handover wave audit failed: {checks}")
+    return {
+        "passed": True,
+        "first_broad_right_contact_trace_row": first_secure,
+        "handover_trace_rows": int(len(handover_rows)),
+        "checks": checks,
+        "plan_screens": plan_screens,
+        "live_physx_contact_guard": live,
+    }
+
+
 def independent_audit(index: int, attempt: Path) -> dict:
     guard = _guard_lifecycle(attempt)
     result_path, trace_path = attempt / "result.json", attempt / "trace.npz"
@@ -722,8 +1056,7 @@ def independent_audit(index: int, attempt: Path) -> dict:
         and source["actions_sha256"] == SOURCE_ACTIONS_SHA256
         and source["action_dataset"] == "actions"
         and provenance["target_state_template"]["actions_executed"] is False
-        and {name: value["path"] for name, value in provenance["target_assets"].items()}
-        == {name: str(path) for name, path in assets.items()}
+        and _asset_provenance_matches(provenance["target_assets"], assets)
         and action_binding
         and protocol["candidate_sampling"] is False
         and protocol["physics_device_actual"] == "cpu"
@@ -758,6 +1091,11 @@ def independent_audit(index: int, attempt: Path) -> dict:
         raise RuntimeError("runner/independent terminal hang receipts disagree")
     if not semantic_audit["contact_policy"]["contact_policy_held"]:
         raise RuntimeError("bounded-contact policy failed")
+    direct_choreography = None
+    handover_wave = None
+    if manifest.get("repair_strategy", {}).get("direct_rest_to_preinsert_steps"):
+        handover_wave = _handover_wave_audit(result, trace)
+        direct_choreography = _direct_choreography_audit(result, trace)
     return {
         "accepted": True,
         "pair_index": index,
@@ -815,8 +1153,24 @@ def independent_audit(index: int, attempt: Path) -> dict:
         },
         "ordered_semantic_stages": semantic_audit["ordered_semantic_stages"],
         "contact_policy": semantic_audit["contact_policy"],
+        "direct_choreography": direct_choreography,
+        "handover_wave": handover_wave,
         "guard": guard,
     }
+
+
+def _asset_provenance_matches(recorded: dict, expected: dict[str, Path]) -> bool:
+    """Compare asset identities after resolving lane-local data symlinks."""
+    if set(recorded) != set(expected):
+        return False
+    try:
+        return all(
+            Path(recorded[name]["path"]).resolve(strict=True)
+            == Path(expected[name]).resolve(strict=True)
+            for name in expected
+        )
+    except (KeyError, OSError, TypeError):
+        return False
 
 
 def classification_audit(index: int, attempt: Path) -> dict:
@@ -990,9 +1344,16 @@ def _recover_audited_attempt(index: int) -> bool:
     return False
 
 
-def _classification_binding(attempt: Path, classification: dict) -> dict:
-    selection = _repair_selection(
-        classification["first_failed_stage"], classification["last_completed_stage"]
+def _classification_binding(
+    attempt: Path, classification: dict, *, force_from_reset: bool = False
+) -> dict:
+    selection = (
+        _repair_selection("pick", None)
+        if force_from_reset
+        else _repair_selection(
+            classification["first_failed_stage"],
+            classification["last_completed_stage"],
+        )
     )
     return {
         "result_path": classification["result_path"],
@@ -1000,6 +1361,7 @@ def _classification_binding(attempt: Path, classification: dict) -> dict:
         "audit_path": str(attempt / "classification_audit.json"),
         "audit_sha256": _sha256(attempt / "classification_audit.json"),
         "completed_stages": classification["completed_stages"],
+        "quality_regeneration_from_direct_success": force_from_reset,
         **selection,
     }
 
@@ -1168,17 +1530,24 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
             raise
     else:
         classification_attempt, classification = reusable
-    if classification["status"] == "direct_success":
+    force_regeneration = _force_semantic_regeneration(index)
+    if classification["status"] == "direct_success" and not force_regeneration:
         _accept_attempt(
             index, classification_attempt, ledger_sha256,
             replace_existing=replace_existing,
         )
         return
-    failed_stage = classification["first_failed_stage"]
+    failed_stage = (
+        "quality_regeneration"
+        if force_regeneration
+        else classification["first_failed_stage"]
+    )
     repair_attempt = _attempt_directory(index, f"repair_{failed_stage}")
     repair_attempt.mkdir(parents=True, exist_ok=False)
     classification_binding = _classification_binding(
-        classification_attempt, classification
+        classification_attempt,
+        classification,
+        force_from_reset=force_regeneration,
     )
     repair_strategy = _repair_strategy(index)
     command = _repair_command(
@@ -1230,7 +1599,29 @@ def _claim_explicit_lane(index: int, lane_id: str) -> Path:
     }
     path = RESULTS / "pairs" / f"{index:06d}" / "lane_assignment.json"
     if path.exists():
-        if _load(path) != receipt:
+        recorded = _load(path)
+        immutable_fields = (
+            "schema_version",
+            "pair_index",
+            "human_pair",
+            "lane_id",
+            "results_root",
+        )
+        fields_changed = any(
+            recorded.get(field) != receipt[field] for field in immutable_fields
+        )
+        recorded_head = recorded.get("judo_head")
+        current_head = receipt["judo_head"]
+        head_is_authorized = recorded_head == current_head
+        if not head_is_authorized and isinstance(recorded_head, str):
+            head_is_authorized = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", recorded_head, current_head],
+                cwd=REPO_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode == 0
+        if fields_changed or not head_is_authorized:
             raise RuntimeError(f"pair/lane assignment changed: {path}")
         return path
     _atomic_json(path, receipt, immutable=True)
