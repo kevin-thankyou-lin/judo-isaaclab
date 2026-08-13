@@ -330,7 +330,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 24,
-        "handover_contact_acquire_reference_steps": 30,
         "handover_contact_acquire_target_mug_position_m": [-0.07, -0.06, 0.13],
         "handover_contact_acquire_target_mug_quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
         "handover_contact_acquire_reanchor_right_assist": True,
@@ -372,9 +371,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
-    assert command[
-        command.index("--handover-contact-acquire-reference-steps") + 1
-    ] == "30"
     acquire_target = command.index(
         "--handover-contact-acquire-target-mug-position-m"
     )
@@ -466,12 +462,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
     with pytest.raises(ValueError, match="contact acquire"):
-        campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({
-        "handover_contact_acquire_steps": 24,
-        "handover_contact_acquire_reference_steps": 23,
-    }))
-    with pytest.raises(ValueError, match="reference"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_contact_acquire_target_mug_position_m": [-0.07, -0.06, 0.13]
