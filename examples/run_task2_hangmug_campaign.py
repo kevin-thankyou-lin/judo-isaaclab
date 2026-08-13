@@ -1447,6 +1447,14 @@ def _reusable_classification(index: int) -> tuple[Path, dict] | None:
         path = attempt / "classification_audit.json"
         if not path.is_file():
             continue
+        manifest = _load(attempt / "manifest.json")
+        if manifest.get("launch_command") != _classification_command(index, attempt):
+            print(
+                f"TASK2_HANGMUG_STALE_CLASSIFICATION={index:06d} "
+                f"attempt={attempt} reason=launch_contract_changed",
+                flush=True,
+            )
+            continue
         recorded = _load(path)
         if recorded != classification_audit(index, attempt):
             raise RuntimeError(f"classification receipt changed: {path}")

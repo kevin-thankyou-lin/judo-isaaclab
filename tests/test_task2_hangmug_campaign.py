@@ -192,6 +192,32 @@ def test_explicit_lane_claim_rejects_non_descendant_commit(tmp_path, monkeypatch
         campaign._claim_explicit_lane(12, "node1-gpu3")
 
 
+def test_reusable_classification_preserves_and_skips_stale_launch_contract(
+    tmp_path, monkeypatch, capsys
+):
+    results = tmp_path / "task2"
+    attempt = results / "pairs/000001/attempt_005_direct_source_classification"
+    attempt.mkdir(parents=True)
+    (attempt / "manifest.json").write_text(json.dumps({
+        "launch_command": ["env", "PYTHONPATH=old-shared-checkout"],
+    }))
+    (attempt / "classification_audit.json").write_text("{}")
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(
+        campaign,
+        "_classification_command",
+        lambda _index, _attempt: ["env", "PYTHONPATH=lane/src"],
+    )
+    monkeypatch.setattr(
+        campaign,
+        "classification_audit",
+        lambda *_args: pytest.fail("stale classification must not be audited"),
+    )
+
+    assert campaign._reusable_classification(1) is None
+    assert "reason=launch_contract_changed" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
 def test_explicit_lane_claim_rejects_ambiguous_ids(tmp_path, monkeypatch, lane):
     monkeypatch.setattr(campaign, "RESULTS", tmp_path)
