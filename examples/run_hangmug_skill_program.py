@@ -108,6 +108,13 @@ def _parser() -> argparse.Namespace:
         help="Bounded vertical seating offset applied before branch release.",
     )
     parser.add_argument(
+        "--branch-support-offset-m",
+        type=float,
+        nargs=3,
+        default=(0.0, 0.0, 0.0),
+        help="Bounded world-frame support-pose translation applied before insertion.",
+    )
+    parser.add_argument(
         "--stable-support-steps",
         type=int,
         default=60,
@@ -973,6 +980,20 @@ def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
     seated = pose.copy()
     seated[2] -= amount
     return seated
+
+
+def _branch_support_offset_pose(value, offset_m) -> np.ndarray:
+    pose = np.asarray(value, dtype=np.float64)
+    offset = np.asarray(offset_m, dtype=np.float64)
+    if pose.shape != (7,) or not np.all(np.isfinite(pose)):
+        raise ValueError("branch support pose must contain seven finite values")
+    if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+        raise ValueError("branch support offset must contain three finite values")
+    if np.linalg.norm(offset) > 0.01:
+        raise ValueError("branch support offset exceeds 1 cm")
+    translated = pose.copy()
+    translated[:3] += offset
+    return translated
 
 
 def _bounded_branch_support_seat_down(value: float) -> float:
@@ -2568,6 +2589,9 @@ def _build_skill(
     final_mug_pose = _branch_support_seated_pose(
         final_mug_pose, args.branch_support_seat_down_m
     )
+    final_mug_pose = _branch_support_offset_pose(
+        final_mug_pose, args.branch_support_offset_m
+    )
     target_branch_world = compose_pose(target_tree.root_pose, target_branch.frame)
     final_mug = RigidAssetGeometry(final_mug_pose, target_geometry.size)
     transport_mug_pose = target_handover_mug.root_pose.copy()
@@ -2823,6 +2847,10 @@ def main() -> None:
     ):
         raise ValueError("--branch-roll-offset-rad must be within 90 degrees")
     _bounded_branch_support_seat_down(args.branch_support_seat_down_m)
+    _branch_support_offset_pose(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.branch_support_offset_m,
+    )
     _bounded_left_release_retreat(args.left_release_retreat_m)
     post_release_lift = _bounded_handover_post_release_lift(
         args.handover_post_release_lift_m
@@ -3864,6 +3892,9 @@ def main() -> None:
         )
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
+        )
+        result["protocol"]["parameters"]["branch_support_offset_m"] = (
+            np.asarray(args.branch_support_offset_m, dtype=np.float64).tolist()
         )
         result["protocol"]["parameters"]["target_branch_rank"] = (
             args.target_branch_rank

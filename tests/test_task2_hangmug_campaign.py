@@ -349,6 +349,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "branch_approach_height_m": 0.0,
         "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
+        "branch_support_offset_m": [-0.0006, 0.0008, 0.0],
         "stable_support_steps": 180,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
@@ -373,6 +374,12 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         0.5235987755982988
     )
     assert float(command[command.index("--branch-support-fraction") + 1]) == 0.75
+    support_offset = command.index("--branch-support-offset-m")
+    assert list(map(float, command[support_offset + 1 : support_offset + 4])) == [
+        -0.0006,
+        0.0008,
+        0.0,
+    ]
     assert command[command.index("--stable-support-steps") + 1] == "180"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
@@ -632,6 +639,10 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
     assert command[command.index("--branch-support-seat-down-m") + 1] == "0.01"
     candidate.write_text(json.dumps({"branch_support_seat_down_m": 0.031}))
     with pytest.raises(ValueError, match="seat-down"):
+        campaign._repair_strategy(4)
+
+    candidate.write_text(json.dumps({"branch_support_offset_m": [0.0101, 0, 0]}))
+    with pytest.raises(ValueError, match="support offset"):
         campaign._repair_strategy(4)
 
 
