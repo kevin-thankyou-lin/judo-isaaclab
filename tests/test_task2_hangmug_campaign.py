@@ -207,6 +207,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
         "left_release_retreat_m": 0.03,
+        "post_handover_right_return_steps": 45,
+        "left_branch_point_steps": 35,
+        "require_broad_pad_contact": True,
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
         "handover_target_local_pitch_rad": 0.7853981633974483,
@@ -230,6 +233,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     cursor = command.index("--left-release-retreat-m")
     assert float(command[cursor + 1]) == pytest.approx(0.03)
+    assert command[command.index("--post-handover-right-return-steps") + 1] == "45"
+    assert command[command.index("--left-branch-point-steps") + 1] == "35"
+    assert "--require-broad-pad-contact" in command
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
@@ -274,6 +280,12 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"stable_support_steps": 241}))
     with pytest.raises(ValueError, match="stable support steps"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"post_handover_right_return_steps": 45}))
+    with pytest.raises(ValueError, match="selected together"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"require_broad_pad_contact": False}))
+    with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_handle_frame_transfer": False}))
     with pytest.raises(ValueError, match="must be true"):

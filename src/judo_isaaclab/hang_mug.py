@@ -62,6 +62,7 @@ def geometry_conditioned_hang_pose(
     branch_support_fraction: float = 0.5,
     branch_roll_offset_rad: float = 0.0,
     target_branch_rank: int | None = None,
+    target_branch_row: int | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
     """Map a verified handle-on-branch relationship through measured parts."""
 
@@ -85,6 +86,20 @@ def geometry_conditioned_hang_pose(
     )
     source_branch = closest_branch(source_branches, source_handle_tree_local[:3])
     target_values = tuple(target_branches)
+    if target_branch_row is not None:
+        if target_branch_row != 2:
+            raise ValueError("only the second branch row is supported")
+        if len(target_values) < 3:
+            raise ValueError("cannot infer a second row from fewer than three branches")
+        ordered = sorted(target_values, key=lambda item: item.normalized_height)
+        gaps = np.diff([item.normalized_height for item in ordered])
+        if len(gaps) < 2:
+            raise ValueError("cannot infer three branch rows")
+        split_indices = sorted(np.argsort(gaps)[-2:] + 1)
+        rows = np.split(np.asarray(ordered, dtype=object), split_indices)
+        if len(rows) != 3 or any(len(row) == 0 for row in rows):
+            raise ValueError("cannot infer three nonempty branch rows")
+        target_values = tuple(rows[1].tolist())
     if target_branch_rank is None:
         target_branch = corresponding_branch(source_branch, target_values)
     else:
@@ -205,6 +220,8 @@ def reanchor_physical_handover(
     release_end = steps["left_release"]
     lift_end = steps.get("handover_receiver_lift", release_end)
     hold_end = steps.get("handover_confirm", release_end)
+    right_return_end = steps.get("right_return_start", hold_end)
+    left_point_end = steps.get("left_branch_point", right_return_end)
     transport_end = steps["tree_transport"]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
@@ -216,7 +233,13 @@ def reanchor_physical_handover(
     left[grasp_end + 1 : release_end + 1] = interpolate_poses(
         observed_left, corrected_release, release_end - grasp_end
     )
-    left[release_end + 1 : hold_end + 1] = corrected_release
+    left[release_end + 1 : right_return_end + 1] = corrected_release
+    if left_point_end > right_return_end:
+        left[right_return_end + 1 : left_point_end + 1] = interpolate_poses(
+            corrected_release,
+            trajectory.left_poses[left_point_end],
+            left_point_end - right_return_end,
+        )
     corrected_pregrasp = transfer_pose(
         right[pregrasp_end], nominal_mug_pose, observed_mug_pose
     )
@@ -250,10 +273,19 @@ def reanchor_physical_handover(
             corrected_grasp, corrected_lift_right, lift_end - release_end
         )
     right[lift_end + 1 : hold_end + 1] = corrected_lift_right
-    right[hold_end + 1 : transport_end + 1] = interpolate_poses(
-        corrected_lift_right,
+    if right_return_end > hold_end:
+        right[hold_end + 1 : right_return_end + 1] = interpolate_poses(
+            corrected_lift_right,
+            trajectory.right_poses[right_return_end],
+            right_return_end - hold_end,
+        )
+    right[right_return_end + 1 : left_point_end + 1] = trajectory.right_poses[
+        right_return_end
+    ]
+    right[left_point_end + 1 : transport_end + 1] = interpolate_poses(
+        trajectory.right_poses[left_point_end],
         trajectory.right_poses[transport_end],
-        transport_end - hold_end,
+        transport_end - left_point_end,
     )
     return SkillTrajectory(
         left_poses=left,
@@ -714,6 +746,39 @@ class HangMugSkillProgram:
             "handle_to_branch_insertion",
             insert_steps,
             right_pose=right_insert,
+        )
+
+    def post_handover_branch_setup(
+        self,
+        right_start: Any,
+        left_observer: Any,
+        *,
+        right_return_steps: int,
+        left_point_steps: int,
+    ) -> None:
+        """Sequence the carrier reset and branch-pointing setup.
+
+        The right gripper remains closed around the mug while its wrist returns
+        to the demonstrated start pose.  Only after that motion completes does
+        the open left arm move to the target-branch observer pose.  Subsequent
+        transport and insertion therefore begin from an explicit, auditable
+        two-step setup instead of blending both arm motions together.
+        """
+        if right_return_steps <= 0:
+            raise ValueError("right_return_steps must be positive")
+        if left_point_steps <= 0:
+            raise ValueError("left_point_steps must be positive")
+        self._append(
+            "right_return_start",
+            "post_handover_branch_setup",
+            right_return_steps,
+            right_pose=right_start,
+        )
+        self._append(
+            "left_branch_point",
+            "post_handover_branch_setup",
+            left_point_steps,
+            left_pose=left_observer,
         )
 
     def release_and_support(

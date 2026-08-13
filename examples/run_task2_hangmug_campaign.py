@@ -40,6 +40,9 @@ TIMING = Path("results/task2/pairs/000001/attempt_004_handover_confirm_hold/acce
 RESULTS = Path("results/task2")
 MIDDLE_ROW_BRANCHES = frozenset({"branch_layer_2_a", "branch_layer_2_b"})
 BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
+    "require_broad_pad_contact",
+    "post_handover_right_return_steps",
+    "left_branch_point_steps",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -178,6 +181,8 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
+    if strategy.get("require_broad_pad_contact"):
+        arguments.append("--require-broad-pad-contact")
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -185,6 +190,8 @@ def _repair_command(
     if strategy.get("handover_handle_frame_transfer"):
         arguments.append("--handover-handle-frame-transfer")
     for field, option in (
+        ("post_handover_right_return_steps", "--post-handover-right-return-steps"),
+        ("left_branch_point_steps", "--left-branch-point-steps"),
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
         ("branch_approach_height_m", "--branch-approach-height-m"),
@@ -290,6 +297,9 @@ def _repair_strategy(index: int) -> dict:
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
+        "require_broad_pad_contact",
+        "post_handover_right_return_steps",
+        "left_branch_point_steps",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -303,6 +313,12 @@ def _repair_strategy(index: int) -> dict:
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
+    if "require_broad_pad_contact" in value:
+        if value["require_broad_pad_contact"] is not True:
+            raise ValueError(
+                "broad pad contact must be true when selected"
+            )
+        strategy["require_broad_pad_contact"] = True
     if "handover_handle_frame_transfer" in value:
         enabled = value["handover_handle_frame_transfer"]
         if enabled is not True:
@@ -320,6 +336,24 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("pick lift margin must be in [0, 0.03] m")
         strategy["pick_lift_margin_m"] = float(margin)
+    setup_steps = (
+        value.get("post_handover_right_return_steps", 0),
+        value.get("left_branch_point_steps", 0),
+    )
+    if any(
+        isinstance(steps, bool)
+        or not isinstance(steps, int)
+        or not 0 <= steps <= 120
+        for steps in setup_steps
+    ):
+        raise ValueError("post-handover setup steps must be integers in [0, 120]")
+    if bool(setup_steps[0]) != bool(setup_steps[1]):
+        raise ValueError(
+            "right return and left branch-point steps must be selected together"
+        )
+    if setup_steps[0]:
+        strategy["post_handover_right_return_steps"] = setup_steps[0]
+        strategy["left_branch_point_steps"] = setup_steps[1]
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (

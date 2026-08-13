@@ -21,6 +21,7 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
     _branch_support_seated_pose,
@@ -590,6 +591,34 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             branch_roll_offset_rad=np.pi,
         )
 
+    _, _, middle = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (source_branch,),
+        _pose(),
+        tuple(
+            branch(float(index), height, 1.0)
+            for index, height in enumerate((0.3, 0.31, 0.9, 0.91, 1.5, 1.51))
+        ),
+        target_branch_row=2,
+    )
+    assert 0.44 <= middle.normalized_height <= 0.46
+
+
+def test_broad_pad_contact_rejects_fingertip_only_grasps():
+    interior = {
+        "left_grasp": True,
+        "left_finger_forces_n": [2.0, 3.0],
+        "left_pad_fractions": [0.35, 0.62],
+    }
+    assert _broad_pad_contact_receipt([interior] * 8, "left")["passed"]
+    fingertip = {**interior, "left_pad_fractions": [0.04, 0.62]}
+    receipt = _broad_pad_contact_receipt([fingertip] * 12, "left")
+    assert not receipt["passed"]
+    assert receipt["longest_consecutive_steps"] == 0
+
 
 def test_branch_support_seating_changes_only_vertical_waypoint_translation():
     pose = _pose(0.7, -0.2, 0.96)
@@ -920,6 +949,58 @@ def test_hangmug_program_is_one_continuous_named_rollout():
     assert trajectory.left_poses[transport_end:] == pytest.approx(
         np.broadcast_to(left_observer, trajectory.left_poses[transport_end:].shape)
     )
+
+
+def test_quality_setup_returns_right_then_points_left_before_insert():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_release = _pose(0.4, 0.2, 0.8)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    transport = _pose(0.5, -0.4, 1.0)
+    approach = _pose(0.7, -0.2, 0.9)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), left_release,
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_branch_setup(
+        right_start,
+        left_observer,
+        right_return_steps=3,
+        left_point_steps=4,
+    )
+    program.handle_to_branch_insert(
+        transport, approach, insert,
+        transport_steps=2, approach_steps=2, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_support(
+        insert, insert, unload_steps=1, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    assert _branch_reanchor_waypoints(trajectory)[:2] == (
+        "right_return_start",
+        "left_branch_point",
+    )
+    return_end = trajectory.waypoint_steps["right_return_start"]
+    point_end = trajectory.waypoint_steps["left_branch_point"]
+    transport_end = trajectory.waypoint_steps["tree_transport"]
+    np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
+    np.testing.assert_allclose(
+        trajectory.right_poses[return_end + 1 : point_end + 1],
+        np.repeat(right_start[None], point_end - return_end, axis=0),
+    )
+    np.testing.assert_allclose(trajectory.left_poses[point_end], left_observer)
+    np.testing.assert_allclose(
+        trajectory.left_poses[point_end + 1 : transport_end + 1],
+        np.repeat(left_observer[None], transport_end - point_end, axis=0),
+    )
+    unload_end = trajectory.waypoint_steps["branch_unload"]
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    assert np.all(trajectory.grippers[grasp_end : unload_end + 1, 1] == 0.0)
+    right = trajectory.grippers[:, 1]
+    assert np.all(np.diff(right[unload_end:]) <= 0.0)
+    assert right[-1] == pytest.approx(-0.0475)
 
 
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():
