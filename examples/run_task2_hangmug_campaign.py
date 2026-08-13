@@ -233,6 +233,11 @@ def _repair_command(
                 "--handover-target-local-pitch-rad",
                 str(strategy["handover_target_local_pitch_rad"]),
             ])
+        if "handover_pad_balance_m" in strategy:
+            arguments.extend([
+                "--handover-pad-balance-m",
+                str(strategy["handover_pad_balance_m"]),
+            ])
         if "handover_straddle_local_x_m" in strategy:
             arguments.extend([
                 "--handover-straddle-local-x-m",
@@ -303,6 +308,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "handover_target_local_pitch_rad",
+        "handover_pad_balance_m",
         "handover_straddle_local_x_m",
         "handover_orient_clearance_m",
         "handover_orient_steps",
@@ -504,6 +510,7 @@ def _repair_strategy(index: int) -> dict:
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
+    pad_balance = value.get("handover_pad_balance_m", 0.0)
     straddle = value.get("handover_straddle_local_x_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
@@ -542,6 +549,13 @@ def _repair_strategy(index: int) -> dict:
     ):
         raise ValueError("handover target local pitch must be within 45 degrees")
     if (
+        isinstance(pad_balance, bool)
+        or not isinstance(pad_balance, (int, float))
+        or not np.isfinite(pad_balance)
+        or abs(pad_balance) > 0.015
+    ):
+        raise ValueError("handover pad balance must be within 15 mm")
+    if (
         isinstance(straddle, bool)
         or not isinstance(straddle, (int, float))
         or not np.isfinite(straddle)
@@ -576,6 +590,10 @@ def _repair_strategy(index: int) -> dict:
     })
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
+    if "handover_pad_balance_m" in value:
+        if not orient_steps:
+            raise ValueError("handover pad balance requires orient-first descent")
+        strategy["handover_pad_balance_m"] = float(pad_balance)
     if orient_steps:
         strategy["handover_orient_clearance_m"] = float(orient_clearance)
         strategy["handover_orient_steps"] = orient_steps

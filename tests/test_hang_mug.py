@@ -40,6 +40,7 @@ from run_hangmug_skill_program import (
     _left_grasp_inset_toward_body,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
+    _handover_target_with_pad_balance,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
     _handover_gripper_proxy_receipt,
@@ -1057,6 +1058,35 @@ def test_handover_local_straddle_translates_only_along_oriented_closing_axis():
     )
     with pytest.raises(ValueError, match="within 14 cm"):
         _handover_target_with_local_straddle(pose, -0.141)
+
+
+def test_handover_pad_balance_preserves_right_pivot_and_deepens_left_pad():
+    from judo_isaaclab.put_pot import (
+        YAM_LEFT_FINGER_PIVOT_LOCAL_M,
+        YAM_RIGHT_FINGER_PIVOT_LOCAL_M,
+    )
+
+    pose = _handover_target_with_local_pitch(_pose(0.4, -0.1, 0.9), 0.2)
+    balanced = _handover_target_with_pad_balance(pose, 0.010)
+    right_before = pose[:3] + quaternion_rotate(
+        pose[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
+    right_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_RIGHT_FINGER_PIVOT_LOCAL_M
+    )
+    left_before = pose[:3] + quaternion_rotate(
+        pose[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    )
+    left_after = balanced[:3] + quaternion_rotate(
+        balanced[3:], YAM_LEFT_FINGER_PIVOT_LOCAL_M
+    )
+    np.testing.assert_allclose(right_after, right_before, atol=1.0e-12)
+    local_pad_depth_axis = quaternion_rotate(pose[3:], [0.0, 0.0, 1.0])
+    assert np.dot(left_after - left_before, local_pad_depth_axis) == pytest.approx(
+        0.010, abs=2.0e-6
+    )
+    with pytest.raises(ValueError, match="within 15 mm"):
+        _handover_target_with_pad_balance(pose, 0.015001)
 
 
 def test_pitched_receiver_orients_clear_then_descends_open_before_close():

@@ -153,6 +153,15 @@ def _parser() -> argparse.Namespace:
         help="Bounded local-Y rotation of the fixed receiving waypoint.",
     )
     parser.add_argument(
+        "--handover-pad-balance-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded receiver pivot that preserves the right finger contact "
+            "while deepening the left pad along its authored tip-to-base axis."
+        ),
+    )
+    parser.add_argument(
         "--handover-straddle-local-x-m",
         type=float,
         default=0.0,
@@ -1049,6 +1058,16 @@ def _handover_target_with_local_pitch(pose, angle_rad: float) -> np.ndarray:
     )
     result[3:] /= np.linalg.norm(result[3:])
     return result
+
+
+def _handover_target_with_pad_balance(pose, relative_depth_m: float) -> np.ndarray:
+    """Pivot about the valid right finger to deepen only the left receiver pad."""
+    from judo_isaaclab.put_pot import balance_handle_contact_across_finger_pads
+
+    depth = float(relative_depth_m)
+    if not np.isfinite(depth) or abs(depth) > 0.015:
+        raise ValueError("handover pad balance must be finite and within 15 mm")
+    return balance_handle_contact_across_finger_pads(pose, depth)
 
 
 def _handover_target_with_local_straddle(pose, local_x_m: float) -> np.ndarray:
@@ -2488,6 +2507,9 @@ def _build_skill(
     right_grasp = _handover_target_with_local_pitch(
         right_grasp, args.handover_target_local_pitch_rad
     )
+    right_grasp = _handover_target_with_pad_balance(
+        right_grasp, args.handover_pad_balance_m
+    )
     right_grasp = _handover_target_with_local_straddle(
         right_grasp, args.handover_straddle_local_x_m
     )
@@ -2754,6 +2776,10 @@ def main() -> None:
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
         args.handover_target_local_pitch_rad,
     )
+    _handover_target_with_pad_balance(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.handover_pad_balance_m,
+    )
     _handover_target_with_local_straddle(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
         args.handover_straddle_local_x_m,
@@ -2773,6 +2799,8 @@ def main() -> None:
         )
     if args.handover_straddle_local_x_m and not args.handover_orient_steps:
         raise ValueError("handover local straddle correction requires orient-first descent")
+    if args.handover_pad_balance_m and not args.handover_orient_steps:
+        raise ValueError("handover pad balance requires orient-first descent")
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -3732,6 +3760,8 @@ def main() -> None:
             "pair_geometry": {
                 "left_grasp_inset_m": float(args.left_grasp_inset_m),
                 "left_grasp_inset_frame": "live_target_body_center",
+                "handover_pad_balance_m": float(args.handover_pad_balance_m),
+                "handover_pad_balance_frame": "receiver_right_finger_pivot",
             },
             "terminal_stability": terminal_stability,
             "grasp_quality": {
