@@ -352,6 +352,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "budget_accounting",
             "enabled",
             "active",
+            "surface_tangent_enabled",
+            "surface_tangent_axis_valid",
+            "surface_tangent_axis_world",
             "preserve_transverse_centering",
             "preserve_bounded_closure",
             "bounded_closure_priority_active",
@@ -361,6 +364,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "requested_translation_m",
             "executed_translation_m",
             "retained_transverse_translation_world_m",
+            "executed_handle_normal_component_m",
+            "world_command_budget_m",
+            "world_command_norm_m",
             "total_translation_m",
             "maximum_step_m",
             "maximum_total_m",
@@ -421,6 +427,7 @@ def handle_local_mpc_step(
     depth_guard_alignment_streak: int = 0,
     depth_guard_released: bool = False,
     contact_fraction_recenter: bool = False,
+    contact_recenter_use_handle_tangent: bool = False,
     contact_recenter_preserve_transverse_centering: bool = False,
     contact_recenter_preserve_bounded_closure: bool = False,
     allow_bounded_closure_commit: bool = False,
@@ -599,6 +606,23 @@ def handle_local_mpc_step(
         if np.any(contacting)
         else mean_pad_axis
     )
+    contact_fraction_handle_tangent = (
+        contact_fraction_axis_world
+        - float(np.dot(contact_fraction_axis_world, depth_guard_axis))
+        * depth_guard_axis
+    )
+    contact_fraction_handle_tangent_norm = float(
+        np.linalg.norm(contact_fraction_handle_tangent)
+    )
+    surface_tangent_axis_valid = bool(
+        contact_fraction_handle_tangent_norm > 1.0e-9
+    )
+    contact_recenter_axis_world = (
+        contact_fraction_handle_tangent
+        / contact_fraction_handle_tangent_norm
+        if contact_recenter_use_handle_tangent and surface_tangent_axis_valid
+        else contact_fraction_axis_world
+    )
     contact_fraction_delta = 0.0
     if np.any(contacting) and np.all(np.isfinite(fractions[contacting])):
         fraction_corrections = []
@@ -640,6 +664,10 @@ def handle_local_mpc_step(
         and pot_motion_ok
         and peer_margin_ok
         and (
+            not contact_recenter_use_handle_tangent
+            or surface_tangent_axis_valid
+        )
+        and (
             not depth_guarded_transverse_intercept
             or next_depth_guard_released
         )
@@ -672,21 +700,42 @@ def handle_local_mpc_step(
     )
 
     retained_transverse_translation = np.zeros(3, dtype=np.float64)
+    recenter_world_command_budget_m = config.maximum_translation_step_m
     if contact_recenter_active:
         # contact_pad_fraction is measured from finger tip (0) toward finger
         # base (1).  Translating the finger opposite its tip->base axis moves a
         # fixed world contact baseward in the finger frame, increasing a low
         # fraction; the sign reverses naturally for a high fraction.
         contact_recenter_translation = (
-            -executed_recenter_translation_m * contact_fraction_axis_world
+            -executed_recenter_translation_m * contact_recenter_axis_world
         )
         if contact_recenter_preserve_transverse_centering:
-            retained_transverse_translation = translation_increment - float(
-                np.dot(translation_increment, contact_fraction_axis_world)
-            ) * contact_fraction_axis_world
+            if contact_recenter_use_handle_tangent:
+                handle_tangent_translation = translation_increment - float(
+                    np.dot(translation_increment, depth_guard_axis)
+                ) * depth_guard_axis
+                retained_transverse_translation = (
+                    handle_tangent_translation
+                    - float(
+                        np.dot(
+                            handle_tangent_translation,
+                            contact_recenter_axis_world,
+                        )
+                    )
+                    * contact_recenter_axis_world
+                )
+            else:
+                retained_transverse_translation = translation_increment - float(
+                    np.dot(translation_increment, contact_fraction_axis_world)
+                ) * contact_fraction_axis_world
+        if contact_recenter_use_handle_tangent:
+            recenter_world_command_budget_m = min(
+                config.maximum_translation_step_m,
+                remaining_recenter_m,
+            )
         translation_increment = _clip_norm(
             contact_recenter_translation + retained_transverse_translation,
-            config.maximum_translation_step_m,
+            recenter_world_command_budget_m,
         )
         rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
@@ -750,6 +799,23 @@ def handle_local_mpc_step(
     if bounded_closure_priority_active:
         translation_increment = nominal_translation_increment
         rotation_increment = nominal_rotation_increment
+    actual_recenter_translation_m = (
+        max(
+            0.0,
+            -float(np.dot(translation_increment, contact_recenter_axis_world)),
+        )
+        if contact_recenter_active and not bounded_closure_priority_active
+        else 0.0
+    )
+    reported_recenter_translation_m = (
+        actual_recenter_translation_m
+        if contact_recenter_use_handle_tangent
+        else (
+            executed_recenter_translation_m
+            if contact_recenter_active and not bounded_closure_priority_active
+            else 0.0
+        )
+    )
     target = wrist.copy()
     target[:3] += translation_increment
     target = _apply_axis_angle(target, rotation_increment)
@@ -858,6 +924,13 @@ def handle_local_mpc_step(
             "budget_accounting": "measured_positive_axial_wrist_displacement",
             "enabled": bool(contact_fraction_recenter),
             "active": contact_recenter_active,
+            "surface_tangent_enabled": bool(
+                contact_recenter_use_handle_tangent
+            ),
+            "surface_tangent_axis_valid": surface_tangent_axis_valid,
+            "surface_tangent_axis_world": (
+                contact_recenter_axis_world.tolist()
+            ),
             "preserve_transverse_centering": bool(
                 contact_recenter_preserve_transverse_centering
             ),
@@ -872,12 +945,17 @@ def handle_local_mpc_step(
             "contact_fraction_delta": contact_fraction_delta,
             "requested_translation_m": requested_recenter_translation_m,
             "executed_translation_m": (
-                executed_recenter_translation_m
-                if contact_recenter_active and not bounded_closure_priority_active
-                else 0.0
+                reported_recenter_translation_m
             ),
             "retained_transverse_translation_world_m": (
                 retained_transverse_translation.tolist()
+            ),
+            "executed_handle_normal_component_m": float(
+                np.dot(translation_increment, depth_guard_axis)
+            ),
+            "world_command_budget_m": recenter_world_command_budget_m,
+            "world_command_norm_m": float(
+                np.linalg.norm(translation_increment)
             ),
             "total_translation_m": next_contact_recenter_total_m,
             "maximum_step_m": config.maximum_contact_recenter_step_m,

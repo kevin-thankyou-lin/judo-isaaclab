@@ -123,6 +123,25 @@ def _quality_left_first_local_mpc_enabled(
     )
 
 
+def _quality_contact_origin_mask(
+    forces_n,
+    pad_fractions,
+    *,
+    include_left_force_backed_edges: bool = False,
+) -> np.ndarray:
+    """Identify real contact frames used by the pre-peer motion anchor."""
+
+    forces = np.asarray(forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if forces.shape != (4,) or fractions.shape != (4,):
+        raise ValueError("contact-origin telemetry must contain four pads")
+    finite = np.isfinite(fractions)
+    admissible = finite & (fractions >= 0.0) & (fractions <= 1.0)
+    if include_left_force_backed_edges:
+        admissible[:2] = finite[:2]
+    return (forces >= 0.1) & admissible
+
+
 def _robot_arm_registry_key(semantic_arm: str) -> str:
     """Map receipt-facing arm labels to the live YAM registry names."""
 
@@ -1088,6 +1107,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "Pair-owned opt-in that defines the left depth-guard axis from "
             "the observed handle contact-frame normal instead of the gripper "
             "pad axis; all controller bounds and release gates are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-quality-handle-tangent-contact-recenter",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that repairs a force-backed left edge contact "
+            "only within the observed handle tangent plane, removes retained "
+            "handle-normal motion, and anchors the unchanged pre-peer motion "
+            "guard on finite force-backed edge contacts."
         ),
     )
     parser.add_argument(
@@ -3256,6 +3285,15 @@ def main(argv: list[str] | None = None) -> None:
             "left handle-normal depth guard requires sequential quality MPC "
             "with the depth guard and single-pad transverse intercept"
         )
+    if args.target_left_quality_handle_tangent_contact_recenter and not (
+        args.target_left_quality_handle_normal_depth_guard
+        and args.target_handle_local_contact_fraction_recenter
+        and args.target_left_contact_recenter_preserve_transverse_centering
+    ):
+        raise ValueError(
+            "left handle-tangent contact recenter requires the handle-normal "
+            "depth guard and transverse-preserving contact recenter"
+        )
     if args.target_left_handle_pad_balance_limit_m is not None:
         if not quality_left_first_local_mpc:
             raise ValueError(
@@ -5100,11 +5138,12 @@ def main(argv: list[str] | None = None) -> None:
                                         ),
                                     )
                                 )
-                                physical = (
-                                    (all_forces >= 0.1)
-                                    & np.isfinite(all_fractions)
-                                    & (all_fractions >= 0.0)
-                                    & (all_fractions <= 1.0)
+                                physical = _quality_contact_origin_mask(
+                                    all_forces,
+                                    all_fractions,
+                                    include_left_force_backed_edges=bool(
+                                        args.target_left_quality_handle_tangent_contact_recenter
+                                    ),
                                 )
                                 if np.any(physical):
                                     contact_origin = np.asarray(
@@ -5249,6 +5288,10 @@ def main(argv: list[str] | None = None) -> None:
                                         or quality_left_first_local_mpc
                                     )
                                     and args.target_handle_local_contact_fraction_recenter
+                                ),
+                                contact_recenter_use_handle_tangent=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_handle_tangent_contact_recenter
                                 ),
                                 contact_recenter_preserve_transverse_centering=bool(
                                     active_arm == "left"
@@ -7438,6 +7481,12 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_interior_single_pad_transverse_intercept": bool(
                         args.target_left_quality_interior_single_pad_transverse_intercept
+                    ),
+                    "left_uses_handle_tangent_surface_recenter": bool(
+                        args.target_left_quality_handle_tangent_contact_recenter
+                    ),
+                    "left_force_backed_edge_contact_motion_anchor": bool(
+                        args.target_left_quality_handle_tangent_contact_recenter
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,

@@ -429,6 +429,89 @@ def test_handle_normal_depth_guard_removes_inward_handle_motion():
     )
 
 
+def test_handle_tangent_contact_recenter_removes_normal_motion_and_honors_budget():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    values = _inputs(
+        contact_window_step=22,
+        observed_handle_contact_frame=handle,
+        active_pad_axes_world=[[0.6, 0.0, 0.8], [0.6, 0.0, 0.8]],
+        active_finger_forces_n=[0.0, 4.5],
+        active_pad_fractions=[np.nan, 0.05],
+    )
+    corrected = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    recenter = corrected.frame_receipt["contact_fraction_recenter"]
+    control = np.asarray(
+        corrected.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    assert recenter["active"]
+    assert recenter["surface_tangent_enabled"]
+    assert recenter["surface_tangent_axis_valid"]
+    np.testing.assert_allclose(
+        recenter["surface_tangent_axis_world"], [0.0, 0.0, 1.0], atol=1.0e-12
+    )
+    np.testing.assert_allclose(control, [0.0, 0.0, -0.001], atol=1.0e-12)
+    assert recenter["executed_handle_normal_component_m"] == pytest.approx(0.0)
+    assert recenter["executed_translation_m"] == pytest.approx(0.001)
+    assert recenter["world_command_norm_m"] == pytest.approx(0.001)
+
+    budget_limited = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        contact_recenter_total_m=0.0116,
+    )
+    limited = budget_limited.frame_receipt["contact_fraction_recenter"]
+    assert limited["world_command_budget_m"] == pytest.approx(0.0004)
+    assert limited["world_command_norm_m"] == pytest.approx(0.0004)
+    assert limited["executed_translation_m"] == pytest.approx(0.0004)
+
+
+def test_handle_tangent_contact_recenter_fails_closed_for_degenerate_axis():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=handle,
+            active_pad_axes_world=[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.05],
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    assert command.fail_closed
+    assert command.fail_reason == "active_contact_outside_pad_margin"
+    assert not command.frame_receipt["contact_fraction_recenter"][
+        "surface_tangent_axis_valid"
+    ]
+    np.testing.assert_allclose(command.wrist_target_pose, _pose())
+
+
 def test_pair_15_attempt_32_handle_normal_counterfactual_is_tangential():
     handle = np.asarray(
         [

@@ -18,6 +18,7 @@ from run_putpot_skill_program import (
     _pivot_source_corridor_grasp_endpoint,
     _pad_balance_mpc_reference_active,
     _quality_left_first_local_mpc_enabled,
+    _quality_contact_origin_mask,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
     _robot_arm_registry_key,
@@ -88,6 +89,25 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     )
     parsed = _parser(required + ["--target-left-quality-handle-normal-depth-guard"])
     assert parsed.target_left_quality_handle_normal_depth_guard is True
+    parsed = _parser(
+        required + ["--target-left-quality-handle-tangent-contact-recenter"]
+    )
+    assert parsed.target_left_quality_handle_tangent_contact_recenter is True
+
+
+def test_force_backed_left_edge_contact_can_anchor_pre_peer_motion():
+    forces = [0.0, 6.0, 0.0, 7.0]
+    fractions = [np.nan, -0.033, np.nan, -0.04]
+    np.testing.assert_array_equal(
+        _quality_contact_origin_mask(forces, fractions),
+        [False, False, False, False],
+    )
+    np.testing.assert_array_equal(
+        _quality_contact_origin_mask(
+            forces, fractions, include_left_force_backed_edges=True
+        ),
+        [False, True, False, False],
+    )
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
