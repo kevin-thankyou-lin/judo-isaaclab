@@ -411,6 +411,69 @@ def test_single_pad_transverse_intercept_keeps_open_jaw_and_depth_guard():
     np.testing.assert_allclose(edge.wrist_target_pose, _pose())
 
 
+def test_transverse_aligned_two_pad_closure_waits_for_guard_release():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.005, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    values = _inputs(
+        contact_window_step=22,
+        observed_handle_contact_frame=handle,
+        active_finger_forces_n=[0.0, 4.5],
+        active_pad_fractions=[np.nan, 0.474],
+    )
+    waiting = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_alignment_streak=1,
+        allow_bounded_closure_commit=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_interior_single_pad_transverse_intercept=True,
+        allow_transverse_aligned_two_pad_closure=True,
+    )
+    waiting_closure = waiting.frame_receipt["closure"]
+    assert not waiting.depth_guard_released
+    assert not waiting_closure["transverse_aligned_two_pad_triggered"]
+    assert waiting.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+    assert not waiting.closure_committed
+
+    triggered = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_alignment_streak=2,
+        allow_bounded_closure_commit=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_interior_single_pad_transverse_intercept=True,
+        allow_transverse_aligned_two_pad_closure=True,
+    )
+    closure = triggered.frame_receipt["closure"]
+    assert triggered.depth_guard_released
+    assert closure["transverse_aligned_two_pad_trigger_enabled"]
+    assert closure["transverse_aligned_two_pad_triggered"]
+    assert closure["transverse_aligned_two_pad_closure_hold_active"]
+    assert closure["wrist_frozen_for_transverse_aligned_two_pad_closure"]
+    assert not closure["interior_single_pad_triggered"]
+    np.testing.assert_allclose(triggered.wrist_target_pose, _pose())
+    assert triggered.jaw_command == pytest.approx(-0.0435)
+    assert triggered.closure_committed
+
+    motion_guard = handle_local_mpc_step(
+        **{**values, "pre_peer_pot_displacement_m": 0.00301},
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_alignment_streak=2,
+        allow_bounded_closure_commit=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_interior_single_pad_transverse_intercept=True,
+        allow_transverse_aligned_two_pad_closure=True,
+    )
+    assert motion_guard.fail_closed
+    assert motion_guard.fail_reason == "pre_peer_pot_motion_exceeded"
+    assert motion_guard.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+
+
 def test_handle_normal_depth_guard_removes_inward_handle_motion():
     half_sqrt_two = np.sqrt(0.5)
     handle = np.asarray(

@@ -388,6 +388,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "interior_single_pad_triggered",
             "interior_single_pad_closure_hold_active",
             "wrist_frozen_for_interior_single_pad_closure",
+            "transverse_aligned_two_pad_trigger_enabled",
+            "transverse_aligned_two_pad_triggered",
+            "transverse_aligned_two_pad_closure_hold_active",
+            "wrist_frozen_for_transverse_aligned_two_pad_closure",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -443,6 +447,7 @@ def handle_local_mpc_step(
     pause_committed_closure_on_dual_force_backing: bool = False,
     allow_interior_single_pad_closure: bool = False,
     allow_interior_single_pad_transverse_intercept: bool = False,
+    allow_transverse_aligned_two_pad_closure: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -786,6 +791,21 @@ def handle_local_mpc_step(
         and not dual_force_backed
         and not fail_closed
     )
+    transverse_aligned_two_pad_triggered = bool(
+        allow_transverse_aligned_two_pad_closure
+        and depth_guarded_transverse_intercept
+        and next_depth_guard_released
+        and transverse_aligned
+        and np.count_nonzero(contacting) == 1
+        and active_margin_ok
+        and pot_motion_ok
+    )
+    transverse_aligned_two_pad_closure_hold_active = bool(
+        allow_transverse_aligned_two_pad_closure
+        and (transverse_aligned_two_pad_triggered or closure_committed)
+        and not dual_force_backed
+        and not fail_closed
+    )
 
     retained_transverse_translation = np.zeros(3, dtype=np.float64)
     recenter_world_command_budget_m = config.maximum_translation_step_m
@@ -852,7 +872,10 @@ def handle_local_mpc_step(
         # swept around the handle.  Closure remains governed by the unchanged
         # two-sided pose gate below.
         rotation_increment = np.zeros(3, dtype=np.float64)
-    if interior_single_pad_closure_hold_active:
+    if (
+        interior_single_pad_closure_hold_active
+        or transverse_aligned_two_pad_closure_hold_active
+    ):
         # A force-backed interior pad is stronger near-contact evidence than
         # the distant nominal contact-frame residual.  Keep that loaded pad
         # fixed while the existing bounded jaw stroke brings in its peer.
@@ -866,6 +889,7 @@ def handle_local_mpc_step(
         aligned_for_closure
         or (allow_bounded_closure_commit and closure_committed)
         or interior_single_pad_triggered
+        or transverse_aligned_two_pad_triggered
     )
     pause_committed_closure = bool(
         pause_committed_closure_on_dual_force_backing
@@ -1101,6 +1125,20 @@ def handle_local_mpc_step(
             ),
             "wrist_frozen_for_interior_single_pad_closure": bool(
                 interior_single_pad_closure_hold_active
+                and np.allclose(translation_increment, 0.0, atol=1.0e-12)
+                and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
+            ),
+            "transverse_aligned_two_pad_trigger_enabled": bool(
+                allow_transverse_aligned_two_pad_closure
+            ),
+            "transverse_aligned_two_pad_triggered": (
+                transverse_aligned_two_pad_triggered
+            ),
+            "transverse_aligned_two_pad_closure_hold_active": (
+                transverse_aligned_two_pad_closure_hold_active
+            ),
+            "wrist_frozen_for_transverse_aligned_two_pad_closure": bool(
+                transverse_aligned_two_pad_closure_hold_active
                 and np.allclose(translation_increment, 0.0, atol=1.0e-12)
                 and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
             ),

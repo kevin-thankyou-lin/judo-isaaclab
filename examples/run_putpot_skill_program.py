@@ -1298,6 +1298,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "path through the force-free preorientation."
         ),
     )
+    parser.add_argument(
+        "--target-left-quality-transverse-aligned-two-pad-closure",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that starts the bounded left jaw close only "
+            "after one broad interior pad and the existing three-frame "
+            "transverse depth-guard alignment prove the peer pad can acquire."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -3445,6 +3454,17 @@ def main(argv: list[str] | None = None) -> None:
             "left loaded-pad pivot requires handle-normal jaw refinement and "
             "force-free peer-axis preorientation"
         )
+    if args.target_left_quality_transverse_aligned_two_pad_closure and not (
+        args.target_left_quality_handle_normal_loaded_pad_pivot
+        and args.target_left_quality_interior_single_pad_transverse_intercept
+        and args.target_left_bounded_closure_commit
+        and args.target_left_bounded_closure_dual_force_stop
+    ):
+        raise ValueError(
+            "left transverse-aligned two-pad closure requires the loaded-pad "
+            "pivot, single-pad transverse intercept, committed bounded closure, "
+            "and dual-force stop"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (
             args.target_handle_local_mpc_acquisition
@@ -5495,6 +5515,10 @@ def main(argv: list[str] | None = None) -> None:
                                 allow_interior_single_pad_transverse_intercept=bool(
                                     active_arm == "left"
                                     and args.target_left_quality_interior_single_pad_transverse_intercept
+                                ),
+                                allow_transverse_aligned_two_pad_closure=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_transverse_aligned_two_pad_closure
                                 ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
@@ -7697,6 +7721,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_interior_single_pad_transverse_intercept": bool(
                         args.target_left_quality_interior_single_pad_transverse_intercept
+                    ),
+                    "left_transverse_aligned_two_pad_closure": bool(
+                        args.target_left_quality_transverse_aligned_two_pad_closure
                     ),
                     "left_uses_handle_tangent_surface_recenter": bool(
                         args.target_left_quality_handle_tangent_contact_recenter
