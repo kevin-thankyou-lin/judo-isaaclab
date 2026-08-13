@@ -1280,6 +1280,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "peer-axis wrist correction during the force-free left preorientation."
         ),
     )
+    parser.add_argument(
+        "--target-left-quality-handle-normal-jaw-refinement",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that refines the force-free peer-axis left jaw "
+            "orientation toward its assigned handle normal by at most the "
+            "existing 0.35 rad correction bound."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -3411,6 +3420,14 @@ def main(argv: list[str] | None = None) -> None:
             "quality peer-axis preorientation requires strict quality left-first "
             "MPC, a measured contact pivot, and force-free preorientation"
         )
+    if args.target_left_quality_handle_normal_jaw_refinement and not (
+        args.target_left_quality_peer_axis_preorientation
+        and args.target_left_quality_handle_normal_depth_guard
+    ):
+        raise ValueError(
+            "left handle-normal jaw refinement requires force-free peer-axis "
+            "preorientation and the left handle-normal depth guard"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (
             args.target_handle_local_mpc_acquisition
@@ -4666,6 +4683,38 @@ def main(argv: list[str] | None = None) -> None:
             quality_peer_axis_receipt["receiving_alignment"] = (
                 peer_axis_alignment
             )
+            if args.target_left_quality_handle_normal_jaw_refinement:
+                handle_normal_target_left_local = rotate_marker_vector(
+                    diagnostic_target_contact_frames_local["left"][3:],
+                    np.asarray([0.0, 0.0, 1.0], dtype=np.float64),
+                )
+                if (
+                    np.dot(
+                        handle_normal_target_left_local,
+                        quality_peer_axis_target_left_local,
+                    )
+                    < 0.0
+                ):
+                    handle_normal_target_left_local *= -1.0
+                (
+                    local_mpc_left_contact_prior,
+                    local_mpc_left_pad_axis_prior_local,
+                    handle_normal_refinement,
+                ) = align_object_local_gripper_prior_to_jaw_axis(
+                    local_mpc_left_contact_prior,
+                    quality_peer_axis_target_left_local,
+                    handle_normal_target_left_local,
+                    local_mpc_left_pad_axis_prior_local,
+                    maximum_correction_rad=0.35,
+                    clip_excess_correction=True,
+                )
+                local_mpc_left_jaw_axis_prior_local = np.asarray(
+                    handle_normal_refinement["applied_jaw_axis_local"],
+                    dtype=np.float64,
+                )
+                quality_peer_axis_receipt["handle_normal_refinement"] = (
+                    handle_normal_refinement
+                )
             if args.target_left_quality_peer_axis_preorientation:
                 aligned_world = compose_pose(
                     target_geometry.root_pose,

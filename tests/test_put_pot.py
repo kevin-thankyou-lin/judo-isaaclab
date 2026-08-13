@@ -1730,6 +1730,25 @@ def test_peer_jaw_axis_alignment_transfers_only_one_bounded_direction():
             current_pad,
         )
 
+    clipped, clipped_pad, clipped_receipt = (
+        align_object_local_gripper_prior_to_jaw_axis(
+            pose,
+            current_jaw,
+            -transferred,
+            current_pad,
+            clip_excess_correction=True,
+        )
+    )
+    assert clipped[:3] == pytest.approx(pose[:3])
+    assert clipped_receipt["correction_rad"] == pytest.approx(0.35)
+    assert clipped_receipt["requested_correction_rad"] > 0.35
+    assert clipped_receipt["correction_clipped"]
+    assert not clipped_receipt["target_reached"]
+    assert np.linalg.norm(clipped_receipt["applied_jaw_axis_local"]) == pytest.approx(
+        1.0
+    )
+    assert np.linalg.norm(clipped_pad) == pytest.approx(1.0)
+
 
 def test_transport_contact_reanchor_uses_contact_feedback_horizon():
     assert TRANSPORT_CONTACT_REANCHOR_MIN_STEPS == CONTACT_FEEDBACK_HORIZON_STEPS

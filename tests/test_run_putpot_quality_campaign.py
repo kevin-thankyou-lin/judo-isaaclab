@@ -76,6 +76,10 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     parsed = _parser(required + ["--target-left-quality-peer-axis-preorientation"])
     assert parsed.target_left_quality_peer_axis_preorientation is True
     parsed = _parser(
+        required + ["--target-left-quality-handle-normal-jaw-refinement"]
+    )
+    assert parsed.target_left_quality_handle_normal_jaw_refinement is True
+    parsed = _parser(
         required + ["--target-left-quality-interior-single-pad-closure"]
     )
     assert parsed.target_left_quality_interior_single_pad_closure is True

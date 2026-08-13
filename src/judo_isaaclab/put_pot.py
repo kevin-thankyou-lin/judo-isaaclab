@@ -1622,6 +1622,7 @@ def align_object_local_gripper_prior_to_jaw_axis(
     current_pad_axis_local: Any,
     *,
     maximum_correction_rad: float = 0.35,
+    clip_excess_correction: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Apply the smallest bounded rotation that aligns a receiving jaw axis.
 
@@ -1648,9 +1649,13 @@ def align_object_local_gripper_prior_to_jaw_axis(
     if not np.isfinite(maximum_correction_rad) or maximum_correction_rad <= 0.0:
         raise ValueError("maximum_correction_rad must be positive and finite")
     dot = float(np.clip(np.dot(current, target), -1.0, 1.0))
-    angle = float(np.arccos(dot))
-    if angle > maximum_correction_rad + 1.0e-12:
+    requested_angle = float(np.arccos(dot))
+    if (
+        requested_angle > maximum_correction_rad + 1.0e-12
+        and not clip_excess_correction
+    ):
         raise ValueError("peer jaw-axis correction exceeds the bounded limit")
+    angle = min(requested_angle, maximum_correction_rad)
     cross = np.cross(current, target)
     cross_norm = float(np.linalg.norm(cross))
     if cross_norm <= 1.0e-12:
@@ -1664,16 +1669,22 @@ def align_object_local_gripper_prior_to_jaw_axis(
     result = pose.copy()
     result[3:] = quaternion_multiply(delta, pose[3:])
     result[3:] /= np.linalg.norm(result[3:])
+    rotated_jaw = quaternion_rotate(delta, current)
     rotated_pad = quaternion_rotate(delta, pad)
     receipt = {
         "mechanism": "bounded_peer_jaw_axis_alignment",
         "current_jaw_axis_local": current.tolist(),
         "target_jaw_axis_local": target.tolist(),
+        "applied_jaw_axis_local": rotated_jaw.tolist(),
         "current_pad_axis_local": pad.tolist(),
         "rotated_pad_axis_local": rotated_pad.tolist(),
         "rotation_axis_local": rotation_axis.tolist(),
         "correction_rad": angle,
         "correction_deg": float(np.degrees(angle)),
+        "requested_correction_rad": requested_angle,
+        "requested_correction_deg": float(np.degrees(requested_angle)),
+        "correction_clipped": bool(angle < requested_angle - 1.0e-12),
+        "target_reached": bool(angle >= requested_angle - 1.0e-12),
         "maximum_correction_rad": float(maximum_correction_rad),
         "position_unchanged": bool(np.array_equal(result[:3], pose[:3])),
     }
