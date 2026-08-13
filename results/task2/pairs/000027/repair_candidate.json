@@ -10,12 +10,12 @@
     0.005
   ],
   "handover_standoff_outside_m": 0.11,
-  "handover_straddle_local_x_m": 0.015459999999999998,
-  "handover_target_camera_clockwise_roll_rad": 0.24434609527920614,
+  "handover_straddle_local_x_m": 0.033999999999999996,
+  "handover_target_camera_clockwise_roll_rad": 0.4363323129985824,
   "handover_target_offset_m": [
-    -0.0021769477583619694,
-    -0.017847586837413477,
-    0.0013132183894341357
+    0.0024269714405810248,
+    -0.027155462150173452,
+    -0.02427325040115356
   ],
   "post_handover_rest_observer_steps": 60,
   "post_release_return_to_rest_steps": 120,
