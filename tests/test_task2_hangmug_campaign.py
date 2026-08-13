@@ -191,6 +191,7 @@ def test_first_true_is_fail_closed():
 
 
 def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch):
+    monkeypatch.delenv("CPGEN_LANE_ID", raising=False)
     proc = tmp_path / "123"
     proc.mkdir()
     (proc / "comm").write_text("python\n")
@@ -199,6 +200,26 @@ def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch)
     assert campaign._worker_pids() == [123]
     (proc / "cmdline").write_bytes(b"codex\0prompt mentions run_hangmug_skill_program.py\0")
     assert campaign._worker_pids() == []
+
+
+def test_worker_gate_is_scoped_to_the_explicit_lane(tmp_path, monkeypatch):
+    own = tmp_path / "123"
+    other = tmp_path / "456"
+    for process, lane in ((own, "pair000024"), (other, "pair000025")):
+        process.mkdir()
+        (process / "comm").write_text("python\n")
+        (process / "cmdline").write_bytes(
+            b"python\0examples/run_hangmug_skill_program.py\0"
+        )
+        (process / "environ").write_bytes(
+            f"CPGEN_LANE_ID={lane}\0CUDA_VISIBLE_DEVICES=2\0".encode()
+        )
+    monkeypatch.setenv("CPGEN_LANE_ID", "pair000024")
+    monkeypatch.setattr(
+        campaign.Path, "glob", lambda _self, _pattern: [other, own]
+    )
+
+    assert campaign._worker_pids() == [123]
 
 
 def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch):
