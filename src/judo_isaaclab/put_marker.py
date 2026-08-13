@@ -153,14 +153,29 @@ def _slerp(left: np.ndarray, right: np.ndarray, fraction: np.ndarray) -> np.ndar
     ) / denominator
 
 
-def interpolate_poses(start: Any, target: Any, steps: int) -> np.ndarray:
-    """Quintic Cartesian interpolation including the target, excluding the start."""
+def interpolate_poses(
+    start: Any,
+    target: Any,
+    steps: int,
+    *,
+    uniform: bool = False,
+) -> np.ndarray:
+    """Cartesian interpolation including the target, excluding the start.
+
+    The default quintic time law remains appropriate for contact-free motion.
+    ``uniform`` retains the identical pose segment and endpoint while providing
+    immediate, bounded clearance along an already-screened retreat.
+    """
     if steps < 1:
         raise ValueError("steps must be positive")
     start = _pose(start, "start")
     target = _pose(target, "target")
     fraction = np.linspace(1.0 / steps, 1.0, steps)
-    smooth = fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    smooth = (
+        fraction
+        if uniform
+        else fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
+    )
     result = np.empty((steps, 7), dtype=np.float64)
     result[:, :3] = start[:3] + smooth[:, None] * (target[:3] - start[:3])
     result[:, 3:] = _slerp(start[3:], target[3:], smooth)

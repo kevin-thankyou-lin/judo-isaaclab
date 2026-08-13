@@ -1430,6 +1430,64 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     json.dumps(curved_receipt)
 
 
+def test_uniform_post_release_return_preserves_direct_segment_and_clears_immediately():
+    right_start = _pose(0.2, -0.7, 0.9)
+    preinsert = _pose(0.7, -0.2, 0.95)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(right_start, _pose(), steps=4)
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=5, insert_steps=2,
+    )
+    program.release_and_return_to_rest(
+        insert,
+        right_start,
+        support_steps=2,
+        release_steps=3,
+        return_steps=5,
+        settle_steps=2,
+        uniform_return=True,
+    )
+    trajectory = program.build()
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    expected = interpolate_poses(
+        trajectory.right_poses[release_end], right_start, 5, uniform=True
+    )
+    np.testing.assert_allclose(
+        trajectory.right_poses[release_end + 1 : return_end + 1], expected
+    )
+    fractions = np.linalg.norm(
+        expected[:, :3] - trajectory.right_poses[release_end, :3], axis=1
+    ) / np.linalg.norm(right_start[:3] - trajectory.right_poses[release_end, :3])
+    np.testing.assert_allclose(fractions, np.linspace(0.2, 1.0, 5))
+    np.testing.assert_allclose(
+        trajectory.grippers[release_end + 1 :, 1], -0.0475
+    )
+
+    adjusted = reanchor_branch_transport_contact(
+        trajectory,
+        _pose(0.05, -0.02, 0.03),
+        _pose(0.35, -0.25, 0.82),
+        _pose(0.425, -0.26, 0.865),
+        completed_waypoint="carrying_rest_observer",
+        uniform_post_release_return=True,
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[release_end + 1 : return_end + 1],
+        interpolate_poses(
+            adjusted.right_poses[release_end],
+            trajectory.right_poses[return_end],
+            5,
+            uniform=True,
+        ),
+    )
+
+
 def test_direct_quality_contract_applies_support_offset_only_after_insertion():
     right_start = _pose(0.2, -0.7, 0.9)
     preinsert = _pose(0.7, -0.2, 0.95)

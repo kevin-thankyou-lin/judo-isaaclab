@@ -46,6 +46,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_handover_rest_observer_steps",
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
+    "post_release_return_uniform_interpolation",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -187,6 +188,8 @@ def _repair_command(
     ]
     if strategy.get("require_broad_pad_contact"):
         arguments.append("--require-broad-pad-contact")
+    if strategy.get("post_release_return_uniform_interpolation"):
+        arguments.append("--post-release-return-uniform-interpolation")
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -318,6 +321,7 @@ def _repair_strategy(index: int) -> dict:
         "post_handover_rest_observer_steps",
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
+        "post_release_return_uniform_interpolation",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -419,6 +423,17 @@ def _repair_strategy(index: int) -> dict:
             )
         strategy["direct_rest_to_preinsert_steps"] = direct_steps[0]
         strategy["post_release_return_to_rest_steps"] = direct_steps[1]
+    if "post_release_return_uniform_interpolation" in value:
+        enabled = value["post_release_return_uniform_interpolation"]
+        if enabled is not True:
+            raise ValueError(
+                "uniform post-release return must be true when selected"
+            )
+        if not direct_steps[1]:
+            raise ValueError(
+                "uniform post-release return requires direct choreography"
+            )
+        strategy["post_release_return_uniform_interpolation"] = True
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (

@@ -520,6 +520,7 @@ def reanchor_branch_transport_contact(
     observed_right_pose: Any,
     *,
     completed_waypoint: str = "left_release",
+    uniform_post_release_return: bool = False,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -572,6 +573,7 @@ def reanchor_branch_transport_contact(
             right[release_end],
             trajectory.right_poses[direct_return],
             direct_return - release_end,
+            uniform=uniform_post_release_return,
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -596,6 +598,7 @@ class HangMugSkillProgram:
         self._initial_right = self._right.copy()
         self._initial_grippers = (self._left_gripper, self._right_gripper)
         self._waypoints: list[SkillWaypoint] = []
+        self._uniform_pose_waypoints: set[str] = set()
 
     def _append(
         self,
@@ -923,6 +926,7 @@ class HangMugSkillProgram:
         return_steps: int,
         settle_steps: int,
         opened: float = -0.0475,
+        uniform_return: bool = False,
     ) -> None:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
@@ -947,6 +951,8 @@ class HangMugSkillProgram:
             return_steps,
             right_pose=right_rest,
         )
+        if uniform_return:
+            self._uniform_pose_waypoints.add("post_release_return")
         self._append(
             "stable_support",
             "stable_settle",
@@ -971,7 +977,12 @@ class HangMugSkillProgram:
                 interpolate_poses(left, waypoint.left_pose, waypoint.steps)
             )
             right_parts.append(
-                interpolate_poses(right, waypoint.right_pose, waypoint.steps)
+                interpolate_poses(
+                    right,
+                    waypoint.right_pose,
+                    waypoint.steps,
+                    uniform=waypoint.name in self._uniform_pose_waypoints,
+                )
             )
             fraction = np.linspace(1.0 / waypoint.steps, 1.0, waypoint.steps)
             smooth = fraction**3 * (
