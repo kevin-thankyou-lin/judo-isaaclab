@@ -12,6 +12,7 @@ from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
+    _offset_object_contact_frame,
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
@@ -326,6 +327,16 @@ def test_measured_pad_depth_translation_can_preserve_force_free_pregrasp():
         0.0,
         0.0,
     ]
+
+
+def test_object_local_pad_depth_offset_moves_live_mpc_contact_reference():
+    root = [0.7, 0.1, 0.8, np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)]
+    contact = [0.6, 0.2, 0.9, 1.0, 0.0, 0.0, 0.0]
+
+    shifted = _offset_object_contact_frame(root, contact, [0.01, 0.0, 0.0])
+
+    assert shifted[:3] == pytest.approx([0.6, 0.21, 0.9])
+    assert shifted[3:] == pytest.approx(contact[3:])
 
 
 def _runner_args(tmp_path):

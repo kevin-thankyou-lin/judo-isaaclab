@@ -374,6 +374,24 @@ def _translate_source_corridor_endpoints(
     return pregrasp, grasp
 
 
+def _offset_object_contact_frame(
+    observed_object_pose, observed_contact_frame, object_local_translation
+):
+    """Move a live contact reference by one bounded object-local vector."""
+
+    from judo_isaaclab.put_marker import quaternion_rotate
+
+    root = np.asarray(observed_object_pose, dtype=np.float64)
+    contact = np.asarray(observed_contact_frame, dtype=np.float64).copy()
+    translation = np.asarray(object_local_translation, dtype=np.float64)
+    if root.shape != (7,) or contact.shape != (7,) or translation.shape != (3,):
+        raise ValueError("object, contact, and local translation shapes are invalid")
+    if not np.all(np.isfinite(np.concatenate((root, contact, translation)))):
+        raise ValueError("object-relative contact offset must be finite")
+    contact[:3] += quaternion_rotate(root[3:], translation)
+    return contact
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -717,6 +735,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "Preserve the measured force-free mapped left pregrasp and ramp "
             "the critic-owned pad-depth translation only toward the grasp "
             "endpoint."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-mpc-reference",
+        action="store_true",
+        help=(
+            "Carry the same critic-owned pad-depth translation into the live "
+            "left MPC contact reference after the force-free pregrasp."
         ),
     )
     parser.add_argument(
@@ -2699,6 +2725,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     pad_balance_requested = bool(
         args.target_left_precontact_pad_balance_preserve_pregrasp
+        or args.target_left_precontact_pad_balance_mpc_reference
     ) or any(
         value is not None
         for value in (
@@ -2721,6 +2748,13 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "precontact pad balance requires strict quality left-first "
             "handle-local MPC"
+        )
+    if (
+        args.target_left_precontact_pad_balance_mpc_reference
+        and not args.target_left_precontact_pad_balance_preserve_pregrasp
+    ):
+        raise ValueError(
+            "pad-balance MPC reference requires the force-free pregrasp"
         )
     if quality_left_first_local_mpc != bool(
         args.target_quality_peer_axis_diagnosis_json
@@ -3035,6 +3069,7 @@ def main(argv: list[str] | None = None) -> None:
         target_left_grasp_orientation_override_local_wxyz = None
         static_precontact_jaw_translation = None
         precontact_pad_balance = None
+        local_mpc_left_pad_balance_translation_local = None
         source_contact_frame_correction = None
         diagnostic_target_left_contact_frame = None
         diagnostic_target_contact_frames_local = None
@@ -3654,6 +3689,22 @@ def main(argv: list[str] | None = None) -> None:
                     precontact_pad_balance["collision_clear_pregrasp_preserved"] = bool(
                         args.target_left_precontact_pad_balance_preserve_pregrasp
                     )
+                    if args.target_left_precontact_pad_balance_mpc_reference:
+                        local_mpc_left_pad_balance_translation_local = (
+                            rotate_marker_vector(
+                                inverse_marker_pose(calibration_pot_pose)[3:],
+                                np.asarray(
+                                    precontact_pad_balance["translation_world_m"],
+                                    dtype=np.float64,
+                                ),
+                            )
+                        )
+                        precontact_pad_balance[
+                            "mpc_contact_reference_translation_local_m"
+                        ] = local_mpc_left_pad_balance_translation_local.tolist()
+                        precontact_pad_balance["mpc_contact_reference_applied"] = True
+                    else:
+                        precontact_pad_balance["mpc_contact_reference_applied"] = False
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
                         _translate_source_corridor_endpoints(
@@ -4483,6 +4534,16 @@ def main(argv: list[str] | None = None) -> None:
                                 samples[-1]["pot_pose"],
                                 diagnostic_target_contact_frames_local[active_arm],
                             )
+                            if (
+                                active_arm == "left"
+                                and local_mpc_left_pad_balance_translation_local
+                                is not None
+                            ):
+                                observed_handle = _offset_object_contact_frame(
+                                    samples[-1]["pot_pose"],
+                                    observed_handle,
+                                    local_mpc_left_pad_balance_translation_local,
+                                )
                             contact_prior_local = (
                                 local_mpc_right_contact_prior_local
                                 if active_arm == "right"
