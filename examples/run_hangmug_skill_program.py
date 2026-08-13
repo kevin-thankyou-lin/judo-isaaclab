@@ -1506,13 +1506,20 @@ def _handover_wave_contract_receipt(
         else []
     )
     first_secure = None if not secure_rows else secure_rows[0]
+    # The task manager may disable the giver assist on the same completed
+    # controller row that first establishes the receiver's secure contact.
+    # Require the assist through every earlier handover row and require the
+    # giver's physical grasp on that boundary row.  Requiring the assist in
+    # the post-step sample at ``first_secure`` would reject the intended
+    # atomic handover transition even though the giver held up to it.
     giver_held_until_secure = bool(
         first_secure is not None
+        and sample_rows[first_secure]["left_grasp"]
         and all(
             sample_rows[row]["left_grasp"]
             and sample_rows[row]["grasp_assist_engaged"].get("left", False)
             for row in observed_handover_rows
-            if row <= first_secure
+            if row < first_secure
         )
     )
     right_gripper = (

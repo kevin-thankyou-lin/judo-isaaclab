@@ -3,11 +3,55 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 import run_task2_hangmug_campaign as campaign
+
+
+def test_handover_wave_audit_accepts_atomic_giver_assist_release():
+    names = np.asarray(
+        ["handover_pregrasp", "right_grasp", "right_grasp"], dtype=str
+    )
+    actions = np.zeros((3, 14), dtype=np.float64)
+    actions[:, 13] = [-0.0475, -0.02, 0.0]
+    live = {
+        "passed": True,
+        "expected_rows": 3,
+        "observed_rows": 3,
+        "first_right_mug_contact": {"waypoint": "right_grasp"},
+    }
+    result = {
+        "handover_wave_contract": {
+            "passed": True,
+            "plan_screens": {
+                "clear_pregrasp": {"passed": True},
+                "open_approach": {"passed": True},
+            },
+            "live_physx_contact_guard": live,
+        }
+    }
+    trace = {
+        "semantic_waypoints": names,
+        "actions": actions,
+        "left_grasp": np.asarray([True, True, True]),
+        "left_assist_engaged": np.asarray([True, True, False]),
+        "right_grasp": np.asarray([False, False, True]),
+        "right_assist_engaged": np.asarray([False, False, True]),
+        "right_finger_forces_n": np.asarray([[0, 0], [0, 0], [2, 3]]),
+        "right_pad_fractions": np.asarray(
+            [[np.nan, np.nan], [np.nan, np.nan], [0.4, 0.6]]
+        ),
+    }
+
+    receipt = campaign._handover_wave_audit(result, trace)
+    assert receipt["passed"] is True
+
+    trace["left_assist_engaged"] = np.asarray([True, False, False])
+    with pytest.raises(RuntimeError, match="handover wave audit failed"):
+        campaign._handover_wave_audit(result, trace)
 
 
 def _digest(path):

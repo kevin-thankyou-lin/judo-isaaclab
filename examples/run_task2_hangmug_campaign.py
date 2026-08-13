@@ -961,14 +961,18 @@ def _handover_wave_audit(result: dict, trace) -> dict:
     )
     secure_rows = np.flatnonzero(secure)
     first_secure = None if not len(secure_rows) else int(secure_rows[0])
+    left_grasp = np.asarray(trace["left_grasp"], dtype=bool)
+    left_assist = np.asarray(trace["left_assist_engaged"], dtype=bool)
+    prior_handover_rows = (
+        np.empty((0,), dtype=int)
+        if first_secure is None
+        else handover_rows[handover_rows < first_secure]
+    )
     giver_held = bool(
         first_secure is not None
-        and np.asarray(trace["left_grasp"], dtype=bool)[
-            handover_rows[handover_rows <= first_secure]
-        ].all()
-        and np.asarray(trace["left_assist_engaged"], dtype=bool)[
-            handover_rows[handover_rows <= first_secure]
-        ].all()
+        and left_grasp[first_secure]
+        and left_grasp[prior_handover_rows].all()
+        and left_assist[prior_handover_rows].all()
     )
     right_gripper = actions[:, 13]
     plan_screens = receipt.get("plan_screens") or {}

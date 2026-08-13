@@ -1340,7 +1340,9 @@ def test_handover_wave_contract_requires_screened_contact_before_release():
                 "left_grasp": row <= secure_row,
                 "right_grasp": secure,
                 "grasp_assist_engaged": {
-                    "left": row <= secure_row,
+                    # The authored/task-manager release is allowed on the
+                    # same post-step sample that first secures the receiver.
+                    "left": row < secure_row,
                     "right": secure,
                 },
                 "left_finger_forces_n": [2.0, 2.0],
@@ -1382,6 +1384,20 @@ def test_handover_wave_contract_requires_screened_contact_before_release():
     assert receipt["live_physx_contact_guard"]["first_right_mug_contact"][
         "waypoint"
     ] == "right_grasp_settle"
+
+    samples[secure_row - 1]["grasp_assist_engaged"]["left"] = False
+    rejected = _handover_wave_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{}, *samples],
+        {
+            "clear_pregrasp": {"passed": True},
+            "open_approach": {"passed": True},
+        },
+        live_rows,
+    )
+    assert rejected["checks"]["left_giver_held_until_right_contact_secure"] is False
 
 
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():
