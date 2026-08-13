@@ -744,6 +744,27 @@ def test_guard_lifecycle_requires_all_markers_and_live_zero_workers(tmp_path, mo
         campaign._guard_lifecycle(tmp_path)
 
 
+def test_repair_guard_override_is_explicit_and_executable(tmp_path, monkeypatch):
+    original = tmp_path / "classification-guard"
+    original.write_text("#!/bin/sh\n")
+    original.chmod(0o755)
+    override = tmp_path / "two-worker-guard"
+    override.write_text("#!/bin/sh\n")
+    override.chmod(0o755)
+    monkeypatch.setattr(campaign, "GUARD", original)
+
+    campaign._activate_repair_guard_override()
+    assert campaign.GUARD == original
+
+    monkeypatch.setenv("CPGEN_REPAIR_GUARD", str(override))
+    campaign._activate_repair_guard_override()
+    assert campaign.GUARD == override
+
+    override.chmod(0o644)
+    with pytest.raises(RuntimeError, match="not an executable file"):
+        campaign._activate_repair_guard_override()
+
+
 def _run_one_fixture(tmp_path, monkeypatch, classification):
     results = tmp_path / "task2"
     results.mkdir()

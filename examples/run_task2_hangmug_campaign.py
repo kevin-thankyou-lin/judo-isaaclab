@@ -1455,6 +1455,18 @@ def _reusable_classification(index: int) -> tuple[Path, dict] | None:
     return None
 
 
+def _activate_repair_guard_override() -> None:
+    """Use a lane-local guard only after reusable classification is audited."""
+    value = os.environ.get("CPGEN_REPAIR_GUARD")
+    if not value:
+        return
+    guard = Path(value)
+    if not guard.is_file() or not os.access(guard, os.X_OK):
+        raise RuntimeError(f"repair guard is not an executable file: {guard}")
+    global GUARD
+    GUARD = guard
+
+
 def _accept_attempt(
     index: int,
     attempt: Path,
@@ -1533,6 +1545,7 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
             replace_existing=replace_existing,
         )
         return
+    _activate_repair_guard_override()
     failed_stage = (
         "quality_regeneration"
         if force_regeneration
