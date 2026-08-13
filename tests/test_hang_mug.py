@@ -27,6 +27,7 @@ from run_hangmug_skill_program import (
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
+    _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_handover_offset,
     _direct_actions_exact,
@@ -57,6 +58,24 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_quality_wave_contact_reports_cover_both_arms_and_tree():
+    spawn = lambda: SimpleNamespace(activate_contact_sensors=False)
+    scene = SimpleNamespace(
+        left_arm=SimpleNamespace(spawn=spawn()),
+        right_arm=SimpleNamespace(spawn=spawn()),
+        mug_tree=SimpleNamespace(spawn=spawn()),
+    )
+
+    assert _activate_quality_wave_contact_reports(scene) == (
+        "left_arm",
+        "right_arm",
+        "mug_tree",
+    )
+    assert scene.left_arm.spawn.activate_contact_sensors is True
+    assert scene.right_arm.spawn.activate_contact_sensors is True
+    assert scene.mug_tree.spawn.activate_contact_sensors is True
 
 
 def test_branch_approach_height_can_preserve_middle_branch_axis():

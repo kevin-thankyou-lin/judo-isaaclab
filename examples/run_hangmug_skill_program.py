@@ -624,6 +624,21 @@ def _install_grasp_assist_config(manager_module, config_module, config) -> None:
     config_module.GRASP_ASSIST_CONFIG = copy.deepcopy(config)
 
 
+def _activate_quality_wave_contact_reports(scene) -> tuple[str, ...]:
+    """Enable reports on every body participating in filtered wave guards."""
+    enabled = []
+    for name in ("left_arm", "right_arm", "mug_tree"):
+        asset = getattr(scene, name, None)
+        spawn = getattr(asset, "spawn", None)
+        if spawn is None or not hasattr(spawn, "activate_contact_sensors"):
+            raise RuntimeError(
+                f"quality-wave contact reporting is unavailable for {name}"
+            )
+        spawn.activate_contact_sensors = True
+        enabled.append(name)
+    return tuple(enabled)
+
+
 def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
@@ -646,11 +661,11 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
         instance.terminations.task_success = None
         instance.terminations.mug_below_table = None
         instance.terminations.mug_tree_below_table = None
-        # Direct-segment audits create a lane-local PhysX contact view for all
-        # right-arm links against the tree.  The filter rigid body must expose
-        # contact reports or the view would silently return zero force.
-        if hasattr(instance.scene.mug_tree.spawn, "activate_contact_sensors"):
-            instance.scene.mug_tree.spawn.activate_contact_sensors = True
+        # Quality-wave audits create filtered PhysX contact views for every arm
+        # link.  Both sensor and filter rigid bodies must have contact reports;
+        # enabling only the tree or finger links yields a view whose backend
+        # rejects the first force-matrix query.
+        _activate_quality_wave_contact_reports(instance.scene)
         ground = instance.scene.ground
         ground.init_state.pos = (0.0, 0.0, -0.05)
         ground.spawn = sim_utils.CuboidCfg(
