@@ -883,6 +883,7 @@ def test_left_assist_releases_only_after_sampled_secure_receiver():
         env, sample, "right_grasp"
     ) is True
     assert left.calls == [([True], [True])]
+    assert env._left_assist_secure_receiver_release_latched is True
 
     left.calls.clear()
     sample["right_pad_fractions"] = [0.1, 0.65]

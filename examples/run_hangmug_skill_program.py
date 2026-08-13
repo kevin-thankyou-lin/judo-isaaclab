@@ -905,6 +905,7 @@ def _release_left_assist_after_secure_receiver(env, sample, waypoint: str) -> bo
         engage=left_grasping,
         disable=torch.ones_like(left_grasping, dtype=torch.bool),
     )
+    env._left_assist_secure_receiver_release_latched = True
     return True
 
 
@@ -2741,6 +2742,7 @@ def main() -> None:
         env._defer_left_assist_release_to_secure_receiver = (
             defer_left_assist_to_secure_receiver
         )
+        env._left_assist_secure_receiver_release_latched = False
         configured_gains_start = env.robot.spec.controller_gains()
         configured_gains_start_sha256 = sha256_json(configured_gains_start)
         if (
