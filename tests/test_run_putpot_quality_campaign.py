@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
     _collision_clear_peer_pregrasp,
+    _critic_owned_precontact_pad_balance,
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
@@ -155,6 +157,62 @@ def test_collision_clear_peer_pregrasp_moves_only_outward_position():
     assert receipt["translation_norm_m"] == pytest.approx(0.025)
     assert receipt["orientation_unchanged"]
     assert receipt["grasp_endpoint_unchanged"]
+
+
+def test_critic_owned_precontact_pad_balance_maximizes_edge_margin(tmp_path):
+    trace = tmp_path / "trace.npz"
+    pot = np.asarray(
+        [
+            [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+            [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    np.savez_compressed(
+        trace,
+        pot_poses=pot,
+        left_finger_forces_n=[[0.0, 0.0], [3.0, 4.0]],
+        left_pad_fractions=[[np.nan, np.nan], [0.45, -0.05]],
+        left_pad_axes_world=[
+            [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        ],
+        partial_trace=np.asarray(False),
+    )
+    expected_translation = [0.0, -0.02041984274983406, 0.0]
+    critic = tmp_path / "critic.json"
+    critic.write_text(
+        json.dumps(
+            {
+                "lane_id": "pair15",
+                "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
+                "pad_balance_calibration": {
+                    "step": 1,
+                    "classification": "two_pad_force_backed_edge_only",
+                    "left_finger_forces_n": [3.0, 4.0],
+                    "left_pad_fractions": [0.45, -0.05],
+                    "finger_pad_axis_extent_m": 0.06806614430096655,
+                    "precontact_translation_world_m": expected_translation,
+                },
+            }
+        )
+    )
+
+    receipt = _critic_owned_precontact_pad_balance(
+        trace,
+        critic,
+        1,
+        lane_id="pair15",
+        minimum_force_n=1.0,
+        maximum_pre_latch_motion_m=0.003,
+        maximum_translation_m=0.025,
+    )
+
+    assert receipt["translation_world_m"] == pytest.approx(
+        expected_translation
+    )
+    assert receipt["predicted_pad_fractions"] == pytest.approx([0.75, 0.25])
+    assert receipt["predicted_minimum_edge_margin"] == pytest.approx(0.25)
+    assert receipt["orientation_unchanged"]
 
 
 def test_measured_static_translation_moves_both_source_corridor_endpoints():

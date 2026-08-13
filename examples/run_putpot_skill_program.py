@@ -171,6 +171,147 @@ def _collision_clear_peer_pregrasp(
     }
 
 
+def _critic_owned_precontact_pad_balance(
+    trace_path,
+    critic_path,
+    sample_step: int,
+    *,
+    lane_id: str,
+    minimum_force_n: float,
+    maximum_pre_latch_motion_m: float,
+    maximum_translation_m: float,
+) -> dict[str, object]:
+    """Recover one bounded open-jaw maximin pad-depth shift from a failed trace."""
+
+    from judo_isaaclab.put_pot import YAM_FINGER_PAD_AXIS_LENGTH_M
+
+    trace_source = Path(trace_path).resolve()
+    critic_source = Path(critic_path).resolve()
+    if not trace_source.is_file() or not critic_source.is_file():
+        raise FileNotFoundError("pad-balance trace and critic must exist")
+    with critic_source.open(encoding="utf-8") as stream:
+        critic = json.load(stream)
+    calibration = critic.get("pad_balance_calibration", {})
+    if (
+        critic.get("lane_id") != lane_id
+        or critic.get("trace_sha256") != _sha256(trace_source)
+        or calibration.get("step") != sample_step
+        or calibration.get("classification")
+        != "two_pad_force_backed_edge_only"
+    ):
+        raise ValueError("pad-balance critic does not own the requested trace sample")
+    with np.load(trace_source, allow_pickle=False) as trace:
+        required = {
+            "pot_poses",
+            "left_finger_forces_n",
+            "left_pad_fractions",
+            "left_pad_axes_world",
+            "partial_trace",
+        }
+        if not required.issubset(trace.files):
+            raise ValueError("pad-balance trace lacks required physical telemetry")
+        if bool(np.asarray(trace["partial_trace"]).reshape(())):
+            raise ValueError("pad-balance trace must be complete")
+        if not 0 <= sample_step < len(trace["pot_poses"]):
+            raise ValueError("pad-balance sample step is out of range")
+        pot = np.asarray(trace["pot_poses"], dtype=np.float64)
+        forces = np.asarray(
+            trace["left_finger_forces_n"][sample_step], dtype=np.float64
+        )
+        fractions = np.asarray(
+            trace["left_pad_fractions"][sample_step], dtype=np.float64
+        )
+        axes = np.asarray(
+            trace["left_pad_axes_world"][sample_step], dtype=np.float64
+        )
+    if (
+        forces.shape != (2,)
+        or fractions.shape != (2,)
+        or axes.shape != (2, 3)
+        or not np.all(np.isfinite(np.concatenate((forces, fractions, axes.ravel()))))
+        or not np.all(forces >= minimum_force_n)
+        or np.all((fractions >= 0.0) & (fractions <= 1.0))
+    ):
+        raise ValueError("pad-balance sample must be force-backed and edge-only")
+    critic_forces = np.asarray(
+        calibration.get("left_finger_forces_n", []), dtype=np.float64
+    )
+    critic_fractions = np.asarray(
+        calibration.get("left_pad_fractions", []), dtype=np.float64
+    )
+    if not (
+        critic_forces.shape == (2,)
+        and critic_fractions.shape == (2,)
+        and np.allclose(critic_forces, forces, atol=1.0e-9, rtol=0.0)
+        and np.allclose(critic_fractions, fractions, atol=1.0e-9, rtol=0.0)
+    ):
+        raise ValueError("pad-balance critic measurements do not match the trace")
+    displacement = float(np.linalg.norm(pot[sample_step, :3] - pot[0, :3]))
+    if displacement > maximum_pre_latch_motion_m + 1.0e-12:
+        raise ValueError("pad-balance sample moved the pot beyond the pre-latch bound")
+    mean_axis = np.mean(axes, axis=0)
+    axis_norm = float(np.linalg.norm(mean_axis))
+    if axis_norm <= 1.0e-9:
+        raise ValueError("pad-balance mean tip-to-base axis is degenerate")
+    mean_axis /= axis_norm
+    fraction_delta = float(0.5 - np.mean(fractions))
+    axis_extent = float(calibration.get("finger_pad_axis_extent_m", np.nan))
+    if (
+        not np.isfinite(axis_extent)
+        or axis_extent <= 0.0
+        or not np.isclose(
+            axis_extent,
+            YAM_FINGER_PAD_AXIS_LENGTH_M,
+            atol=1.0e-6,
+            rtol=0.0,
+        )
+    ):
+        raise ValueError("pad-balance critic has an invalid pad-axis extent")
+    translation = -fraction_delta * axis_extent * mean_axis
+    translation_norm = float(np.linalg.norm(translation))
+    predicted = fractions + fraction_delta
+    predicted_margin = float(np.min(np.minimum(predicted, 1.0 - predicted)))
+    if (
+        translation_norm > maximum_translation_m + 1.0e-12
+        or predicted_margin <= 0.0
+    ):
+        raise ValueError("maximin pad-balance translation exceeds its geometry bound")
+    critic_translation = np.asarray(
+        calibration.get("precontact_translation_world_m", []), dtype=np.float64
+    )
+    if (
+        critic_translation.shape != (3,)
+        or not np.allclose(critic_translation, translation, atol=1.0e-8, rtol=0.0)
+    ):
+        raise ValueError("pad-balance critic translation does not match the trace")
+    return {
+        "enabled": True,
+        "classification": "critic_owned_open_jaw_maximin_pad_depth_preseat",
+        "trace": {
+            "path": str(trace_source),
+            "sha256": _sha256(trace_source),
+            "sample_step": int(sample_step),
+        },
+        "critic": {
+            "path": str(critic_source),
+            "sha256": _sha256(critic_source),
+        },
+        "finger_forces_n": forces.tolist(),
+        "pad_fractions_before": fractions.tolist(),
+        "fraction_delta": fraction_delta,
+        "finger_pad_axis_extent_m": axis_extent,
+        "mean_tip_to_base_axis_world": mean_axis.tolist(),
+        "translation_world_m": translation.tolist(),
+        "translation_norm_m": translation_norm,
+        "maximum_translation_m": float(maximum_translation_m),
+        "bound_margin_m": float(maximum_translation_m - translation_norm),
+        "predicted_pad_fractions": predicted.tolist(),
+        "predicted_minimum_edge_margin": predicted_margin,
+        "measured_pre_latch_pot_motion_m": displacement,
+        "orientation_unchanged": True,
+    }
+
+
 def _translate_source_corridor_endpoints(
     desired_pregrasp, desired_grasp, static_precontact_receipt
 ):
@@ -499,6 +640,23 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "from the target pot while preserving its orientation and grasp "
             "endpoint."
         ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-trace",
+        help=(
+            "Complete failed target trace containing one critic-owned, "
+            "force-backed two-pad edge-contact sample used to pre-seat the "
+            "open left acquisition corridor."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-step",
+        type=int,
+        help="Zero-based maximin pad-balance calibration sample.",
+    )
+    parser.add_argument(
+        "--target-left-precontact-pad-balance-critic-json",
+        help="Immutable critic that owns the maximin pad-balance sample.",
     )
     parser.add_argument(
         "--target-right-first-stabilized-acquisition",
@@ -2478,6 +2636,28 @@ def main(argv: list[str] | None = None) -> None:
             "collision-clear right pregrasp requires strict quality left-first "
             "handle-local MPC"
         )
+    pad_balance_requested = any(
+        value is not None
+        for value in (
+            args.target_left_precontact_pad_balance_trace,
+            args.target_left_precontact_pad_balance_step,
+            args.target_left_precontact_pad_balance_critic_json,
+        )
+    )
+    if pad_balance_requested and not all(
+        value is not None
+        for value in (
+            args.target_left_precontact_pad_balance_trace,
+            args.target_left_precontact_pad_balance_step,
+            args.target_left_precontact_pad_balance_critic_json,
+        )
+    ):
+        raise ValueError("precontact pad balance requires trace, step, and critic")
+    if pad_balance_requested and not quality_left_first_local_mpc:
+        raise ValueError(
+            "precontact pad balance requires strict quality left-first "
+            "handle-local MPC"
+        )
     if quality_left_first_local_mpc != bool(
         args.target_quality_peer_axis_diagnosis_json
     ):
@@ -2790,6 +2970,7 @@ def main(argv: list[str] | None = None) -> None:
             )
         target_left_grasp_orientation_override_local_wxyz = None
         static_precontact_jaw_translation = None
+        precontact_pad_balance = None
         source_contact_frame_correction = None
         diagnostic_target_left_contact_frame = None
         diagnostic_target_contact_frames_local = None
@@ -3366,6 +3547,31 @@ def main(argv: list[str] | None = None) -> None:
                     frame_receipt["jaw_centering_translation_world_m"],
                     dtype=np.float64,
                 )
+                if pad_balance_requested:
+                    precontact_pad_balance = (
+                        _critic_owned_precontact_pad_balance(
+                            args.target_left_precontact_pad_balance_trace,
+                            args.target_left_precontact_pad_balance_critic_json,
+                            int(args.target_left_precontact_pad_balance_step),
+                            lane_id=os.environ["CPGEN_LANE_ID"],
+                            minimum_force_n=float(
+                                quality_config.grasp["minimum_force_n"]
+                            ),
+                            maximum_pre_latch_motion_m=float(
+                                quality_config.grasp[
+                                    "maximum_pre_latch_object_motion_m"
+                                ]
+                            ),
+                            maximum_translation_m=args.collision_clearance_m,
+                        )
+                    )
+                    desired_pregrasp, desired_grasp = (
+                        _translate_source_corridor_endpoints(
+                            desired_pregrasp,
+                            desired_grasp,
+                            precontact_pad_balance,
+                        )
+                    )
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
                         _translate_source_corridor_endpoints(
@@ -3393,6 +3599,10 @@ def main(argv: list[str] | None = None) -> None:
                         ),
                     )
                 )
+                if precontact_pad_balance is not None:
+                    trajectory_receipt["precontact_pad_balance"] = (
+                        precontact_pad_balance
+                    )
                 if preorientation_requested:
                     trajectory, preorientation_receipt = (
                         apply_contact_frame_preorientation(
@@ -6530,6 +6740,7 @@ def main(argv: list[str] | None = None) -> None:
                 "static_precontact_jaw_translation": (
                     static_precontact_jaw_translation
                 ),
+                "precontact_pad_balance": precontact_pad_balance,
                 "source_contact_frame_correction": (
                     source_contact_frame_correction
                 ),
