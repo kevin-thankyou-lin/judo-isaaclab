@@ -15,6 +15,7 @@ from judo_isaaclab.hang_mug import (
     reanchor_branch_transport_contact,
     reanchor_handover_contact_acquire,
     reanchor_physical_handover,
+    reanchor_right_grasp_after_orient_clear,
     reanchor_right_grasp_from_observed_mug,
     transfer_handover_contact_by_handle_frame,
 )
@@ -1240,6 +1241,81 @@ def test_handover_pregrasp_reanchors_close_to_observed_mug():
     assert adjusted.right_poses[grasp_end + 1 : release_end + 1] == pytest.approx(
         np.repeat(corrected[None], release_end - grasp_end, axis=0)
     )
+
+
+def test_handover_reanchors_open_descent_after_clear_orientation():
+    program = HangMugSkillProgram(_pose(z=1), _pose(z=1))
+    grasp = _pose(0.3, -0.2, 1)
+    clear = _pose(0.3, -0.1, 1.1)
+    program.physical_handover(
+        _pose(z=1),
+        _pose(0.2, -0.1, 1.1),
+        grasp,
+        _pose(0.2, 0.1, 1),
+        right_orient_clear=clear,
+        orient_steps=3,
+        approach_steps=2,
+        contact_settle_steps=4,
+        close_steps=2,
+        contact_acquire_steps=2,
+        release_steps=2,
+    )
+    trajectory = program.build()
+    nominal_contact = _pose(0.05, -0.02, 0.03)
+    observed_mug = _pose(0.4, 0.2, 0.8)
+    observed_right = _pose(0.31, -0.11, 1.09)
+    adjusted, receipt = reanchor_right_grasp_after_orient_clear(
+        trajectory, nominal_contact, observed_mug, observed_right
+    )
+    orient_end = trajectory.waypoint_steps["handover_orient_clear"]
+    settle_end = trajectory.waypoint_steps["right_grasp_settle"]
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    release_end = trajectory.waypoint_steps["left_release"]
+    corrected = compose_pose(observed_mug, nominal_contact)
+
+    assert adjusted.right_poses[: orient_end + 1] == pytest.approx(
+        trajectory.right_poses[: orient_end + 1]
+    )
+    assert adjusted.right_poses[settle_end] == pytest.approx(corrected)
+    assert adjusted.right_poses[settle_end + 1 : release_end + 1] == pytest.approx(
+        np.repeat(corrected[None], release_end - settle_end, axis=0)
+    )
+    assert np.array_equal(adjusted.left_poses, trajectory.left_poses)
+    assert np.array_equal(adjusted.grippers, trajectory.grippers)
+    assert receipt["world_translation_m"] == pytest.approx(
+        corrected[:3] - trajectory.right_poses[grasp_end, :3]
+    )
+    assert receipt["translation_norm_m"] == pytest.approx(
+        np.linalg.norm(corrected[:3] - trajectory.right_poses[grasp_end, :3])
+    )
+    assert receipt["world_orientation_delta_rad"] == pytest.approx(0.0)
+    assert receipt["observed_mug_pose"] == pytest.approx(observed_mug)
+    assert receipt["observed_right_pose"] == pytest.approx(observed_right)
+    assert receipt["prior_grasp_pose"] == pytest.approx(
+        trajectory.right_poses[grasp_end]
+    )
+    assert receipt["corrected_grasp_pose"] == pytest.approx(corrected)
+    assert {
+        key: value
+        for key, value in receipt.items()
+        if key
+        not in {
+            "world_translation_m",
+            "translation_norm_m",
+            "world_orientation_delta_rad",
+            "observed_mug_pose",
+            "observed_right_pose",
+            "prior_grasp_pose",
+            "corrected_grasp_pose",
+        }
+    } == {
+        "strategy": "reanchor_open_descent_after_clear_orientation",
+        "checked_after_waypoint": "handover_orient_clear",
+        "relative_contact_pose_changed": False,
+        "additional_contact_frame_rotation_rad": 0.0,
+        "left_targets_changed": False,
+        "gripper_commands_changed": False,
+    }
 
 
 def test_handover_contact_settle_keeps_receiver_open_until_pose_is_reached():

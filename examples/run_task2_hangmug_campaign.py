@@ -64,6 +64,7 @@ HANDOVER_SUFFIX_STRATEGY_FIELDS = frozenset({
     "handover_orient_local_y_clearance_m",
     "handover_orient_local_z_clearance_m",
     "handover_orient_steps",
+    "handover_reanchor_after_orient_clear",
     "handover_handle_frame_transfer",
     "left_release_retreat_m",
 })
@@ -227,6 +228,8 @@ def _repair_command(
             ])
         if strategy.get("handover_contact_acquire_stationary"):
             arguments.append("--handover-contact-acquire-stationary")
+        if strategy.get("handover_reanchor_after_orient_clear"):
+            arguments.append("--handover-reanchor-after-orient-clear")
         if "handover_contact_acquire_local_bias_m" in strategy:
             arguments.extend([
                 "--handover-contact-acquire-local-bias-m",
@@ -341,6 +344,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_orient_local_y_clearance_m",
         "handover_orient_local_z_clearance_m",
         "handover_orient_steps",
+        "handover_reanchor_after_orient_clear",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
@@ -451,12 +455,17 @@ def _repair_strategy(index: int) -> dict:
     orient_local_y = value.get("handover_orient_local_y_clearance_m", 0.0)
     orient_local_z = value.get("handover_orient_local_z_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
+    reanchor_after_orient = value.get(
+        "handover_reanchor_after_orient_clear", False
+    )
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
         raise ValueError("handover contact acquire must be an integer in [0, 60]")
     if not isinstance(acquire_stationary, bool):
         raise ValueError("handover stationary contact acquire must be boolean")
+    if not isinstance(reanchor_after_orient, bool):
+        raise ValueError("post-orient handover reanchor must be boolean")
     if (
         acquire_bias.shape != (3,)
         or not np.all(np.isfinite(acquire_bias))
@@ -469,6 +478,8 @@ def _repair_strategy(index: int) -> dict:
         raise ValueError(
             "stationary handover contact acquire requires positive steps and zero local bias"
         )
+    if reanchor_after_orient and not orient_steps:
+        raise ValueError("post-orient handover reanchor requires clear orientation")
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
     post_release_lift = value.get("handover_post_release_lift_m", 0.0)
@@ -557,6 +568,8 @@ def _repair_strategy(index: int) -> dict:
     })
     if acquire_stationary:
         strategy["handover_contact_acquire_stationary"] = True
+    if reanchor_after_orient:
+        strategy["handover_reanchor_after_orient_clear"] = True
     if "handover_contact_acquire_local_bias_m" in value:
         strategy["handover_contact_acquire_local_bias_m"] = acquire_bias.tolist()
     if "handover_target_local_pitch_rad" in value:

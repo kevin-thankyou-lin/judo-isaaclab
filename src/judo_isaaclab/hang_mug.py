@@ -353,6 +353,85 @@ def reanchor_right_grasp_from_observed_mug(
     )
 
 
+def reanchor_right_grasp_after_orient_clear(
+    trajectory: SkillTrajectory,
+    nominal_right_contact: Any,
+    observed_mug_pose: Any,
+    observed_right_pose: Any,
+) -> tuple[SkillTrajectory, dict[str, Any]]:
+    """Reanchor open descent after the receiver has finished orienting clear."""
+
+    required = (
+        "handover_orient_clear",
+        "right_grasp_settle",
+        "right_grasp",
+        "left_release",
+    )
+    missing = [name for name in required if name not in trajectory.waypoint_steps]
+    if missing:
+        raise ValueError(f"handover trajectory is missing waypoints: {missing}")
+    steps = trajectory.waypoint_steps
+    orient_end = steps["handover_orient_clear"]
+    settle_end = steps["right_grasp_settle"]
+    grasp_end = steps["right_grasp"]
+    left_release_end = steps["left_release"]
+    if not orient_end < settle_end < grasp_end < left_release_end:
+        raise ValueError("clear reanchor requires descent, close, and release order")
+    nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    observed_mug = _pose(observed_mug_pose, "observed_mug_pose")
+    observed_right = _pose(observed_right_pose, "observed_right_pose")
+    corrected_grasp = compose_pose(observed_mug, nominal_contact)
+    prior_grasp = np.asarray(trajectory.right_poses[grasp_end], dtype=np.float64)
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    right[orient_end + 1 : settle_end + 1] = interpolate_poses(
+        observed_right, corrected_grasp, settle_end - orient_end
+    )
+    right[settle_end + 1 : grasp_end + 1] = corrected_grasp
+    right[grasp_end + 1 : left_release_end + 1] = corrected_grasp
+
+    lift_end = steps.get("handover_receiver_lift", left_release_end)
+    confirm_end = steps.get("handover_confirm", lift_end)
+    corrected_lift = transfer_pose(
+        trajectory.right_poses[lift_end],
+        trajectory.right_poses[left_release_end],
+        corrected_grasp,
+    )
+    if lift_end > left_release_end:
+        right[left_release_end + 1 : lift_end + 1] = interpolate_poses(
+            corrected_grasp, corrected_lift, lift_end - left_release_end
+        )
+    right[lift_end + 1 : confirm_end + 1] = corrected_lift
+    correction = corrected_grasp[:3] - prior_grasp[:3]
+    orientation_delta = compose_pose(inverse_pose(prior_grasp), corrected_grasp)
+    orientation_delta_rad = float(
+        2.0 * np.arccos(np.clip(abs(orientation_delta[3]), 0.0, 1.0))
+    )
+    return (
+        SkillTrajectory(
+            left_poses=trajectory.left_poses.copy(),
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "strategy": "reanchor_open_descent_after_clear_orientation",
+            "checked_after_waypoint": "handover_orient_clear",
+            "world_translation_m": correction.tolist(),
+            "translation_norm_m": float(np.linalg.norm(correction)),
+            "world_orientation_delta_rad": orientation_delta_rad,
+            "relative_contact_pose_changed": False,
+            "additional_contact_frame_rotation_rad": 0.0,
+            "left_targets_changed": False,
+            "gripper_commands_changed": False,
+            "observed_mug_pose": observed_mug.tolist(),
+            "observed_right_pose": observed_right.tolist(),
+            "prior_grasp_pose": prior_grasp.tolist(),
+            "corrected_grasp_pose": corrected_grasp.tolist(),
+        },
+    )
+
+
 def reanchor_handover_contact_acquire(
     trajectory: SkillTrajectory,
     nominal_right_contact: Any,
