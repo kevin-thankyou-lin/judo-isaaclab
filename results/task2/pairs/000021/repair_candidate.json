@@ -1,9 +1,13 @@
 {
-  "branch_orient_steps": 60,
   "branch_roll_offset_rad": 0.26,
   "branch_support_fraction": 0.75,
+  "direct_rest_to_preinsert_steps": 170,
+  "force_semantic_regeneration": true,
   "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.08,
   "handover_orient_steps": 30,
-  "handover_target_offset_m": [0.0, 0.0, -0.026]
+  "handover_target_offset_m": [0.0, 0.0, -0.026],
+  "post_handover_rest_observer_steps": 60,
+  "post_release_return_to_rest_steps": 120,
+  "require_broad_pad_contact": true
 }

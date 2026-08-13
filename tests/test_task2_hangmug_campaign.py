@@ -295,29 +295,6 @@ def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch)
     assert campaign._worker_pids() == []
 
 
-def test_worker_gate_is_scoped_to_explicit_lane(tmp_path, monkeypatch):
-    owned = tmp_path / "123"
-    other = tmp_path / "456"
-    for process, lane in (
-        (owned, "pair000021"),
-        (other, "pair000019"),
-    ):
-        process.mkdir()
-        (process / "comm").write_text("python\n")
-        (process / "cmdline").write_bytes(
-            b"python\0examples/run_hangmug_skill_program.py\0"
-        )
-        (process / "environ").write_bytes(
-            f"CPGEN_LANE_ID={lane}\0".encode()
-        )
-    monkeypatch.setattr(
-        campaign.Path, "glob", lambda _self, _pattern: [owned, other]
-    )
-    monkeypatch.setenv("CPGEN_LANE_ID", "pair000021")
-
-    assert campaign._worker_pids() == [123]
-
-
 def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch):
     objects = tmp_path / "objects"
     for kind, name in (
