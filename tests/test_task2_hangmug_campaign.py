@@ -37,6 +37,13 @@ def test_same_index_assets_and_proven_command_are_pinned(tmp_path, monkeypatch):
         assert f"--{name.replace('_', '-')}" not in command
 
 
+def test_evidence_runner_disables_unused_environment_hdf5_recorder():
+    runner = Path(campaign.__file__).with_name("run_hangmug_skill_program.py")
+    source = runner.read_text()
+
+    assert "disable_env_recorders=True" in source
+
+
 def test_missing_or_cross_index_asset_fails_before_command(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "OBJECTS", tmp_path)
     (tmp_path / "MugHangable/mug_teacup_000003").mkdir(parents=True)
@@ -50,6 +57,45 @@ def test_atomic_immutable_receipt_never_overwrites(tmp_path):
     with pytest.raises(FileExistsError):
         campaign._atomic_json(path, {"value": 2}, immutable=True)
     assert json.loads(path.read_text()) == {"value": 1}
+
+
+def test_asset_provenance_matches_lane_symlink_to_canonical_assets(tmp_path):
+    canonical = tmp_path / "canonical"
+    mug = canonical / "MugHangable/mug_teacup_000010"
+    tree = canonical / "ThreeLayerMugTree/mug_tree_000010"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    alias = tmp_path / "lane-data"
+    alias.symlink_to(canonical, target_is_directory=True)
+    expected = {
+        "mug": alias / "MugHangable/mug_teacup_000010",
+        "mug_tree": alias / "ThreeLayerMugTree/mug_tree_000010",
+    }
+    recorded = {
+        "mug": {"path": str(mug)},
+        "mug_tree": {"path": str(tree)},
+    }
+    assert campaign._asset_provenance_matches(recorded, expected)
+
+
+def test_asset_provenance_rejects_wrong_or_incomplete_assets(tmp_path):
+    mug = tmp_path / "MugHangable/mug_teacup_000010"
+    tree = tmp_path / "ThreeLayerMugTree/mug_tree_000010"
+    wrong = tmp_path / "ThreeLayerMugTree/mug_tree_000011"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    wrong.mkdir(parents=True)
+    expected = {"mug": mug, "mug_tree": tree}
+    assert not campaign._asset_provenance_matches(
+        {"mug": {"path": str(mug)}}, expected
+    )
+    assert not campaign._asset_provenance_matches(
+        {
+            "mug": {"path": str(mug)},
+            "mug_tree": {"path": str(wrong)},
+        },
+        expected,
+    )
 
 
 def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatch):
@@ -75,6 +121,54 @@ def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatc
     assert campaign._claim_explicit_lane(12, "node1-gpu3") == path
     with pytest.raises(RuntimeError, match="assignment changed"):
         campaign._claim_explicit_lane(12, "node2-gpu0")
+
+
+def test_explicit_lane_claim_allows_descendant_commit_without_rewriting_receipt(
+    tmp_path, monkeypatch,
+):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "repair-head\n"))
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: next(heads),
+    )
+    ancestry_calls = []
+
+    def run(command, **kwargs):
+        ancestry_calls.append((command, kwargs))
+        return campaign.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    path = campaign._claim_explicit_lane(12, "node1-gpu3")
+    original = path.read_bytes()
+    assert campaign._claim_explicit_lane(12, "node1-gpu3") == path
+    assert path.read_bytes() == original
+    assert ancestry_calls[0][0] == [
+        "git", "merge-base", "--is-ancestor", "base-head", "repair-head",
+    ]
+
+
+def test_explicit_lane_claim_rejects_non_descendant_commit(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "unrelated-head\n"))
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: next(heads),
+    )
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "run",
+        lambda command, **_kwargs: campaign.subprocess.CompletedProcess(command, 1),
+    )
+    campaign._claim_explicit_lane(12, "node1-gpu3")
+    with pytest.raises(RuntimeError, match="assignment changed"):
+        campaign._claim_explicit_lane(12, "node1-gpu3")
 
 
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
@@ -235,33 +329,26 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 24,
-        "handover_contact_acquire_local_bias_m": [
-            0.0001979542550044889,
-            -0.0005121813033877951,
-            0.0013958812361320704,
-        ],
         "handover_confirm_steps": 20,
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
         "left_release_retreat_m": 0.03,
+        "post_handover_right_return_steps": 45,
+        "left_branch_point_steps": 35,
+        "require_broad_pad_contact": True,
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
-        "handover_target_offset_m": [
-            0.0004767246501909175,
-            -0.00005832851153687631,
-            0.0019414766011060344,
-        ],
         "handover_target_local_pitch_rad": 0.7853981633974483,
-        "handover_target_camera_clockwise_roll_rad": 0.5585053606381855,
-        "handover_orient_local_y_clearance_m": 0.08,
+        "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.08,
         "handover_straddle_local_x_m": -0.124,
-        "handover_seat_local_z_m": 0.018739788666255294,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
         "branch_approach_height_m": 0.0,
         "branch_roll_offset_rad": 0.5235987755982988,
         "branch_support_fraction": 0.75,
+        "stable_support_steps": 180,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -273,47 +360,29 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     cursor = command.index("--left-release-retreat-m")
     assert float(command[cursor + 1]) == pytest.approx(0.03)
+    assert command[command.index("--post-handover-right-return-steps") + 1] == "45"
+    assert command[command.index("--left-branch-point-steps") + 1] == "35"
+    assert "--require-broad-pad-contact" in command
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
-    acquire_bias_cursor = command.index("--handover-contact-acquire-local-bias-m")
-    acquire_bias = command[acquire_bias_cursor + 1 : acquire_bias_cursor + 4]
-    assert all("e" not in value.lower() for value in acquire_bias)
-    assert [float(value) for value in acquire_bias] == pytest.approx(
-        [0.0001979542550044889, -0.0005121813033877951, 0.0013958812361320704]
-    )
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
     assert float(command[command.index("--branch-approach-height-m") + 1]) == 0.0
     assert float(command[command.index("--branch-roll-offset-rad") + 1]) == pytest.approx(
         0.5235987755982988
     )
     assert float(command[command.index("--branch-support-fraction") + 1]) == 0.75
+    assert command[command.index("--stable-support-steps") + 1] == "180"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
-    offset_cursor = command.index("--handover-target-offset-m")
-    offset_arguments = command[offset_cursor + 1 : offset_cursor + 4]
-    assert offset_arguments[1] == "-0.00005832851153688"
-    assert all("e" not in value.lower() for value in offset_arguments)
-    assert [float(value) for value in offset_arguments] == pytest.approx(
-        [0.0004767246501909175, -0.00005832851153687631, 0.0019414766011060344]
-    )
     assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
         0.7853981633974483
     )
-    assert float(
-        command[
-            command.index("--handover-target-camera-clockwise-roll-rad") + 1
-        ]
-    ) == pytest.approx(0.5585053606381855)
-    assert float(
-        command[command.index("--handover-orient-local-y-clearance-m") + 1]
-    ) == 0.08
+    assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
+    assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
-    assert float(command[command.index("--handover-seat-local-z-m") + 1]) == pytest.approx(
-        0.018739788666255294
-    )
     assert command[command.index("--branch-orient-steps") + 1] == "60"
     assert "--target-branch-rank" not in command
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
@@ -337,44 +406,60 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"pick_lift_margin_m": 0.031}))
     with pytest.raises(ValueError, match="pick lift margin"):
         campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"stable_support_steps": 241}))
+    with pytest.raises(ValueError, match="stable support steps"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"post_handover_right_return_steps": 45}))
+    with pytest.raises(ValueError, match="selected together"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_right_return_steps": 45,
+        "left_branch_point_steps": 35,
+        "direct_rest_to_preinsert_steps": 170,
+    }))
+    with pytest.raises(ValueError, match="must be selected together"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    with pytest.raises(ValueError, match="requires simultaneous"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+        "branch_orient_steps": 20,
+    }))
+    with pytest.raises(ValueError, match="forbids branch orientation"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"require_broad_pad_contact": False}))
+    with pytest.raises(ValueError, match="must be true"):
+        campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_handle_frame_transfer": False}))
     with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
     with pytest.raises(ValueError, match="contact acquire"):
         campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({
-        "handover_contact_acquire_steps": 30,
-        "handover_contact_acquire_stationary": True,
-        "handover_contact_acquire_local_bias_m": [0.001, 0.0, 0.0],
-    }))
-    with pytest.raises(ValueError, match="stationary handover contact acquire"):
-        campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({
-        "handover_reanchor_after_orient_clear": True,
-    }))
-    with pytest.raises(ValueError, match="requires clear orientation"):
-        campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
     with pytest.raises(ValueError, match="within 45 degrees"):
-        campaign._repair_strategy(2)
-    candidate.write_text(
-        json.dumps({"handover_target_camera_clockwise_roll_rad": -1.0e-6})
-    )
-    with pytest.raises(ValueError, match="camera clockwise roll"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
         campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
-    with pytest.raises(ValueError, match="requires orient-first"):
+    candidate.write_text(json.dumps({"handover_standoff_outside_m": 0.08}))
+    with pytest.raises(ValueError, match="outside standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_orient_clearance_m": 0.08,
-        "handover_orient_local_y_clearance_m": 0.08,
         "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.121,
     }))
-    with pytest.raises(ValueError, match="one approach frame"):
+    with pytest.raises(ValueError, match="outside standoff"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
+    with pytest.raises(ValueError, match="requires orient-first"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_orient_clearance_m": 0.08,
@@ -382,13 +467,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_straddle_local_x_m": -0.141,
     }))
     with pytest.raises(ValueError, match="within 14 cm"):
-        campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({
-        "handover_orient_local_z_clearance_m": 0.08,
-        "handover_orient_steps": 30,
-        "handover_seat_local_z_m": 0.040001,
-    }))
-    with pytest.raises(ValueError, match="within 4 cm"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"branch_orient_steps": 91}))
     with pytest.raises(ValueError, match="branch orient steps"):
@@ -415,6 +493,35 @@ def test_campaign_accepts_only_middle_row_branches():
             campaign._require_middle_row_branch(branch)
 
 
+def test_direct_choreography_candidate_pins_both_single_segment_counts(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000002/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    strategy = campaign._repair_strategy(2)
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    command = campaign._repair_command(
+        2,
+        tmp_path / "attempt",
+        tmp_path / "result.json",
+        campaign._repair_selection("pick", None),
+        strategy,
+    )
+
+    assert command[command.index("--post-handover-rest-observer-steps") + 1] == "60"
+    assert command[command.index("--direct-rest-to-preinsert-steps") + 1] == "170"
+    assert command[command.index("--post-release-return-to-rest-steps") + 1] == "120"
+    assert "--branch-orient-steps" not in command
+
+
 def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
     monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
@@ -429,47 +536,6 @@ def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
             6, tmp_path / "prefix", tmp_path / "classification.json",
             campaign._repair_selection("handover", "pick"), strategy,
         )
-
-
-def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeypatch):
-    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
-    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
-    strategy = {
-        "handover_handle_frame_transfer": True,
-        "handover_orient_local_y_clearance_m": 0.08,
-        "handover_orient_steps": 30,
-        "handover_contact_settle_steps": 30,
-        "handover_contact_acquire_steps": 12,
-        "handover_contact_acquire_stationary": True,
-        "handover_reanchor_after_orient_clear": True,
-        "handover_confirm_steps": 12,
-        "handover_seat_local_z_m": 0.018739788666255294,
-        "handover_target_offset_m": [0.0, 0.0, 0.0],
-        "handover_post_release_lift_m": 0.0,
-        "handover_post_release_lift_steps": 0,
-    }
-
-    command = campaign._repair_command(
-        27,
-        tmp_path / "attempt",
-        tmp_path / "classification/result.json",
-        campaign._repair_selection("handover", "pick"),
-        strategy,
-    )
-
-    assert "--reuse-source-pick-prefix" in command
-    assert "--handover-handle-frame-transfer" in command
-    assert command[
-        command.index("--handover-orient-local-y-clearance-m") + 1
-    ] == "0.08"
-    assert command[command.index("--handover-orient-steps") + 1] == "30"
-    assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
-    assert command[command.index("--handover-contact-acquire-steps") + 1] == "12"
-    assert "--handover-contact-acquire-stationary" in command
-    assert "--handover-reanchor-after-orient-clear" in command
-    assert command[command.index("--handover-seat-local-z-m") + 1] == (
-        "0.018739788666255294"
-    )
 
 
 def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
@@ -680,6 +746,62 @@ def test_direct_success_skips_repair(tmp_path, monkeypatch):
     }
     events = _run_one_fixture(tmp_path, monkeypatch, result)
     assert events == ["classification", "classification_audit", "accepted"]
+
+
+def test_quality_wave_direct_success_forces_fresh_skill(tmp_path, monkeypatch):
+    result = {
+        "status": "direct_success", "first_failed_stage": None,
+        "last_completed_stage": "release_and_hang",
+        "completed_stages": ["pick", "handover", "alignment", "insertion_and_support", "release_and_hang"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_force_semantic_regeneration", lambda _index: True)
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+
+
+def test_quality_wave_direct_failure_still_forces_fresh_skill_from_reset(
+    tmp_path, monkeypatch
+):
+    result = {
+        "status": "repair_required", "first_failed_stage": "handover",
+        "last_completed_stage": "pick", "completed_stages": ["pick"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_force_semantic_regeneration", lambda _index: True)
+
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+    attempt = (
+        tmp_path / "task2/pairs/000002/attempt_002_repair_quality_regeneration"
+    )
+    manifest = json.loads((attempt / "manifest.json").read_text())
+    assert manifest["classification"]["actual_repair_boundary"] == "reset"
+    assert manifest["classification"]["requested_failed_stage"] == "pick"
+    assert manifest["classification"][
+        "quality_regeneration_from_direct_success"
+    ] is True
+
+
+def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
+    audit = tmp_path / "classification_audit.json"
+    audit.write_text("{}")
+    classification = {
+        "first_failed_stage": None,
+        "last_completed_stage": "release_and_hang",
+        "completed_stages": ["pick", "handover", "alignment", "insertion_and_support", "release_and_hang"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_sha256", lambda _path: "hash")
+    binding = campaign._classification_binding(
+        tmp_path, classification, force_from_reset=True
+    )
+    assert binding["actual_repair_boundary"] == "reset"
+    assert binding["quality_regeneration_from_direct_success"] is True
 
 
 def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
