@@ -1185,6 +1185,23 @@ def _contact_view_max_force(view, physics_dt: float) -> float:
     return float(np.linalg.norm(array, axis=-1).max(initial=0.0))
 
 
+def _contact_group_body_forces(
+    views, body_paths, physics_dt: float
+) -> dict[str, float]:
+    """Attribute a predeclared filtered contact group to its sensor bodies."""
+    sensors = tuple(views)
+    paths = tuple(body_paths)
+    if len(sensors) != len(paths):
+        raise RuntimeError(
+            f"contact sensor/body topology mismatch: {len(sensors)} != {len(paths)}"
+        )
+    return {
+        path: force
+        for path, sensor in zip(paths, sensors, strict=True)
+        if (force := _contact_view_max_force(sensor, physics_dt)) > 1.0e-6
+    }
+
+
 def _pose_path_step_receipt(
     poses: np.ndarray,
     *,
@@ -1592,8 +1609,14 @@ def _handover_wave_contract_receipt(
 def _direct_segment_live_row(
     views: dict[str, object], sample: dict[str, object], waypoint: str, physics_dt: float
 ) -> dict[str, object]:
-    environment_force = _contact_view_max_force(views["environment"], physics_dt)
-    mug_force = _contact_view_max_force(views["mug"], physics_dt)
+    environment_body_forces = _contact_group_body_forces(
+        views["environment"], views["right_body_paths"], physics_dt
+    )
+    mug_body_forces = _contact_group_body_forces(
+        views["mug"], views["right_body_paths"], physics_dt
+    )
+    environment_force = max(environment_body_forces.values(), default=0.0)
+    mug_force = max(mug_body_forces.values(), default=0.0)
     outbound = waypoint == "direct_preinsert"
     returning = waypoint == "post_release_return"
     fractions = np.asarray(sample["right_pad_fractions"], dtype=float)
@@ -1619,6 +1642,8 @@ def _direct_segment_live_row(
         "checked_after_step": int(sample["step"]),
         "maximum_environment_contact_force_n": environment_force,
         "maximum_mug_contact_force_n": mug_force,
+        "environment_contact_force_by_right_body_n": environment_body_forces,
+        "mug_contact_force_by_right_body_n": mug_body_forces,
         "right_pad_fractions": fractions.tolist(),
         "right_finger_forces_n": forces.tolist(),
         "checks": checks,

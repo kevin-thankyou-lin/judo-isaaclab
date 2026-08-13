@@ -30,6 +30,7 @@ from run_hangmug_skill_program import (
     _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_handover_offset,
+    _contact_group_body_forces,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _extend_pick_contact_along_approach,
@@ -64,6 +65,28 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_contact_group_force_attribution_is_body_aligned_and_sparse():
+    class ContactView:
+        def __init__(self, force):
+            self.force = force
+
+        def get_contact_force_matrix(self, *, dt):
+            assert dt == pytest.approx(1.0 / 30.0)
+            return np.asarray([[[self.force, 0.0, 0.0]]], dtype=np.float64)
+
+    receipt = _contact_group_body_forces(
+        (ContactView(0.0), ContactView(3.5)),
+        ("right/link_1", "right/right_finger"),
+        1.0 / 30.0,
+    )
+    assert receipt == {"right/right_finger": pytest.approx(3.5)}
+
+    with pytest.raises(RuntimeError, match="sensor/body topology mismatch"):
+        _contact_group_body_forces(
+            (ContactView(1.0),), ("right/link_1", "right/link_2"), 1.0 / 30.0
+        )
 
 
 def test_quality_wave_contact_reports_cover_both_arms_and_tree():
