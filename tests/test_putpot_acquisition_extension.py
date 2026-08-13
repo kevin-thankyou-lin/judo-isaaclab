@@ -5,6 +5,8 @@ from judo_isaaclab.put_marker import SkillTrajectory
 from run_putpot_skill_program import (
     _assert_acquisition_only_stage,
     _extend_handle_local_acquisition_window,
+    _parser,
+    _quality_environment_kwargs,
     _resolved_program_command,
 )
 
@@ -142,3 +144,35 @@ def test_fail_closed_base_command_routes_without_plugin_and_stage_guard_blocks_t
         _assert_acquisition_only_stage("smooth_bimanual_transport")
     with pytest.raises(RuntimeError, match="forbidden stage"):
         _assert_acquisition_only_stage("release_and_withdraw")
+
+
+def test_quality_config_is_opt_in_and_legacy_parser_default_is_unchanged():
+    required = [
+        "--gear-repo", "gear",
+        "--source-dataset", "source.hdf5",
+        "--target-dataset", "target.hdf5",
+        "--objects-root", "objects",
+        "--mode", "replay",
+        "--trace-npz", "trace.npz",
+        "--result-json", "result.json",
+    ]
+    assert _parser(required).quality_config_json is None
+    assert (
+        _parser(required + ["--quality-config-json", "quality.json"]).quality_config_json
+        == "quality.json"
+    )
+
+
+def test_quality_environment_disables_only_supported_manual_recorder():
+    def supported(task_name, enable_manual_recorder=True):
+        pass
+
+    def legacy(task_name):
+        pass
+
+    assert _quality_environment_kwargs(supported, None) == {}
+    assert _quality_environment_kwargs(supported, object()) == {
+        "enable_manual_recorder": False
+    }
+    with pytest.raises(RuntimeError, match="paired Gear support"):
+        _quality_environment_kwargs(legacy, object())

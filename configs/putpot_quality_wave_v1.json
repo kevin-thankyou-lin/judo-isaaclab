@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "mode": "putpot_quality_wave",
+  "grasp": {
+    "order": ["left", "right"],
+    "stable_steps": 15,
+    "minimum_force_n": 1.0,
+    "minimum_pad_fraction_margin": 0.15,
+    "minimum_contact_area_fraction": 0.25,
+    "maximum_flush_angle_deg": 12.0,
+    "maximum_pre_latch_object_motion_m": 0.003
+  },
+  "motion": {
+    "planner_mode": "object_first_rigid_weld",
+    "maximum_position_step_m": 0.025,
+    "maximum_rotation_step_rad": 0.16,
+    "maximum_grasp_translation_drift_m": 0.01,
+    "maximum_grasp_rotation_drift_rad": 0.12,
+    "return_to_start_tolerance_m": 0.015
+  },
+  "perturbation": {
+    "seed": 13082026,
+    "case_count": 8,
+    "translation_std_m": 0.002,
+    "rotation_std_rad": 0.035,
+    "joint_std_rad": 0.01,
+    "required_pass_fraction": 1.0
+  },
+  "collision": {
+    "minimum_clearance_m": 0.003,
+    "required_components": [
+      "left_arm",
+      "right_arm",
+      "left_gripper",
+      "right_gripper",
+      "left_wrist_camera",
+      "right_wrist_camera"
+    ],
+    "intended_contact_exclusions": [
+      ["left_gripper", "pot_left_handle"],
+      ["right_gripper", "pot_right_handle"]
+    ]
+  },
+  "lane": {
+    "pair_directory_format": "pairs/{pair_index:06d}",
+    "receipt_name": "quality_receipt.json",
+    "one_worker_per_gpu": true,
+    "immutable_receipts": true
+  }
+}

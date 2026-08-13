@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -150,6 +151,27 @@ def _resolved_program_command(base_command, plugin_command):
     return base_command if plugin_command is None else plugin_command
 
 
+def _quality_environment_kwargs(create_task_environment, quality_config):
+    """Return only the paired-Gear recorder opt-out for explicit quality mode."""
+
+    if quality_config is None:
+        return {}
+    signature = inspect.signature(create_task_environment)
+    supports_manual_recorder = (
+        "enable_manual_recorder" in signature.parameters
+        or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+    )
+    if not supports_manual_recorder:
+        raise RuntimeError(
+            "quality mode requires paired Gear support for "
+            "enable_manual_recorder=False"
+        )
+    return {"enable_manual_recorder": False}
+
+
 def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gear-repo", required=True)
@@ -178,6 +200,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=20260801)
     parser.add_argument("--program-spec-json")
+    parser.add_argument(
+        "--quality-config-json",
+        help=(
+            "Opt into PutPot quality-wave evidence and disable the unused "
+            "automatic IsaacLab HDF5 recorder when the paired Gear checkout "
+            "supports that environment-creation argument."
+        ),
+    )
     parser.add_argument("--controller-plugin-py")
     parser.add_argument("--controller-plugin-sha256")
     parser.add_argument("--controller-plugin-log")
@@ -1875,6 +1905,11 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     args = _parser(argv)
+    quality_config = None
+    if args.quality_config_json:
+        from judo_isaaclab.putpot_quality import load_quality_config
+
+        quality_config = load_quality_config(args.quality_config_json)
     if args.mode in {"skill", "replay_center"} and not args.program_spec_json:
         raise ValueError(f"{args.mode} mode requires --program-spec-json")
     controller_flags = (
@@ -2158,6 +2193,9 @@ def main(argv: list[str] | None = None) -> None:
         "render": bool(args.render),
         "camera_width": args.camera_width if args.render else None,
         "camera_height": args.camera_height if args.render else None,
+        "quality_config_sha256": (
+            None if quality_config is None else quality_config.sha256
+        ),
     }
     runtime_reused = False
     reset_index = 1
@@ -2210,20 +2248,28 @@ def main(argv: list[str] | None = None) -> None:
                 else without_scene_camera_sensors(YamBimanualSceneCfg)
             )
             with camera_policy:
+                environment_kwargs = {
+                    "task_name": "PutPotOnCooktop-v0",
+                    "assets_instance_paths": target_assets,
+                    "objects_randomization": None,
+                    "init_joint_pos_randomization": 0.0,
+                    "mode": "replay",
+                    "device": args.device,
+                    "observation_modalities": observation_modalities,
+                    "enable_self_collisions": False,
+                    "camera_width": args.camera_width,
+                    "camera_height": args.camera_height,
+                    "image_downsample_factor": 1,
+                    "enable_gripper_grasp_clamp": False,
+                    "enable_grasp_ray_viz": False,
+                }
+                environment_kwargs.update(
+                    _quality_environment_kwargs(
+                        create_task_environment, quality_config
+                    )
+                )
                 env = create_task_environment(
-                    task_name="PutPotOnCooktop-v0",
-                    assets_instance_paths=target_assets,
-                    objects_randomization=None,
-                    init_joint_pos_randomization=0.0,
-                    mode="replay",
-                    device=args.device,
-                    observation_modalities=observation_modalities,
-                    enable_self_collisions=False,
-                    camera_width=args.camera_width,
-                    camera_height=args.camera_height,
-                    image_downsample_factor=1,
-                    enable_gripper_grasp_clamp=False,
-                    enable_grasp_ray_viz=False,
+                    **environment_kwargs,
                 )
             scene_sensor_inventory = instantiated_scene_sensor_inventory(env.scene)
             timers.add("asset_env_load", time.monotonic() - env_load_started)
@@ -5484,6 +5530,9 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 "program_spec": (
                     None if program_spec is None else program_spec.receipt()
+                ),
+                "quality_config": (
+                    None if quality_config is None else quality_config.receipt()
                 ),
                 "controller_plugin": controller_receipt,
                 "controller_plugin_command_count": controller_command_count,
