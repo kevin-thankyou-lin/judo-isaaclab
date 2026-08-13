@@ -347,6 +347,65 @@ def object_path_collision_reports(
     return reports
 
 
+def sphere_path_collision_report(
+    points: np.ndarray,
+    *,
+    radius_m: float,
+    obstacles: dict[str, tuple[object, np.ndarray]],
+    sample_stride: int = 1,
+):
+    """Screen every sampled point as an exact sphere against named meshes.
+
+    This is useful for small hardware origins not represented by the task
+    object meshes, such as a wrist-camera center.  It is deliberately a proxy
+    receipt: articulated link collisions still need a live simulator contact
+    guard.
+    """
+    import trimesh
+
+    values = np.asarray(points, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != 3 or not np.isfinite(values).all():
+        raise ValueError("sphere path points must have shape (steps, 3)")
+    radius = float(radius_m)
+    if not np.isfinite(radius) or radius <= 0.0:
+        raise ValueError("sphere radius must be positive")
+    if not obstacles:
+        raise ValueError("sphere collision screen requires at least one obstacle")
+    if sample_stride <= 0:
+        raise ValueError("sample stride must be positive")
+    manager = trimesh.collision.CollisionManager()
+    for name, (mesh, pose) in obstacles.items():
+        manager.add_object(str(name), mesh, transform=_pose_matrix(pose))
+    proxy = trimesh.creation.icosphere(subdivisions=2, radius=radius)
+    manager.add_object("screened_sphere", proxy)
+    sampled_steps = list(range(0, len(values), sample_stride))
+    if sampled_steps[-1] != len(values) - 1:
+        sampled_steps.append(len(values) - 1)
+    collisions = {}
+    for step in sampled_steps:
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, 3] = values[step]
+        manager.set_transform("screened_sphere", transform)
+        _, names = manager.in_collision_internal(return_names=True)
+        proxy_pairs = [pair for pair in names if "screened_sphere" in pair]
+        if proxy_pairs:
+            hazards = sorted(
+                name
+                for pair in proxy_pairs
+                for name in pair
+                if name != "screened_sphere"
+            )
+            collisions[int(step)] = hazards
+    return {
+        "method": "python-fcl exact sphere-to-mesh intersection",
+        "proxy_radius_m": radius,
+        "sampled_steps": sampled_steps,
+        "collision_steps": sorted(collisions),
+        "collided_obstacles_by_step": collisions,
+        "valid": not collisions,
+    }
+
+
 def select_robot_feasible_object_path(
     object_paths: np.ndarray,
     *,

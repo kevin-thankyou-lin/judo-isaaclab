@@ -410,6 +410,27 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"post_handover_right_return_steps": 45}))
     with pytest.raises(ValueError, match="selected together"):
         campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_right_return_steps": 45,
+        "left_branch_point_steps": 35,
+        "direct_rest_to_preinsert_steps": 170,
+    }))
+    with pytest.raises(ValueError, match="must be selected together"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    with pytest.raises(ValueError, match="requires simultaneous"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+        "branch_orient_steps": 20,
+    }))
+    with pytest.raises(ValueError, match="forbids branch orientation"):
+        campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"require_broad_pad_contact": False}))
     with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
@@ -458,6 +479,35 @@ def test_campaign_accepts_only_middle_row_branches():
     for branch in (None, "branch_layer_1_a", "branch_layer_3_b"):
         with pytest.raises(RuntimeError, match="middle-row branch"):
             campaign._require_middle_row_branch(branch)
+
+
+def test_direct_choreography_candidate_pins_both_single_segment_counts(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000002/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    strategy = campaign._repair_strategy(2)
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    command = campaign._repair_command(
+        2,
+        tmp_path / "attempt",
+        tmp_path / "result.json",
+        campaign._repair_selection("pick", None),
+        strategy,
+    )
+
+    assert command[command.index("--post-handover-rest-observer-steps") + 1] == "60"
+    assert command[command.index("--direct-rest-to-preinsert-steps") + 1] == "170"
+    assert command[command.index("--post-release-return-to-rest-steps") + 1] == "120"
+    assert "--branch-orient-steps" not in command
 
 
 def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):

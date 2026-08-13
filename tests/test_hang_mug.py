@@ -30,6 +30,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _bounded_handover_offset,
     _direct_actions_exact,
+    _direct_phase_contract_receipt,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
@@ -1011,6 +1012,70 @@ def test_quality_setup_returns_right_then_points_left_before_insert():
     right = trajectory.grippers[:, 1]
     assert np.all(np.diff(right[unload_end:]) <= 0.0)
     assert right[-1] == pytest.approx(-0.0475)
+
+
+def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_to_rest():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    preinsert = _pose(0.7, -0.2, 0.95)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(
+        right_start, left_observer, steps=4
+    )
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=5, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_return_to_rest(
+        insert, right_start, support_steps=2, release_steps=3,
+        return_steps=5, settle_steps=2,
+    )
+    trajectory = program.build()
+
+    assert _branch_reanchor_waypoints(trajectory) == (
+        "carrying_rest_observer",
+        "direct_preinsert",
+        "branch_insert",
+        "supported_release_hold",
+    )
+    assert not {
+        "tree_transport", "branch_orient_clear", "branch_approach", "branch_unload"
+    } & trajectory.waypoint_steps.keys()
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
+    return_start = trajectory.waypoint_steps["right_release"] + 1
+    np.testing.assert_allclose(trajectory.grippers[return_start:, 1], -0.0475)
+
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    sample_rows = []
+    for row, name in enumerate(names):
+        sample_rows.append(
+            {
+                "left_eef_pose": trajectory.left_poses[row].tolist(),
+                "right_grasp": name not in {
+                    "post_release_return", "stable_support"
+                },
+            }
+        )
+    receipt = _direct_phase_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{"left_eef_pose": _pose().tolist(), "right_grasp": False}, *sample_rows],
+    )
+    assert receipt["passed"] is True
+    assert receipt["right_opening_transition_runs"] == 1
 
 
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():
