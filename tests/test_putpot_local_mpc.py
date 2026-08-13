@@ -300,6 +300,61 @@ def test_bounded_closure_commit_preserves_initial_gate_and_all_hard_guards():
     assert margin_guard.jaw_command == pytest.approx(continued.jaw_command)
 
 
+def test_interior_single_pad_event_freezes_wrist_and_starts_bounded_closure():
+    triggered = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=_pose(x=0.030),
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.196],
+        ),
+        allow_bounded_closure_commit=True,
+        allow_interior_single_pad_closure=True,
+    )
+    closure = triggered.frame_receipt["closure"]
+    assert not closure["initial_alignment_satisfied"]
+    assert closure["interior_single_pad_trigger_enabled"]
+    assert closure["interior_single_pad_triggered"]
+    assert closure["interior_single_pad_closure_hold_active"]
+    assert closure["wrist_frozen_for_interior_single_pad_closure"]
+    np.testing.assert_allclose(triggered.wrist_target_pose, _pose())
+    assert triggered.jaw_command == pytest.approx(-0.0435)
+    assert triggered.closure_committed
+
+    continued = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=23,
+            observed_handle_contact_frame=_pose(x=0.030),
+            current_jaw_command=triggered.jaw_command,
+        ),
+        allow_bounded_closure_commit=True,
+        closure_committed=triggered.closure_committed,
+        allow_interior_single_pad_closure=True,
+    )
+    assert not continued.frame_receipt["closure"][
+        "interior_single_pad_triggered"
+    ]
+    assert continued.frame_receipt["closure"][
+        "interior_single_pad_closure_hold_active"
+    ]
+    np.testing.assert_allclose(continued.wrist_target_pose, _pose())
+    assert continued.jaw_command == pytest.approx(-0.0395)
+
+    edge = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=_pose(x=0.030),
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.05],
+        ),
+        allow_bounded_closure_commit=True,
+        allow_interior_single_pad_closure=True,
+    )
+    assert edge.fail_closed
+    assert edge.fail_reason == "active_contact_outside_pad_margin"
+    assert edge.jaw_command == pytest.approx(-0.0475)
+
+
 def test_committed_closure_pauses_only_while_both_pads_are_force_backed():
     paused = handle_local_mpc_step(
         **_inputs(

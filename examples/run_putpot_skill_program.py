@@ -1127,6 +1127,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-quality-interior-single-pad-closure",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that freezes the left wrist and begins the "
+            "existing bounded closure stroke when exactly one force-backed "
+            "pad is already inside the unchanged quality margin."
+        ),
+    )
+    parser.add_argument(
         "--target-left-handle-pad-balance-limit-m",
         type=float,
         help=(
@@ -3186,6 +3195,17 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "left dual-force closure stop requires bounded-closure commitment"
         )
+    if args.target_left_quality_interior_single_pad_closure and not (
+        quality_left_first_local_mpc
+        and args.target_left_quality_peer_axis_preorientation
+        and args.target_left_bounded_closure_commit
+        and args.target_left_bounded_closure_dual_force_stop
+    ):
+        raise ValueError(
+            "left interior single-pad closure requires peer-preoriented "
+            "sequential quality MPC with committed bounded closure and the "
+            "dual-force stop"
+        )
     if args.target_left_handle_pad_balance_limit_m is not None:
         if not quality_left_first_local_mpc:
             raise ValueError(
@@ -5195,6 +5215,10 @@ def main(argv: list[str] | None = None) -> None:
                                 pause_committed_closure_on_dual_force_backing=bool(
                                     active_arm == "left"
                                     and args.target_left_bounded_closure_dual_force_stop
+                                ),
+                                allow_interior_single_pad_closure=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_interior_single_pad_closure
                                 ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
@@ -7345,6 +7369,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_pauses_committed_closure_on_dual_force_backing": bool(
                         args.target_left_bounded_closure_dual_force_stop
+                    ),
+                    "left_interior_single_pad_closure": bool(
+                        args.target_left_quality_interior_single_pad_closure
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,

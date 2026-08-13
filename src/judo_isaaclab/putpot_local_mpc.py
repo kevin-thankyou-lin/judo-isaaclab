@@ -365,6 +365,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "commit_enabled",
             "was_committed",
             "initial_alignment_satisfied",
+            "interior_single_pad_trigger_enabled",
+            "interior_single_pad_triggered",
+            "interior_single_pad_closure_hold_active",
+            "wrist_frozen_for_interior_single_pad_closure",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -416,6 +420,7 @@ def handle_local_mpc_step(
     allow_bounded_closure_commit: bool = False,
     closure_committed: bool = False,
     pause_committed_closure_on_dual_force_backing: bool = False,
+    allow_interior_single_pad_closure: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -628,6 +633,19 @@ def handle_local_mpc_step(
     elif not peer_margin_ok:
         fail_reason = "peer_contact_outside_pad_margin"
     fail_closed = fail_reason is not None
+    dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
+    interior_single_pad_triggered = bool(
+        allow_interior_single_pad_closure
+        and np.count_nonzero(contacting) == 1
+        and active_margin_ok
+        and pot_motion_ok
+    )
+    interior_single_pad_closure_hold_active = bool(
+        allow_interior_single_pad_closure
+        and (interior_single_pad_triggered or closure_committed)
+        and not dual_force_backed
+        and not fail_closed
+    )
 
     retained_transverse_translation = np.zeros(3, dtype=np.float64)
     if contact_recenter_active:
@@ -650,6 +668,12 @@ def handle_local_mpc_step(
     if robust_frame or fail_closed:
         translation_increment = np.zeros(3, dtype=np.float64)
         rotation_increment = np.zeros(3, dtype=np.float64)
+    if interior_single_pad_closure_hold_active:
+        # A force-backed interior pad is stronger near-contact evidence than
+        # the distant nominal contact-frame residual.  Keep that loaded pad
+        # fixed while the existing bounded jaw stroke brings in its peer.
+        translation_increment = np.zeros(3, dtype=np.float64)
+        rotation_increment = np.zeros(3, dtype=np.float64)
     aligned_for_closure = bool(
         np.linalg.norm(translation_world) <= config.closure_position_tolerance_m
         and np.linalg.norm(rotation_residual) <= config.closure_rotation_tolerance_rad
@@ -657,8 +681,8 @@ def handle_local_mpc_step(
     closure_authorized = bool(
         aligned_for_closure
         or (allow_bounded_closure_commit and closure_committed)
+        or interior_single_pad_triggered
     )
-    dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
     pause_committed_closure = bool(
         pause_committed_closure_on_dual_force_backing
         and closure_committed
@@ -815,6 +839,18 @@ def handle_local_mpc_step(
             "commit_enabled": bool(allow_bounded_closure_commit),
             "was_committed": bool(closure_committed),
             "initial_alignment_satisfied": aligned_for_closure,
+            "interior_single_pad_trigger_enabled": bool(
+                allow_interior_single_pad_closure
+            ),
+            "interior_single_pad_triggered": interior_single_pad_triggered,
+            "interior_single_pad_closure_hold_active": (
+                interior_single_pad_closure_hold_active
+            ),
+            "wrist_frozen_for_interior_single_pad_closure": bool(
+                interior_single_pad_closure_hold_active
+                and np.allclose(translation_increment, 0.0, atol=1.0e-12)
+                and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
+            ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,
             "closed_command_reached": bool(
