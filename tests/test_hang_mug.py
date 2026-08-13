@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    delay_post_release_return_rotation,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
@@ -1418,6 +1419,64 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     json.dumps(curved_receipt)
 
 
+def test_open_return_rotation_delay_preserves_straight_translation_and_endpoint():
+    right_start = _pose(0.2, -0.7, 0.9)
+    return_rotation_rad = 0.7
+    release = np.asarray(
+        [
+            0.45,
+            -0.6,
+            0.98,
+            np.cos(return_rotation_rad / 2.0),
+            0.0,
+            0.0,
+            np.sin(return_rotation_rad / 2.0),
+        ]
+    )
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(right_start, _pose(), steps=1)
+    program.direct_rest_to_branch_insert(
+        release, release, direct_steps=4, insert_steps=1,
+        left_observer=_pose(),
+    )
+    program.release_and_return_to_rest(
+        release, right_start, support_steps=1, release_steps=1,
+        return_steps=34, settle_steps=1,
+    )
+    original = program.build()
+    delayed = delay_post_release_return_rotation(original, 8)
+    release_end = original.waypoint_steps["right_release"]
+    return_end = original.waypoint_steps["post_release_return"]
+    segment = delayed.right_poses[release_end + 1 : return_end + 1]
+    original_segment = original.right_poses[release_end + 1 : return_end + 1]
+
+    np.testing.assert_allclose(segment[:, :3], original_segment[:, :3])
+    np.testing.assert_allclose(
+        segment[:8, 3:],
+        np.repeat(original.right_poses[release_end, None, 3:], 8, axis=0),
+    )
+    np.testing.assert_allclose(segment[-1], right_start)
+    np.testing.assert_array_equal(delayed.grippers, original.grippers)
+    assert delayed.stage_names == original.stage_names
+    assert delayed.waypoint_steps == original.waypoint_steps
+    path_receipt = _pose_path_step_receipt(
+        delayed.right_poses[release_end : return_end + 1],
+        maximum_translation_m=0.025,
+        maximum_rotation_rad=0.16,
+    )
+    assert path_receipt["passed"] is True
+    np.testing.assert_array_equal(
+        delay_post_release_return_rotation(original, 0).right_poses,
+        original.right_poses,
+    )
+    with pytest.raises(ValueError, match="rotation delay"):
+        delay_post_release_return_rotation(original, 34)
+
+
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     right_start = _pose(0.2, -0.7, 0.9)
     left_observer = _pose(0.6, 0.1, 1.0)
@@ -1472,6 +1531,27 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     assert residuals.max() <= 1.0e-12
     assert np.all(np.diff(fractions) >= -1.0e-12)
+
+    delayed = reanchor_branch_transport_contact(
+        trajectory,
+        planned_contact,
+        observed_mug,
+        observed_right,
+        completed_waypoint="carrying_rest_observer",
+        post_release_return_rotation_delay_steps=2,
+    )
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    delayed_return = delayed.right_poses[release_end + 1 : return_end + 1]
+    ordinary_return = adjusted.right_poses[release_end + 1 : return_end + 1]
+    np.testing.assert_allclose(delayed_return[:, :3], ordinary_return[:, :3])
+    np.testing.assert_allclose(
+        delayed_return[:2, 3:],
+        np.repeat(delayed.right_poses[release_end, None, 3:], 2, axis=0),
+    )
+    np.testing.assert_allclose(
+        delayed_return[-1], trajectory.right_poses[return_end]
+    )
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():

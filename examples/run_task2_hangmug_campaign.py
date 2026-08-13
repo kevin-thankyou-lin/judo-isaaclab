@@ -46,6 +46,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_handover_rest_observer_steps",
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
+    "post_release_return_rotation_delay_steps",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -198,6 +199,10 @@ def _repair_command(
         ("post_handover_rest_observer_steps", "--post-handover-rest-observer-steps"),
         ("direct_rest_to_preinsert_steps", "--direct-rest-to-preinsert-steps"),
         ("post_release_return_to_rest_steps", "--post-release-return-to-rest-steps"),
+        (
+            "post_release_return_rotation_delay_steps",
+            "--post-release-return-rotation-delay-steps",
+        ),
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
         ("branch_approach_height_m", "--branch-approach-height-m"),
@@ -315,6 +320,7 @@ def _repair_strategy(index: int) -> dict:
         "post_handover_rest_observer_steps",
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
+        "post_release_return_rotation_delay_steps",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -415,6 +421,24 @@ def _repair_strategy(index: int) -> dict:
             )
         strategy["direct_rest_to_preinsert_steps"] = direct_steps[0]
         strategy["post_release_return_to_rest_steps"] = direct_steps[1]
+    rotation_delay_steps = value.get(
+        "post_release_return_rotation_delay_steps", 0
+    )
+    if (
+        isinstance(rotation_delay_steps, bool)
+        or not isinstance(rotation_delay_steps, int)
+        or rotation_delay_steps < 0
+        or (direct_steps[1] and rotation_delay_steps >= direct_steps[1])
+        or (not direct_steps[1] and rotation_delay_steps)
+    ):
+        raise ValueError(
+            "post-release return rotation delay must be an integer in "
+            "[0, return steps), and requires direct choreography"
+        )
+    if rotation_delay_steps:
+        strategy["post_release_return_rotation_delay_steps"] = (
+            rotation_delay_steps
+        )
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
