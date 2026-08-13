@@ -20,7 +20,12 @@ from judo_isaaclab.hang_mug import (
     transfer_handover_contact_by_handle_frame,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
-from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
+from judo_isaaclab.put_marker import (
+    compose_pose,
+    interpolate_poses,
+    inverse_pose,
+    quaternion_rotate,
+)
 from run_hangmug_skill_program import (
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
@@ -1349,7 +1354,7 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     program.release_and_return_to_rest(
         insert, right_start, support_steps=2, release_steps=3,
-        return_steps=5, settle_steps=2,
+        return_steps=5, settle_steps=2, return_ramp_steps=2,
     )
     trajectory = program.build()
 
@@ -1365,7 +1370,44 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     return_end = trajectory.waypoint_steps["post_release_return"]
     np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
     return_start = trajectory.waypoint_steps["right_release"] + 1
+    np.testing.assert_allclose(
+        trajectory.right_poses[return_start : return_start + 2],
+        interpolate_poses(insert, right_start, 2),
+    )
+    np.testing.assert_allclose(
+        trajectory.right_poses[return_start + 2 : return_end + 1],
+        np.repeat(right_start[None], 3, axis=0),
+    )
     np.testing.assert_allclose(trajectory.grippers[return_start:, 1], -0.0475)
+
+    reanchored = reanchor_branch_transport_contact(
+        trajectory,
+        _pose(),
+        _pose(),
+        _pose(),
+        completed_waypoint="supported_release_hold",
+        post_release_return_ramp_steps=2,
+    )
+    np.testing.assert_allclose(
+        reanchored.right_poses[return_start : return_start + 2],
+        interpolate_poses(
+            reanchored.right_poses[return_start - 1], right_start, 2
+        ),
+    )
+    np.testing.assert_allclose(
+        reanchored.right_poses[return_start + 2 : return_end + 1],
+        np.repeat(right_start[None], 3, axis=0),
+    )
+    with pytest.raises(ValueError, match="return_ramp_steps"):
+        program.release_and_return_to_rest(
+            insert,
+            right_start,
+            support_steps=1,
+            release_steps=1,
+            return_steps=9,
+            settle_steps=1,
+            return_ramp_steps=9,
+        )
 
     names = []
     previous = 0

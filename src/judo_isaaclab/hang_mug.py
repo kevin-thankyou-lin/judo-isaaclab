@@ -513,6 +513,27 @@ def reanchor_handover_contact_acquire(
     )
 
 
+def _bounded_return_ramp_steps(
+    return_steps: int, ramp_steps: int | None
+) -> int:
+    """Bound the direct retreat while allowing same-target settling rows."""
+    if isinstance(return_steps, bool) or not isinstance(return_steps, int):
+        raise ValueError("return_steps must be a positive integer")
+    if return_steps <= 0:
+        raise ValueError("return_steps must be a positive integer")
+    if ramp_steps is None:
+        return return_steps
+    if (
+        isinstance(ramp_steps, bool)
+        or not isinstance(ramp_steps, int)
+        or not 1 <= ramp_steps <= min(8, return_steps)
+    ):
+        raise ValueError(
+            "return_ramp_steps must be an integer in [1, min(8, return_steps)]"
+        )
+    return ramp_steps
+
+
 def reanchor_branch_transport_contact(
     trajectory: SkillTrajectory,
     planned_right_contact: Any,
@@ -520,6 +541,7 @@ def reanchor_branch_transport_contact(
     observed_right_pose: Any,
     *,
     completed_waypoint: str = "left_release",
+    post_release_return_ramp_steps: int | None = None,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -550,10 +572,17 @@ def reanchor_branch_transport_contact(
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
         return_start = release_end + 1
-        right[return_start : direct_return + 1] = interpolate_poses(
+        return_steps = direct_return - release_end
+        ramp_steps = _bounded_return_ramp_steps(
+            return_steps, post_release_return_ramp_steps
+        )
+        right[return_start : return_start + ramp_steps] = interpolate_poses(
             right[release_end],
             trajectory.right_poses[direct_return],
-            direct_return - release_end,
+            ramp_steps,
+        )
+        right[return_start + ramp_steps : direct_return + 1] = (
+            trajectory.right_poses[direct_return]
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -903,11 +932,13 @@ class HangMugSkillProgram:
         release_steps: int,
         return_steps: int,
         settle_steps: int,
+        return_ramp_steps: int | None = None,
         opened: float = -0.0475,
     ) -> None:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
             raise ValueError("release/return phase steps must be positive")
+        ramp_steps = _bounded_return_ramp_steps(return_steps, return_ramp_steps)
         self._append(
             "supported_release_hold",
             "release_support",
@@ -923,9 +954,16 @@ class HangMugSkillProgram:
         self._append(
             "post_release_return",
             "post_release_return",
-            return_steps,
+            ramp_steps,
             right_pose=right_rest,
         )
+        if ramp_steps < return_steps:
+            self._append(
+                "post_release_return",
+                "post_release_return",
+                return_steps - ramp_steps,
+                right_pose=right_rest,
+            )
         self._append(
             "stable_support",
             "stable_settle",
