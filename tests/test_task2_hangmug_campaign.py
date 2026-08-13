@@ -722,6 +722,7 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
             0.97861533, 0.16855211, 0.11790769,
         ],
         "post_release_return_clearance_rotation_rad": 0.05,
+        "post_release_return_clearance_late_rotation_rad": 0.01,
     }))
     strategy = campaign._repair_strategy(4)
     command = campaign._repair_command(
@@ -739,6 +740,12 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
     assert (
         command[command.index("--post-release-return-clearance-rotation-rad") + 1]
         == "0.05"
+    )
+    assert (
+        command[
+            command.index("--post-release-return-clearance-late-rotation-rad") + 1
+        ]
+        == "0.01"
     )
 
 

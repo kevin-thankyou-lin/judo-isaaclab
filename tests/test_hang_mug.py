@@ -1542,12 +1542,57 @@ def test_post_release_clearance_advances_only_straight_return_translation():
         0.05
     )
     np.testing.assert_allclose(rotated.right_poses[return_end], right_start)
+    late_boosted = apply_post_release_return_clearance(
+        baseline,
+        0.0,
+        clearance_rows=7,
+        rotation_axis_local=[
+            0.9599321929346628,
+            -0.25862064057406176,
+            0.10791454599224021,
+        ],
+        rotation_rad=0.05383065939918987,
+        late_rotation_rad=0.011169340600810133,
+    )
+    base_only = apply_post_release_return_clearance(
+        baseline,
+        0.0,
+        clearance_rows=7,
+        rotation_axis_local=[
+            0.9599321929346628,
+            -0.25862064057406176,
+            0.10791454599224021,
+        ],
+        rotation_rad=0.05383065939918987,
+    )
+    np.testing.assert_allclose(
+        late_boosted.right_poses[:, :3], baseline.right_poses[:, :3]
+    )
+    np.testing.assert_allclose(
+        late_boosted.right_poses[release_end + 1 : peak],
+        base_only.right_poses[release_end + 1 : peak],
+    )
+    late_peak_alignment = abs(
+        float(late_boosted.right_poses[peak, 3:] @ baseline.right_poses[peak, 3:])
+    )
+    assert 2.0 * np.arccos(
+        np.clip(late_peak_alignment, -1.0, 1.0)
+    ) == pytest.approx(0.065)
+    np.testing.assert_allclose(late_boosted.right_poses[return_end], right_start)
     with pytest.raises(ValueError, match="unit length"):
         apply_post_release_return_clearance(
             baseline,
             0.0,
             rotation_axis_local=[1.0, 1.0, 0.0],
             rotation_rad=0.05,
+        )
+    with pytest.raises(ValueError, match="combined clearance rotation"):
+        apply_post_release_return_clearance(
+            baseline,
+            0.0,
+            rotation_axis_local=[1.0, 0.0, 0.0],
+            rotation_rad=0.08,
+            late_rotation_rad=0.05,
         )
 
 

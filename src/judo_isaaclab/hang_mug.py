@@ -652,6 +652,7 @@ def apply_post_release_return_clearance(
     clearance_rows: int = 7,
     rotation_axis_local: Any | None = None,
     rotation_rad: float = 0.0,
+    late_rotation_rad: float = 0.0,
 ) -> SkillTrajectory:
     """Apply bounded open-return clearance without changing Cartesian endpoints.
 
@@ -659,7 +660,8 @@ def apply_post_release_return_clearance(
     positional progress along that exact straight segment is advanced during
     first bounded rows when ``clearance_m`` is nonzero.  A pair may instead
     supply an evidence-backed local rotation axis: it ramps in over the same
-    rows and then returns continuously to the demonstrated-rest orientation,
+    rows and then returns continuously to the demonstrated-rest orientation.
+    An optional late rotation adds clearance only on the final screened row,
     moving an open finger without translating the wrist origin.
     """
 
@@ -669,12 +671,21 @@ def apply_post_release_return_clearance(
     if isinstance(clearance_rows, bool) or not isinstance(clearance_rows, int):
         raise ValueError("post-release return clearance rows must be an integer")
     angle = float(rotation_rad)
+    late_angle = float(late_rotation_rad)
     if not np.isfinite(angle) or abs(angle) > 0.12:
         raise ValueError(
             "post-release return clearance rotation must be within 0.12 rad"
         )
+    if not np.isfinite(late_angle) or abs(late_angle) > 0.12:
+        raise ValueError(
+            "post-release return late clearance rotation must be within 0.12 rad"
+        )
+    if abs(angle + late_angle) > 0.12:
+        raise ValueError(
+            "post-release return combined clearance rotation must be within 0.12 rad"
+        )
     if rotation_axis_local is None:
-        if angle:
+        if angle or late_angle:
             raise ValueError("post-release return clearance rotation requires an axis")
         axis = None
     else:
@@ -686,7 +697,7 @@ def apply_post_release_return_clearance(
         norm = float(np.linalg.norm(axis))
         if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
             raise ValueError("post-release return clearance axis must be unit length")
-        if not angle:
+        if not angle and not late_angle:
             raise ValueError("post-release return clearance axis requires a rotation")
         axis = axis / norm
     if (
@@ -724,8 +735,14 @@ def apply_post_release_return_clearance(
             0.0,
         )
         envelope = np.minimum(ramp, decay)
-        for index, fraction in enumerate(envelope):
-            half_angle = 0.5 * angle * fraction
+        # A late boost leaves the already-screened first ``clearance_rows - 1``
+        # poses untouched, arrives on the final required-clearance row, and
+        # then shares the existing continuous decay to the rest endpoint.
+        late_ramp = np.clip(row - (clearance_rows - 1), 0.0, 1.0)
+        late_envelope = np.minimum(late_ramp, decay)
+        row_angles = angle * envelope + late_angle * late_envelope
+        for index, row_angle in enumerate(row_angles):
+            half_angle = 0.5 * row_angle
             offset = np.concatenate(
                 ([np.cos(half_angle)], axis * np.sin(half_angle))
             )
