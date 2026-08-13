@@ -50,6 +50,20 @@ class RigidAssetGeometry:
         )
 
 
+def seat_grasp_inside_finger_pads(grasp_pose: Any, depth_m: float) -> np.ndarray:
+    """Move a YAM wrist baseward along its local finger-pad axis."""
+
+    grasp = _pose(grasp_pose, "grasp_pose")
+    depth = float(depth_m)
+    if not np.isfinite(depth) or not 0.0 <= depth <= 0.01:
+        raise ValueError("finger-pad seating depth must be in [0, 0.01] m")
+    result = grasp.copy()
+    result[:3] += depth * quaternion_rotate(
+        result[3:], np.asarray([0.0, 0.0, 1.0])
+    )
+    return result
+
+
 def geometry_conditioned_hang_pose(
     source_mug_pose: Any,
     source_tree_pose: Any,

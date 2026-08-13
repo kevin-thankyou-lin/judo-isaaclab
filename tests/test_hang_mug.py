@@ -16,6 +16,7 @@ from judo_isaaclab.hang_mug import (
     reanchor_handover_contact_acquire,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
+    seat_grasp_inside_finger_pads,
     transfer_handover_contact_by_handle_frame,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
@@ -755,6 +756,15 @@ def test_broad_pad_contact_rejects_fingertip_only_grasps():
     receipt = _broad_pad_contact_receipt([fingertip] * 12, "left")
     assert not receipt["passed"]
     assert receipt["longest_consecutive_steps"] == 0
+
+
+def test_pick_grasp_can_be_seated_baseward_inside_finger_pads():
+    pose = np.asarray([0.4, -0.1, 0.9, 1.0, 0.0, 0.0, 0.0])
+    seated = seat_grasp_inside_finger_pads(pose, 0.003)
+    assert seated == pytest.approx([0.4, -0.1, 0.903, 1.0, 0.0, 0.0, 0.0])
+    assert pose[2] == pytest.approx(0.9)
+    with pytest.raises(ValueError, match="seating depth"):
+        seat_grasp_inside_finger_pads(pose, 0.010001)
 
 
 def test_branch_support_seating_changes_only_vertical_waypoint_translation():
