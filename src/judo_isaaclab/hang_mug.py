@@ -547,6 +547,24 @@ def reanchor_branch_transport_contact(
     for index in range(start, reanchor_end + 1):
         intended_mug = compose_pose(right[index], inverse_pose(planned_contact))
         right[index] = compose_pose(intended_mug, observed_contact)
+    rest_end = trajectory.waypoint_steps.get("carrying_rest_observer")
+    preinsert_end = trajectory.waypoint_steps.get("direct_preinsert")
+    if (
+        rest_end is not None
+        and preinsert_end is not None
+        and start <= rest_end + 1
+        and rest_end < preinsert_end
+    ):
+        # Applying the contact-frame correction independently to poses whose
+        # wrist orientation changes curves their Cartesian translations.  The
+        # quality contract requires the outbound transport to remain the one
+        # authored rest-to-preinsert pose interpolation, so regenerate that
+        # still-unexecuted segment from its corrected boundary poses.
+        right[rest_end + 1 : preinsert_end + 1] = interpolate_poses(
+            right[rest_end],
+            right[preinsert_end],
+            preinsert_end - rest_end,
+        )
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
         return_start = release_end + 1
