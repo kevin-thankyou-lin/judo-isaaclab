@@ -392,17 +392,13 @@ def reanchor_handover_contact_acquire(
     translation = observed_right[:3] - desired_right[:3]
     norm = float(np.linalg.norm(translation))
     rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
+    rotation_error_rad = float(
+        2.0 * np.arccos(np.clip(abs(rotation_error[3]), 0.0, 1.0))
+    )
     rotation_error_quaternion = rotation_error[3:].copy()
     if rotation_error_quaternion[0] < 0.0:
         rotation_error_quaternion *= -1.0
     half_sine = float(np.linalg.norm(rotation_error_quaternion[1:]))
-    rotation_error_rad = float(
-        2.0
-        * np.arctan2(
-            half_sine,
-            np.clip(rotation_error_quaternion[0], 0.0, 1.0),
-        )
-    )
     rotation_error_local_axis_angle = (
         np.zeros(3, dtype=np.float64)
         if half_sine <= 1.0e-12
