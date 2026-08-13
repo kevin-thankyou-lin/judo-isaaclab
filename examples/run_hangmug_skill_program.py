@@ -696,6 +696,34 @@ def _schema_aware_success_acceptance(
     return acceptance
 
 
+def _direct_replay_requires_repair(result: dict[str, object]) -> bool:
+    """Require a technically valid replay that fails physical acceptance.
+
+    A classification run deliberately reports ``status=passed`` when it
+    executed and recorded the pinned source actions correctly.  Its terminal
+    task latch can also remain true after a bounded-contact violation.  The
+    repair gate must therefore use the independent terminal receipt and all
+    terminal policy checks rather than confusing technical completion with a
+    physically acceptable direct replay.
+    """
+
+    if result.get("status") != "passed":
+        return False
+    independent = result.get("independent_terminal_hang")
+    receipt = result.get("semantic_stage_receipt")
+    if not isinstance(independent, dict) or not isinstance(receipt, dict):
+        return False
+    terminal_checks = receipt.get("terminal_checks")
+    if not isinstance(terminal_checks, dict) or not terminal_checks:
+        return False
+    physically_accepted = (
+        result.get("terminal", {}).get("task_success") is True
+        and independent.get("passed") is True
+        and all(value is True for value in terminal_checks.values())
+    )
+    return not physically_accepted
+
+
 def _requires_observed_handover_reanchor(
     mug_parts, *, handle_frame_transfer: bool = False
 ) -> bool:
@@ -2086,7 +2114,9 @@ def main() -> None:
             )
             if direct_replay is not None and target_assets != source_assets:
                 acceptance = dict(acceptance)
-                acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                acceptance["direct_source_action_replay_failed"] = (
+                    _direct_replay_requires_repair(direct_replay)
+                )
                 acceptance["direct_replay_grasp_assistance_matched"] = (
                     direct_replay.get("protocol", {}).get("grasp_assistance")
                     == grasp_assistance

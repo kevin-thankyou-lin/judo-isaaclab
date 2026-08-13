@@ -29,6 +29,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _bounded_handover_offset,
     _direct_actions_exact,
+    _direct_replay_requires_repair,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
@@ -721,6 +722,41 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed",
     ):
         assert diagnostic not in skill
+
+
+def test_direct_replay_repair_gate_uses_independent_physical_receipts():
+    result = {
+        "status": "passed",
+        "terminal": {"task_success": True},
+        "independent_terminal_hang": {"passed": False},
+        "semantic_stage_receipt": {
+            "terminal_checks": {
+                "task_success": True,
+                "released": True,
+                "stable": True,
+                "contact_policy": False,
+            }
+        },
+    }
+
+    assert _direct_replay_requires_repair(result) is True
+
+    result["independent_terminal_hang"]["passed"] = True
+    result["semantic_stage_receipt"]["terminal_checks"]["contact_policy"] = True
+    assert _direct_replay_requires_repair(result) is False
+
+
+def test_direct_replay_repair_gate_rejects_technical_failure_as_baseline():
+    result = {
+        "status": "failed",
+        "terminal": {"task_success": False},
+        "independent_terminal_hang": {"passed": False},
+        "semantic_stage_receipt": {
+            "terminal_checks": {"task_success": False}
+        },
+    }
+
+    assert _direct_replay_requires_repair(result) is False
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
