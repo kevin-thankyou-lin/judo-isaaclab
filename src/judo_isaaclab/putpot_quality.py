@@ -374,12 +374,17 @@ def deterministic_perturbation_cases(
     rng = np.random.default_rng(int(rule["seed"]))
     cases = []
     for index in range(int(rule["case_count"])):
+        joint = rng.normal(0.0, float(rule["joint_std_rad"]), joint_dof)
+        # The 14-wide YAM action contains binary gripper commands at 6 and 13.
+        # Robustness noise applies to arm joints, never to open/close semantics.
+        if joint_dof == 14:
+            joint[[6, 13]] = 0.0
         value = {
             "case_index": index,
             "seed": int(rule["seed"]),
             "grasp_translation_m": rng.normal(0.0, float(rule["translation_std_m"]), 3).tolist(),
             "eef_rotation_vector_rad": rng.normal(0.0, float(rule["rotation_std_rad"]), 3).tolist(),
-            "joint_action_rad": rng.normal(0.0, float(rule["joint_std_rad"]), joint_dof).tolist(),
+            "joint_action_rad": joint.tolist(),
         }
         canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
         value["case_sha256"] = _sha256_bytes(canonical)
@@ -417,6 +422,7 @@ def audit_swept_self_collision(
     component_radii_m: Mapping[str, float],
     config: PutPotQualityConfig,
     structural_adjacencies: Sequence[Sequence[str]] = (),
+    component_groups: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Screen swept sphere proxies for robot, gripper, and wrist-camera collisions.
 
@@ -430,7 +436,17 @@ def audit_swept_self_collision(
         for name, value in component_centers_m.items()
     }
     required = set(config.collision["required_components"])
-    if not required.issubset(paths):
+    groups = {
+        str(name): tuple(str(item) for item in members)
+        for name, members in (component_groups or {}).items()
+    }
+    if groups:
+        if not required.issubset(groups) or any(
+            not groups[name] or not set(groups[name]).issubset(paths)
+            for name in required
+        ):
+            raise ValueError("swept collision audit is missing required robot groups")
+    elif not required.issubset(paths):
         raise ValueError("swept collision audit is missing required robot components")
     steps = next(iter(paths.values())).shape[0]
     if steps < 1 or any(
@@ -481,6 +497,7 @@ def audit_swept_self_collision(
     collisions = [item for item in reports if item["collision"]]
     return {
         "passed": not collisions,
+        "component_groups": {name: list(values) for name, values in groups.items()},
         "minimum_required_clearance_m": minimum_required,
         "collisions": collisions,
         "pairs": reports,

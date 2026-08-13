@@ -28,6 +28,8 @@ _OUTPUT_FLAGS = {
     "--video",
     "--demo-hdf5",
     "--runtime-receipt-json",
+    "--quality-contact-telemetry-npz",
+    "--quality-collision-telemetry-npz",
 }
 
 
@@ -74,6 +76,8 @@ def build_plan(
     perturbation_adapter: Path | None,
     joint_dof: int,
 ) -> dict[str, Any]:
+    if perturbation_adapter is None:
+        perturbation_adapter = REPO_ROOT / "examples/apply_putpot_quality_perturbation.py"
     if not runner.is_file():
         raise FileNotFoundError(f"PutPot runner does not exist: {runner}")
     if perturbation_adapter is not None and not perturbation_adapter.is_file():
@@ -252,7 +256,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quality-config-json", required=True)
     parser.add_argument("--runner", required=True)
     parser.add_argument("--runner-args-json", required=True)
-    parser.add_argument("--perturbation-adapter")
+    parser.add_argument(
+        "--perturbation-adapter",
+        default=str(REPO_ROOT / "examples/apply_putpot_quality_perturbation.py"),
+    )
     parser.add_argument("--joint-dof", type=int, default=14)
     parser.add_argument("--lease-root", required=True)
     parser.add_argument("--execute", action="store_true")

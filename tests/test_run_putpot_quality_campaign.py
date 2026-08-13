@@ -26,6 +26,10 @@ def _runner_args(tmp_path):
                 "{attempt_root}/demo.hdf5",
                 "--runtime-receipt-json",
                 "{attempt_root}/runtime.json",
+                "--quality-contact-telemetry-npz",
+                "{attempt_root}/contact.npz",
+                "--quality-collision-telemetry-npz",
+                "{attempt_root}/collision.npz",
             ]
         )
     )
@@ -45,6 +49,8 @@ parser.add_argument('--trace-npz')
 parser.add_argument('--video')
 parser.add_argument('--demo-hdf5')
 parser.add_argument('--runtime-receipt-json')
+parser.add_argument('--quality-contact-telemetry-npz')
+parser.add_argument('--quality-collision-telemetry-npz')
 parser.add_argument('--quality-config-json')
 args, _ = parser.parse_known_args()
 result = Path(args.result_json)
@@ -100,12 +106,12 @@ def test_plan_is_nominal_then_fixed_cases_and_binds_quality_config(tmp_path):
     assert plan["attempts"][1]["case"]["case_sha256"]
 
 
-def test_execute_fails_closed_without_physical_perturbation_adapter(tmp_path):
+def test_default_plan_uses_real_physical_perturbation_adapter(tmp_path):
     plan = _plan(tmp_path, None)
-    receipt = execute_plan(plan, lease_root=tmp_path / "leases")
-    assert receipt["status"] == "failed"
-    assert receipt["reason"] == "missing_physical_perturbation_adapter"
-    assert not (tmp_path / "pairs/000012/attempts").exists()
+    assert Path(plan["perturbation_adapter"]).name == (
+        "apply_putpot_quality_perturbation.py"
+    )
+    assert "--quality-perturbation-case-json" not in plan["attempts"][0]["command"]
 
 
 def test_execute_runs_all_attempts_serially_under_one_released_gpu_lease(tmp_path):

@@ -169,7 +169,9 @@ def _hdf5_receipt(
     }
 
 
-def _collision_inputs(path: Path) -> tuple[dict[str, np.ndarray], dict[str, float], list]:
+def _collision_inputs(
+    path: Path,
+) -> tuple[dict[str, np.ndarray], dict[str, float], list, dict[str, list[str]]]:
     with np.load(path, allow_pickle=False) as telemetry:
         center_names = sorted(
             name.removeprefix("center__")
@@ -196,7 +198,12 @@ def _collision_inputs(path: Path) -> tuple[dict[str, np.ndarray], dict[str, floa
             if "structural_adjacencies_json" in telemetry.files
             else []
         )
-    return centers, radii, structural
+        groups = (
+            json.loads(str(np.asarray(telemetry["component_groups_json"]).item()))
+            if "component_groups_json" in telemetry.files
+            else {}
+        )
+    return centers, radii, structural, groups
 
 
 def _check_result(result: Mapping[str, Any], config_sha256: str) -> dict[str, Any]:
@@ -359,11 +366,14 @@ def audit_bundle(
         right_start_m=contact["right_start_m"],
         config=config,
     )
-    centers, radii, structural = _collision_inputs(inputs["collision_telemetry_npz"])
+    centers, radii, structural, groups = _collision_inputs(
+        inputs["collision_telemetry_npz"]
+    )
     collision = audit_swept_self_collision(
         component_centers_m=centers,
         component_radii_m=radii,
         structural_adjacencies=structural,
+        component_groups=groups,
         config=config,
     )
     collision["step_count"] = (
@@ -377,6 +387,7 @@ def audit_bundle(
     video_receipt = dict(media_probe(inputs["video"]))
     video_receipt["sha256"] = sha256_file(inputs["video"])
     provenance = result.get("provenance", {})
+    quality_sidecars = result.get("protocol", {}).get("quality_sidecars", {})
     hashes = {
         "passed": bool(
             provenance.get("trace", {}).get("sha256")
@@ -384,10 +395,20 @@ def audit_bundle(
             and provenance.get("demonstration", {}).get("sha256")
             == hdf5["sha256"]
             and result.get("video", {}).get("sha256") == video_receipt["sha256"]
+            and quality_sidecars.get("contact", {}).get("sha256")
+            == sha256_file(inputs["contact_telemetry_npz"])
+            and quality_sidecars.get("collision", {}).get("sha256")
+            == sha256_file(inputs["collision_telemetry_npz"])
         ),
         "trace_sha256": sha256_file(inputs["trace_npz"]),
         "demo_sha256": hdf5["sha256"],
         "video_sha256": video_receipt["sha256"],
+        "contact_telemetry_sha256": sha256_file(
+            inputs["contact_telemetry_npz"]
+        ),
+        "collision_telemetry_sha256": sha256_file(
+            inputs["collision_telemetry_npz"]
+        ),
     }
     worker = {
         "passed": bool(

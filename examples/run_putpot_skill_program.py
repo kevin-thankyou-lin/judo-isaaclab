@@ -208,6 +208,9 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "supports that environment-creation argument."
         ),
     )
+    parser.add_argument("--quality-contact-telemetry-npz")
+    parser.add_argument("--quality-collision-telemetry-npz")
+    parser.add_argument("--quality-perturbation-case-json")
     parser.add_argument("--controller-plugin-py")
     parser.add_argument("--controller-plugin-sha256")
     parser.add_argument("--controller-plugin-log")
@@ -510,7 +513,14 @@ def _configure_offline_ground() -> dict[str, object]:
     }
 
 
-def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
+def _sample(
+    env,
+    step: int,
+    stage: str,
+    info=None,
+    *,
+    quality_collision_model=None,
+) -> dict[str, object]:
     import torch
     from judo_isaaclab.task_space import pose_runtime_to_wxyz
     from isaaclab.utils.math import quat_apply
@@ -520,10 +530,16 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
     left_grasp, right_grasp = env.robot.is_grasping()
     env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
 
+    quality_mode = quality_collision_model is not None
+
     def finger_evidence(
         arm_name: str,
     ) -> tuple[
-        list[float], list[float], list[list[float]], list[list[float]]
+        list[float],
+        list[float],
+        list[list[float]],
+        list[list[float]],
+        list[dict[str, object]] | None,
     ]:
         gripper = env.robot.arms[arm_name].end_effector
         arm = env.scene[arm_name]
@@ -552,19 +568,31 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
             pad_centers_world.append(
                 center_world.detach().cpu().numpy().tolist()
             )
-        return forces, pad_fractions, pad_axes_world, pad_centers_world
+        quality = None
+        if quality_mode:
+            from judo_isaaclab.putpot_quality_runtime import (
+                measured_pad_contact_quality,
+            )
+
+            quality = [
+                measured_pad_contact_quality(finger, gripper.default_target)
+                for finger in gripper.fingers
+            ]
+        return forces, pad_fractions, pad_axes_world, pad_centers_world, quality
 
     (
         left_finger_forces,
         left_pad_fractions,
         left_pad_axes,
         left_pad_centers,
+        left_quality,
     ) = finger_evidence("left_arm")
     (
         right_finger_forces,
         right_pad_fractions,
         right_pad_axes,
         right_pad_centers,
+        right_quality,
     ) = finger_evidence("right_arm")
     origin = env.scene.env_origins[0].detach().cpu().numpy()
     pot = env.scene["pot"]
@@ -591,6 +619,20 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         and not bool(left_grasp[0].item())
         and not bool(right_grasp[0].item())
     )
+    support_geometry_now = bool(
+        xy_error < float(env.ontop_xy_threshold)
+        and support_error < 0.02
+        and orientation_error < 0.2
+    )
+    quality_collision_centers = None
+    if quality_mode:
+        from judo_isaaclab.putpot_quality_runtime import (
+            capture_robot_collision_centers,
+        )
+
+        quality_collision_centers = capture_robot_collision_centers(
+            env, quality_collision_model
+        )
     return {
         "step": int(step),
         "program_stage": stage,
@@ -604,10 +646,35 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "right_pad_fractions": right_pad_fractions,
         "right_pad_axes_world": right_pad_axes,
         "right_pad_centers_world": right_pad_centers,
+        "left_contact_area_fractions": (
+            None if left_quality is None
+            else [item["contact_area_fraction"] for item in left_quality]
+        ),
+        "right_contact_area_fractions": (
+            None if right_quality is None
+            else [item["contact_area_fraction"] for item in right_quality]
+        ),
+        "left_flush_angles_deg": (
+            None if left_quality is None
+            else [item["flush_angle_deg"] for item in left_quality]
+        ),
+        "right_flush_angles_deg": (
+            None if right_quality is None
+            else [item["flush_angle_deg"] for item in right_quality]
+        ),
+        "left_contact_point_counts": (
+            None if left_quality is None
+            else [item["contact_point_count"] for item in left_quality]
+        ),
+        "right_contact_point_counts": (
+            None if right_quality is None
+            else [item["contact_point_count"] for item in right_quality]
+        ),
         "stage1": bool(env.stage1_success[0].item()),
         "stage2": bool(env.stage2_success[0].item()),
         "task_success": task_success,
         "on_top_predicate_now": on_top_now,
+        "support_geometry_now": support_geometry_now,
         "support_error_m": support_error,
         "center_error_m": center_error,
         "xy_error_m": xy_error,
@@ -617,6 +684,7 @@ def _sample(env, step: int, stage: str, info=None) -> dict[str, object]:
         "cooktop_pose": cooktop_pose.tolist(),
         "left_eef_pose": _eef_pose(env, "left_arm").tolist(),
         "right_eef_pose": _eef_pose(env, "right_arm").tolist(),
+        "quality_collision_centers_m": quality_collision_centers,
     }
 
 
@@ -1906,10 +1974,47 @@ def main(argv: list[str] | None = None) -> None:
 
     args = _parser(argv)
     quality_config = None
+    quality_perturbation_case = None
     if args.quality_config_json:
-        from judo_isaaclab.putpot_quality import load_quality_config
+        from judo_isaaclab.putpot_quality import (
+            deterministic_perturbation_cases,
+            load_quality_config,
+        )
 
         quality_config = load_quality_config(args.quality_config_json)
+        missing_sidecars = [
+            name
+            for name, value in (
+                ("--quality-contact-telemetry-npz", args.quality_contact_telemetry_npz),
+                ("--quality-collision-telemetry-npz", args.quality_collision_telemetry_npz),
+            )
+            if value is None
+        ]
+        if missing_sidecars:
+            raise ValueError(
+                "quality mode requires measured sidecar outputs: "
+                + ", ".join(missing_sidecars)
+            )
+        if args.quality_perturbation_case_json:
+            if args.mode != "skill":
+                raise ValueError("quality perturbations require semantic skill mode")
+            from judo_isaaclab.putpot_quality_runtime import (
+                load_and_validate_perturbation_case,
+            )
+
+            quality_perturbation_case = load_and_validate_perturbation_case(
+                args.quality_perturbation_case_json,
+                deterministic_perturbation_cases(quality_config, joint_dof=14),
+            )
+    elif any(
+        value is not None
+        for value in (
+            args.quality_contact_telemetry_npz,
+            args.quality_collision_telemetry_npz,
+            args.quality_perturbation_case_json,
+        )
+    ):
+        raise ValueError("quality sidecars and perturbations require --quality-config-json")
     if args.mode in {"skill", "replay_center"} and not args.program_spec_json:
         raise ValueError(f"{args.mode} mode requires --program-spec-json")
     controller_flags = (
@@ -2156,6 +2261,8 @@ def main(argv: list[str] | None = None) -> None:
         args.write_keyframes,
         args.runtime_receipt_json,
         args.controller_plugin_log,
+        args.quality_contact_telemetry_npz,
+        args.quality_collision_telemetry_npz,
     )
     if args.persistent_session:
         ensure_fresh_output_paths(list(output_paths))
@@ -2256,7 +2363,7 @@ def main(argv: list[str] | None = None) -> None:
                     "mode": "replay",
                     "device": args.device,
                     "observation_modalities": observation_modalities,
-                    "enable_self_collisions": False,
+                    "enable_self_collisions": bool(quality_config is not None),
                     "camera_width": args.camera_width,
                     "camera_height": args.camera_height,
                     "image_downsample_factor": 1,
@@ -2300,6 +2407,22 @@ def main(argv: list[str] | None = None) -> None:
             )
         if args.persistent_session and _PERSISTENT_RUNTIME is not None:
             _PERSISTENT_RUNTIME["scene_sensor_inventory"] = scene_sensor_inventory
+        quality_collision_model = None
+        if quality_config is not None:
+            from judo_isaaclab.putpot_quality_runtime import (
+                authored_robot_collision_model,
+            )
+
+            if runtime_reused:
+                quality_collision_model = _PERSISTENT_RUNTIME.get(
+                    "quality_collision_model"
+                )
+            if quality_collision_model is None:
+                quality_collision_model = authored_robot_collision_model(env)
+            if args.persistent_session and _PERSISTENT_RUNTIME is not None:
+                _PERSISTENT_RUNTIME["quality_collision_model"] = (
+                    quality_collision_model
+                )
         reset_started = time.monotonic()
         env.reset(warm_up=False, seed=args.seed)
         source = _load_dataset(args.source_dataset, args.episode, env.device)
@@ -3135,7 +3258,14 @@ def main(argv: list[str] | None = None) -> None:
 
         demo_recorder = DemonstrationRecorder()
         demo_recorder.start(env.scene.get_state(is_relative=False))
-        samples = [_sample(env, -1, "reset")]
+        samples = [
+            _sample(
+                env,
+                -1,
+                "reset",
+                quality_collision_model=quality_collision_model,
+            )
+        ]
         actions = []; pot_poses = []; left_eef = []; right_eef = []; desired_left = []; desired_right = []
         if args.controller_plugin_py:
             from judo_isaaclab.putpot_controller_protocol import (
@@ -3618,6 +3748,20 @@ def main(argv: list[str] | None = None) -> None:
                             )
                             if actions:
                                 grippers[1] = float(actions[-1][13])
+                    if quality_perturbation_case is not None and any(
+                        token in str(stage).lower()
+                        for token in ("pregrasp", "grasp", "contact", "acquisition")
+                    ):
+                        from judo_isaaclab.putpot_quality_runtime import (
+                            perturb_grasp_pose,
+                        )
+
+                        left_target = perturb_grasp_pose(
+                            left_target, quality_perturbation_case
+                        )
+                        right_target = perturb_grasp_pose(
+                            right_target, quality_perturbation_case
+                        )
                     action = _ik_action(
                         env,
                         left_target,
@@ -3633,10 +3777,30 @@ def main(argv: list[str] | None = None) -> None:
                     desired_right.append(right_target)
                 if command is not None:
                     controller_command_count += 1
+            if quality_perturbation_case is not None:
+                from judo_isaaclab.putpot_quality_runtime import (
+                    perturb_joint_action,
+                )
+
+                perturbed_action = perturb_joint_action(
+                    action[0].detach().cpu().numpy(),
+                    quality_perturbation_case,
+                )
+                action = torch.as_tensor(
+                    perturbed_action[None],
+                    device=env.device,
+                    dtype=source["actions"].dtype,
+                )
             if args.acquisition_only:
                 _assert_acquisition_only_stage(stage)
             observation, _, terminated, truncated, info = env.step(action)
-            sample = _sample(env, step, stage, info)
+            sample = _sample(
+                env,
+                step,
+                stage,
+                info,
+                quality_collision_model=quality_collision_model,
+            )
             demo_recorder.append(
                 action,
                 env.scene.get_state(is_relative=False),
@@ -5104,6 +5268,50 @@ def main(argv: list[str] | None = None) -> None:
             local_mpc_frame_receipts=local_mpc_frame_receipts,
             partial=False,
         )
+        quality_sidecars = None
+        if quality_config is not None:
+            from judo_isaaclab.putpot_quality_runtime import (
+                collision_sidecar_fields,
+                quality_stage_telemetry,
+                write_quality_sidecar,
+            )
+
+            contact_fields = quality_stage_telemetry(
+                samples=samples,
+                actions=actions,
+                left_start_m=np.asarray(left_reset_pose, dtype=np.float64)[:3],
+                right_start_m=np.asarray(right_reset_pose, dtype=np.float64)[:3],
+                stable_steps=int(quality_config.grasp["stable_steps"]),
+                minimum_force_n=float(quality_config.grasp["minimum_force_n"]),
+                minimum_area_fraction=float(
+                    quality_config.grasp["minimum_contact_area_fraction"]
+                ),
+                maximum_flush_angle_deg=float(
+                    quality_config.grasp["maximum_flush_angle_deg"]
+                ),
+                return_tolerance_m=float(
+                    quality_config.motion["return_to_start_tolerance_m"]
+                ),
+            )
+            collision_fields = collision_sidecar_fields(
+                samples, quality_collision_model
+            )
+            write_quality_sidecar(
+                args.quality_contact_telemetry_npz, contact_fields
+            )
+            write_quality_sidecar(
+                args.quality_collision_telemetry_npz, collision_fields
+            )
+            quality_sidecars = {
+                "contact": {
+                    "path": os.path.abspath(args.quality_contact_telemetry_npz),
+                    "sha256": _sha256(args.quality_contact_telemetry_npz),
+                },
+                "collision": {
+                    "path": os.path.abspath(args.quality_collision_telemetry_npz),
+                    "sha256": _sha256(args.quality_collision_telemetry_npz),
+                },
+            }
         timers.add("trace_demo", time.monotonic() - trace_started)
         acquisition_latch = None
         if trajectory is not None:
@@ -5534,6 +5742,8 @@ def main(argv: list[str] | None = None) -> None:
                 "quality_config": (
                     None if quality_config is None else quality_config.receipt()
                 ),
+                "quality_perturbation": quality_perturbation_case,
+                "quality_sidecars": quality_sidecars,
                 "controller_plugin": controller_receipt,
                 "controller_plugin_command_count": controller_command_count,
                 "persistent_runtime": {

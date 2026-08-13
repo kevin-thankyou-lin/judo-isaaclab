@@ -149,7 +149,13 @@ def _bundle(tmp_path: Path):
         json.dumps(
             {
                 "status": "passed",
-                "protocol": {"quality_config": config.receipt()},
+                "protocol": {
+                    "quality_config": config.receipt(),
+                    "quality_sidecars": {
+                        "contact": {"sha256": _sha256(contact)},
+                        "collision": {"sha256": _sha256(collision)},
+                    },
+                },
                 "checks": {
                     "coded_task_success": True,
                     "accepted_task_success": True,
