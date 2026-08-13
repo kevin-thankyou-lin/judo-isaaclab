@@ -1558,6 +1558,7 @@ def main() -> None:
             camera_width=args.camera_width,
             camera_height=args.camera_height,
             image_downsample_factor=1,
+            enable_manual_hdf5_recorder=False,
             enable_gripper_grasp_clamp=False,
             enable_grasp_ray_viz=False,
             check_gripper_release_for_hang=True,

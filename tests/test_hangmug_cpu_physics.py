@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,25 @@ def _module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_evidence_runner_disables_unused_environment_hdf5_recorder():
+    path = Path(__file__).parents[1] / "examples/run_hangmug_skill_program.py"
+    tree = ast.parse(path.read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_task_environment"
+    ]
+
+    assert len(calls) == 1
+    keyword = next(
+        item for item in calls[0].keywords if item.arg == "enable_manual_hdf5_recorder"
+    )
+    assert isinstance(keyword.value, ast.Constant)
+    assert keyword.value.value is False
 
 
 def test_cpu_physics_receipt_requires_cpu_request():
