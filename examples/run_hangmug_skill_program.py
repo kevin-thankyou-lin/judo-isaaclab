@@ -26,7 +26,9 @@ PROVEN_CONTROL_DEFAULTS = {
 }
 
 _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N = 6.0
-_RETURN_CONTACT_CLEARANCE_STEPS = 8
+_RETURN_CONTACT_CLEARANCE_STEPS = 30
+_RETURN_CONTACT_PROGRESS_CHECK_ROW_INDEX = 7
+_RETURN_CONTACT_MINIMUM_PROGRESS_FRACTION = 0.25
 _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N = 0.25
 _CONTACT_FREE_FORCE_N = 1.0e-6
 
@@ -1624,7 +1626,8 @@ def _return_contact_clearance_receipt(
     row even when the already-screened interpolation immediately moves away.
     The grace below does not add a waypoint or permit sustained contact: both
     channels must start below a small force cap, never increase materially, and
-    be fully clear by the eighth return row.
+    make measurable progress by the eighth return row, and be fully clear by
+    the thirtieth return row.
     """
 
     return_rows = [
@@ -1684,13 +1687,52 @@ def _return_contact_clearance_receipt(
             <= previous_mug + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
         )
     )
+    checkpoint_row = (
+        return_rows[_RETURN_CONTACT_PROGRESS_CHECK_ROW_INDEX]
+        if len(return_rows) > _RETURN_CONTACT_PROGRESS_CHECK_ROW_INDEX
+        else None
+    )
+    checkpoint_environment = (
+        float(checkpoint_row["maximum_environment_contact_force_n"])
+        if checkpoint_row is not None
+        else float(environment_force_n)
+    )
+    checkpoint_mug = (
+        float(checkpoint_row["maximum_mug_contact_force_n"])
+        if checkpoint_row is not None
+        else float(mug_force_n)
+    )
+
+    def channel_progressed(initial_force: float, checkpoint_force: float) -> bool:
+        if initial_force <= _CONTACT_FREE_FORCE_N:
+            return checkpoint_force <= _CONTACT_FREE_FORCE_N
+        return checkpoint_force <= initial_force * (
+            1.0 - _RETURN_CONTACT_MINIMUM_PROGRESS_FRACTION
+        )
+
+    progress_checkpoint_reached = bool(
+        row_index >= _RETURN_CONTACT_PROGRESS_CHECK_ROW_INDEX
+    )
+    progress_sufficient = bool(
+        not progress_checkpoint_reached
+        or (
+            channel_progressed(initial_environment, checkpoint_environment)
+            and channel_progressed(initial_mug, checkpoint_mug)
+        )
+    )
     grace_row = row_index < _RETURN_CONTACT_CLEARANCE_STEPS - 1
     grace_allowed = bool(
-        not contact_free and grace_row and starts_bounded and nonincreasing
+        not contact_free
+        and grace_row
+        and starts_bounded
+        and nonincreasing
+        and progress_sufficient
     )
     return {
         "return_row_index": row_index,
         "required_clear_by_row_index": _RETURN_CONTACT_CLEARANCE_STEPS - 1,
+        "progress_check_row_index": _RETURN_CONTACT_PROGRESS_CHECK_ROW_INDEX,
+        "minimum_progress_fraction": _RETURN_CONTACT_MINIMUM_PROGRESS_FRACTION,
         "maximum_initial_force_n": _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N,
         "force_increase_tolerance_n": _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N,
         "initial_environment_force_n": initial_environment,
@@ -1699,6 +1741,8 @@ def _return_contact_clearance_receipt(
         "contact_reappeared": contact_reappeared,
         "starts_bounded": starts_bounded,
         "force_nonincreasing": nonincreasing,
+        "progress_checkpoint_reached": progress_checkpoint_reached,
+        "progress_sufficient": progress_sufficient,
         "grace_allowed": grace_allowed,
         "passed": bool(contact_free or grace_allowed),
     }

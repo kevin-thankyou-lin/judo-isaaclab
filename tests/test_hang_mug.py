@@ -83,13 +83,17 @@ def _return_clearance_row(environment_force, mug_force, prior_rows):
     }
 
 
-def test_post_release_contact_must_clear_monotonically_within_eight_rows():
+def test_post_release_contact_must_progress_by_eight_and_clear_within_thirty_rows():
     rows = []
-    for environment_force in (5.3, 4.7, 4.0, 3.2, 2.1, 1.0, 0.2, 0.0):
+    forces = np.concatenate(
+        (np.linspace(5.3, 3.9, 8), np.linspace(3.9, 0.0, 23)[1:])
+    )
+    for environment_force in forces:
         row = _return_clearance_row(environment_force, 0.0, rows)
         rows.append(row)
     assert all(row["passed"] for row in rows)
     assert rows[0]["return_contact_clearance"]["grace_allowed"]
+    assert rows[7]["return_contact_clearance"]["progress_sufficient"]
     assert rows[-1]["return_contact_clearance"]["contact_free"]
 
 
@@ -107,12 +111,27 @@ def test_post_release_contact_cannot_persist_or_reappear():
     for _ in range(8):
         row = _return_clearance_row(1.0, 0.0, rows)
         rows.append(row)
-    assert all(row["passed"] for row in rows[:-1])
+    assert all(row["passed"] for row in rows[:7])
     assert not rows[-1]["passed"]
 
     cleared = [_return_clearance_row(0.0, 0.0, [])]
     reappeared = _return_clearance_row(0.1, 0.0, cleared)
     assert not reappeared["passed"]
+
+
+def test_post_release_progress_gate_separates_measured_clearing_and_persistent_profiles():
+    clearing = []
+    for force in (1.946, 1.932, 1.873, 1.847, 1.776, 1.673, 1.529, 1.366):
+        clearing.append(_return_clearance_row(force, 0.0, clearing))
+    assert clearing[-1]["passed"]
+    assert clearing[-1]["return_contact_clearance"]["progress_sufficient"]
+
+    persistent = []
+    for force in (5.295, 5.312, 5.320, 5.337, 5.310, 5.269, 5.223, 5.167):
+        persistent.append(_return_clearance_row(force, 0.0, persistent))
+    assert all(row["passed"] for row in persistent[:7])
+    assert not persistent[-1]["passed"]
+    assert not persistent[-1]["return_contact_clearance"]["progress_sufficient"]
 
 
 def test_quality_wave_contact_reports_cover_both_arms_and_tree():
