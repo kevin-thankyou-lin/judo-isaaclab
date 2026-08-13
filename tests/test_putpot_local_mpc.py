@@ -300,6 +300,62 @@ def test_bounded_closure_commit_preserves_initial_gate_and_all_hard_guards():
     assert margin_guard.jaw_command == pytest.approx(continued.jaw_command)
 
 
+def test_committed_closure_pauses_only_while_both_pads_are_force_backed():
+    paused = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=_pose(x=0.011),
+            current_jaw_command=-0.0195,
+            active_finger_forces_n=[2.0, 2.0],
+            active_pad_fractions=[0.55, 0.05],
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        pause_committed_closure_on_dual_force_backing=True,
+    )
+    assert paused.closure_committed
+    assert paused.jaw_command == pytest.approx(-0.0195)
+    assert paused.frame_receipt["closure"]["dual_force_backed"]
+    assert paused.frame_receipt["closure"][
+        "paused_on_dual_force_backing"
+    ]
+    assert paused.frame_receipt["contact_fraction_recenter"]["active"]
+    assert not paused.frame_receipt["contact_fraction_recenter"][
+        "bounded_closure_priority_active"
+    ]
+    assert paused.frame_receipt["contact_fraction_recenter"][
+        "executed_translation_m"
+    ] == pytest.approx(0.001)
+
+    resumed = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=23,
+            observed_handle_contact_frame=_pose(x=0.011),
+            current_jaw_command=paused.jaw_command,
+            active_finger_forces_n=[0.0, 2.0],
+            active_pad_fractions=[np.nan, 0.05],
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        allow_bounded_closure_commit=True,
+        closure_committed=paused.closure_committed,
+        pause_committed_closure_on_dual_force_backing=True,
+    )
+    assert not resumed.frame_receipt["closure"]["dual_force_backed"]
+    assert not resumed.frame_receipt["closure"][
+        "paused_on_dual_force_backing"
+    ]
+    assert resumed.frame_receipt["executed_control"][
+        "jaw_increment"
+    ] == pytest.approx(0.004)
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None

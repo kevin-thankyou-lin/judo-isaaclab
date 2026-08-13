@@ -368,6 +368,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "increment_active",
             "committed",
             "closed_command_reached",
+            "dual_force_backed",
+            "paused_on_dual_force_backing",
         }
         and set(latch)
         == {
@@ -413,6 +415,7 @@ def handle_local_mpc_step(
     contact_recenter_preserve_bounded_closure: bool = False,
     allow_bounded_closure_commit: bool = False,
     closure_committed: bool = False,
+    pause_committed_closure_on_dual_force_backing: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -655,6 +658,12 @@ def handle_local_mpc_step(
         aligned_for_closure
         or (allow_bounded_closure_commit and closure_committed)
     )
+    dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
+    pause_committed_closure = bool(
+        pause_committed_closure_on_dual_force_backing
+        and closure_committed
+        and dual_force_backed
+    )
     jaw_increment = (
         float(
             np.clip(
@@ -663,7 +672,12 @@ def handle_local_mpc_step(
                 config.maximum_jaw_step,
             )
         )
-        if closure_authorized and not fail_closed and not robust_frame
+        if (
+            closure_authorized
+            and not pause_committed_closure
+            and not fail_closed
+            and not robust_frame
+        )
         else 0.0
     )
     if contact_recenter_active and not contact_recenter_preserve_bounded_closure:
@@ -806,6 +820,8 @@ def handle_local_mpc_step(
             "closed_command_reached": bool(
                 abs(jaw_command - config.closed_jaw_command) <= 1.0e-12
             ),
+            "dual_force_backed": dual_force_backed,
+            "paused_on_dual_force_backing": pause_committed_closure,
         },
         "latch": {
             "active_force_and_margin": active_robust,

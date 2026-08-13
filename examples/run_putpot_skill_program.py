@@ -845,6 +845,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "and jaw bounds remain active."
         ),
     )
+    parser.add_argument(
+        "--target-left-bounded-closure-dual-force-stop",
+        action="store_true",
+        help=(
+            "Pause an already-committed left closure when both pads reach the "
+            "existing minimum-force gate so bounded pad reseating can act; "
+            "closure resumes if force backing is lost."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -2848,6 +2857,12 @@ def main(argv: list[str] | None = None) -> None:
             "left bounded-closure commitment requires closure-preserving "
             "left recentering"
         )
+    if args.target_left_bounded_closure_dual_force_stop and not (
+        args.target_left_bounded_closure_commit
+    ):
+        raise ValueError(
+            "left dual-force closure stop requires bounded-closure commitment"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -4730,6 +4745,10 @@ def main(argv: list[str] | None = None) -> None:
                                 closure_committed=bool(
                                     active_arm == "left"
                                     and local_mpc_left_closure_committed
+                                ),
+                                pause_committed_closure_on_dual_force_backing=bool(
+                                    active_arm == "left"
+                                    and args.target_left_bounded_closure_dual_force_stop
                                 ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
@@ -6877,6 +6896,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_commits_bounded_closure": bool(
                         args.target_left_bounded_closure_commit
+                    ),
+                    "left_pauses_committed_closure_on_dual_force_backing": bool(
+                        args.target_left_bounded_closure_dual_force_stop
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,
