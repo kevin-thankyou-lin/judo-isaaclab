@@ -341,6 +341,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.08,
         "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
@@ -380,6 +381,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
+    assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
     assert "--target-branch-rank" not in command
@@ -445,6 +447,16 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_standoff_outside_m": 0.08}))
+    with pytest.raises(ValueError, match="outside standoff"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_orient_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.121,
+    }))
+    with pytest.raises(ValueError, match="outside standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
     with pytest.raises(ValueError, match="requires orient-first"):

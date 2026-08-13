@@ -39,6 +39,7 @@ from run_hangmug_skill_program import (
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
     _handover_gripper_proxy_receipt,
+    _handover_outside_standoff,
     _handover_lift_guard_receipt,
     _handover_wave_contract_receipt,
     _pose_path_step_receipt,
@@ -1021,6 +1022,27 @@ def test_pitched_receiver_orients_clear_then_descends_open_before_close():
             _pose(), clear, grasp, _pose(), right_orient_clear=oriented_clear,
             orient_steps=2, approach_steps=2, close_steps=2, release_steps=2,
         )
+
+
+def test_handover_outside_standoff_moves_toward_receiver_without_moving_grasp():
+    grasp = _pose(0.50, 0.00, 0.90)
+    receiver_start = _pose(0.35, -0.30, 1.00)
+    mug = _pose(0.48, -0.01, 0.84)
+    standoff = _handover_outside_standoff(
+        grasp,
+        receiver_start,
+        mug,
+        vertical_clearance_m=0.12,
+        outside_clearance_m=0.08,
+    )
+    expected_direction = receiver_start[:2] - mug[:2]
+    expected_direction /= np.linalg.norm(expected_direction)
+    np.testing.assert_allclose(
+        standoff[:2] - grasp[:2], 0.08 * expected_direction
+    )
+    assert standoff[2] == pytest.approx(grasp[2] + 0.12)
+    np.testing.assert_allclose(standoff[3:], grasp[3:])
+    np.testing.assert_allclose(grasp, _pose(0.50, 0.00, 0.90))
 
 
 def test_hangmug_program_is_one_continuous_named_rollout():
