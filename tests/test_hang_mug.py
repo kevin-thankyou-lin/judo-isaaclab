@@ -28,6 +28,7 @@ from run_hangmug_skill_program import (
     _add_right_handover_assist,
     _array_sha256,
     _bounded_handover_offset,
+    _direct_replay_requires_repair,
     _direct_actions_exact,
     _install_grasp_assist_config,
     _handover_boundary_receipt,
@@ -728,6 +729,35 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed",
     ):
         assert diagnostic not in skill
+
+
+def test_direct_replay_contact_rejection_authorizes_a_repair():
+    contact_rejection = {
+        "status": "passed",
+        "terminal": {"task_success": True},
+        "independent_terminal_hang": {"passed": False},
+    }
+    task_rejection = {
+        "status": "passed",
+        "terminal": {"task_success": False},
+    }
+    assert _direct_replay_requires_repair(contact_rejection)
+    assert _direct_replay_requires_repair(task_rejection)
+
+
+def test_direct_replay_success_or_technical_failure_does_not_authorize_repair():
+    accepted = {
+        "status": "passed",
+        "terminal": {"task_success": True},
+        "independent_terminal_hang": {"passed": True},
+    }
+    technical_failure = {
+        "status": "failed",
+        "terminal": {"task_success": False},
+        "independent_terminal_hang": {"passed": False},
+    }
+    assert not _direct_replay_requires_repair(accepted)
+    assert not _direct_replay_requires_repair(technical_failure)
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():

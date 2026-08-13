@@ -696,6 +696,18 @@ def _schema_aware_success_acceptance(
     return acceptance
 
 
+def _direct_replay_requires_repair(result: dict) -> bool:
+    """Require a technically valid baseline with failed physical acceptance."""
+    if result.get("status") != "passed":
+        return False
+    task_failed = not result.get("terminal", {}).get("task_success", True)
+    terminal = result.get("independent_terminal_hang")
+    independent_failed = (
+        isinstance(terminal, dict) and terminal.get("passed") is False
+    )
+    return bool(task_failed or independent_failed)
+
+
 def _requires_observed_handover_reanchor(
     mug_parts, *, handle_frame_transfer: bool = False
 ) -> bool:
@@ -2087,7 +2099,9 @@ def main() -> None:
             )
             if direct_replay is not None and target_assets != source_assets:
                 acceptance = dict(acceptance)
-                acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                acceptance["direct_source_action_replay_failed"] = (
+                    _direct_replay_requires_repair(direct_replay)
+                )
                 acceptance["direct_replay_grasp_assistance_matched"] = (
                     direct_replay.get("protocol", {}).get("grasp_assistance")
                     == grasp_assistance
