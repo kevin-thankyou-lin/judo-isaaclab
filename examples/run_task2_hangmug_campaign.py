@@ -1208,18 +1208,48 @@ def _run_serial(indices) -> None:
         run_one(index)
 
 
+def _claim_explicit_lane(index: int, lane_id: str) -> Path:
+    """Bind one isolated results tree to one explicit pair/lane assignment."""
+    lane = lane_id.strip()
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    if not lane or any(character not in allowed for character in lane):
+        raise ValueError("lane ID must contain only letters, digits, '-' or '_'")
+    receipt = {
+        "schema_version": 1,
+        "pair_index": index,
+        "human_pair": index + 1,
+        "lane_id": lane,
+        "judo_head": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip(),
+        "results_root": str(RESULTS.resolve()),
+    }
+    path = RESULTS / "pairs" / f"{index:06d}" / "lane_assignment.json"
+    if path.exists():
+        if _load(path) != receipt:
+            raise RuntimeError(f"pair/lane assignment changed: {path}")
+        return path
+    _atomic_json(path, receipt, immutable=True)
+    return path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-new-pairs", type=int)
-    parser.add_argument("--requalify-pair", type=int)
+    ownership = parser.add_mutually_exclusive_group()
+    ownership.add_argument("--max-new-pairs", type=int)
+    ownership.add_argument("--pair-index", type=int)
+    ownership.add_argument("--requalify-pair", type=int)
+    parser.add_argument("--lane-id")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.max_new_pairs is not None and args.max_new_pairs < 1:
         raise ValueError("--max-new-pairs must be positive")
+    if args.pair_index is not None and not 0 <= args.pair_index < 40:
+        raise ValueError("--pair-index must be in [0, 39]")
     if args.requalify_pair is not None and not 1 <= args.requalify_pair < 40:
         raise ValueError("--requalify-pair must be in [1, 39]")
-    if args.requalify_pair is not None and args.max_new_pairs is not None:
-        raise ValueError("--requalify-pair and --max-new-pairs are mutually exclusive")
+    if (args.pair_index is None) != (args.lane_id is None):
+        raise ValueError("--pair-index and --lane-id must be supplied together")
     os.chdir(REPO_ROOT)
     dirty = subprocess.run(["git", "diff", "--quiet"], cwd=REPO_ROOT).returncode
     staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO_ROOT).returncode
@@ -1233,6 +1263,24 @@ def main() -> None:
     ledger = _load(RESULTS / "ledger.json")
     if args.requalify_pair is not None:
         run_one(args.requalify_pair, replace_existing=True)
+        return
+    if args.pair_index is not None:
+        _claim_explicit_lane(args.pair_index, args.lane_id)
+        if args.dry_run:
+            attempt = _attempt_directory(
+                args.pair_index, "direct_source_classification"
+            )
+            print("TASK2_HANGMUG_DRY_RUN=" + json.dumps({
+                "pair_index": args.pair_index,
+                "human_pair": args.pair_index + 1,
+                "lane_id": args.lane_id,
+                "attempt": str(attempt),
+                "classification_command": _classification_command(
+                    args.pair_index, attempt
+                ),
+            }, sort_keys=True))
+            return
+        run_one(args.pair_index)
         return
     start = _first_missing(ledger)
     while start < 40 and _recover_audited_attempt(start):
