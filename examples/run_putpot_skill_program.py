@@ -408,6 +408,8 @@ def _measured_loaded_pad_interior_preseat(
 ) -> dict[str, object]:
     """Invert one measured outside-surface pad offset before first contact."""
 
+    from judo_isaaclab.put_marker import inverse_pose, quaternion_rotate
+
     result_source = Path(result_path).resolve()
     trace_source = Path(trace_path).resolve()
     if not result_source.is_file() or not trace_source.is_file():
@@ -512,6 +514,10 @@ def _measured_loaded_pad_interior_preseat(
     translation_norm = float(np.linalg.norm(translation))
     if translation_norm > maximum_translation_m + 1.0e-12:
         raise ValueError("loaded-pad interior preseat exceeds its geometry bound")
+    sampled_pot_pose = pot[trace_step]
+    translation_object_local = quaternion_rotate(
+        inverse_pose(sampled_pot_pose)[3:], translation
+    )
     return {
         "enabled": True,
         "classification": "measured_loaded_pad_surface_side_inversion_preseat",
@@ -532,6 +538,8 @@ def _measured_loaded_pad_interior_preseat(
         "jaw_axis_world": jaw_axis.tolist(),
         "signed_handle_surface_beyond_loaded_pad_m": signed_surface_offset_m,
         "translation_world_m": translation.tolist(),
+        "sampled_pot_pose_world": sampled_pot_pose.tolist(),
+        "translation_object_local_m": translation_object_local.tolist(),
         "translation_norm_m": translation_norm,
         "maximum_translation_m": float(maximum_translation_m),
         "measured_pre_latch_pot_motion_m": displacement,
@@ -3966,6 +3974,7 @@ def main(argv: list[str] | None = None) -> None:
         precontact_pad_balance = None
         loaded_pad_interior_preseat = None
         local_mpc_left_pad_balance_translation_local = None
+        local_mpc_left_loaded_pad_interior_translation_local = None
         source_contact_frame_correction = None
         diagnostic_target_left_contact_frame = None
         diagnostic_target_contact_frames_local = None
@@ -4677,6 +4686,20 @@ def main(argv: list[str] | None = None) -> None:
                             translate_pregrasp=False,
                         )
                     )
+                    local_mpc_left_loaded_pad_interior_translation_local = (
+                        np.asarray(
+                            loaded_pad_interior_preseat[
+                                "translation_object_local_m"
+                            ],
+                            dtype=np.float64,
+                        )
+                    )
+                    loaded_pad_interior_preseat[
+                        "mpc_contact_reference_translation_local_m"
+                    ] = local_mpc_left_loaded_pad_interior_translation_local.tolist()
+                    loaded_pad_interior_preseat[
+                        "mpc_contact_reference_applied"
+                    ] = True
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
                         _translate_source_corridor_endpoints(
@@ -5621,6 +5644,16 @@ def main(argv: list[str] | None = None) -> None:
                                 samples[-1]["pot_pose"],
                                 diagnostic_target_contact_frames_local[active_arm],
                             )
+                            if (
+                                active_arm == "left"
+                                and local_mpc_left_loaded_pad_interior_translation_local
+                                is not None
+                            ):
+                                observed_handle = _offset_object_contact_frame(
+                                    samples[-1]["pot_pose"],
+                                    observed_handle,
+                                    local_mpc_left_loaded_pad_interior_translation_local,
+                                )
                             if _pad_balance_mpc_reference_active(
                                 active_arm,
                                 local_mpc_left_pad_balance_translation_local,

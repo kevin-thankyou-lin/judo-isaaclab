@@ -455,6 +455,12 @@ def test_measured_loaded_pad_preseat_inverts_outside_surface_offset(tmp_path):
         0.01
     )
     assert receipt["translation_world_m"] == pytest.approx([0.02, 0.0, 0.0])
+    assert receipt["sampled_pot_pose_world"] == pytest.approx(
+        [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0]
+    )
+    assert receipt["translation_object_local_m"] == pytest.approx(
+        [0.02, 0.0, 0.0]
+    )
     assert receipt["translation_norm_m"] == pytest.approx(0.02)
     assert receipt["collision_clear_pregrasp_preserved"]
     assert not receipt["pregrasp_translation_applied"]
