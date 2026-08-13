@@ -3134,6 +3134,7 @@ def main() -> None:
         handover_wave_live_rows = []
         direct_plan_screens = {"outbound": None, "return": None}
         direct_live_rows = []
+        post_release_return_reanchor = None
         if args.render:
             Path(args.video).parent.mkdir(parents=True, exist_ok=True)
             encoder = _Encoder(args.fps, args.video)
@@ -3206,6 +3207,23 @@ def main() -> None:
                     )
                     if not handover_wave_plan_screens["clear_pregrasp"]["passed"]:
                         break
+                if (
+                    "post_release_return" in trajectory.waypoint_steps
+                    and semantic_step == trajectory.waypoint_steps["right_release"]
+                ):
+                    from judo_isaaclab.hang_mug import reanchor_post_release_return
+
+                    trajectory, post_release_return_reanchor = (
+                        reanchor_post_release_return(
+                            trajectory, samples[-1]["right_eef_pose"]
+                        )
+                    )
+                    post_release_return_reanchor["observed_after_step"] = int(
+                        samples[-1]["step"]
+                    )
+                    post_release_return_reanchor["reanchored_before_step"] = int(
+                        semantic_step
+                    )
                 if (
                     "direct_preinsert" in trajectory.waypoint_steps
                     and semantic_step
@@ -3857,6 +3875,7 @@ def main() -> None:
                 ),
             },
             "direct_phase_contract": direct_phase_contract,
+            "post_release_return_reanchor": post_release_return_reanchor,
             "direct_segment_collision_screening": direct_collision_screening,
             "post_release_right_rest": post_release_right_rest,
             "independent_terminal_hang": independent_terminal_hang,

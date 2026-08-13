@@ -582,6 +582,64 @@ def reanchor_branch_transport_contact(
     )
 
 
+def reanchor_post_release_return(
+    trajectory: SkillTrajectory,
+    observed_right_pose: Any,
+) -> tuple[SkillTrajectory, dict[str, object]]:
+    """Regenerate the direct open return from the live release boundary.
+
+    Cartesian tracking error accumulated during insertion must not make the
+    return jump back to the stale authored insertion pose.  The demonstrated
+    rest endpoint and the single direct interpolation remain unchanged.
+    """
+
+    steps = trajectory.waypoint_steps
+    if "right_release" not in steps or "post_release_return" not in steps:
+        raise ValueError("trajectory is missing the direct release/return boundary")
+    release_end = steps["right_release"]
+    return_end = steps["post_release_return"]
+    if return_end <= release_end:
+        raise ValueError("post-release return must follow right release")
+    observed = _pose(observed_right_pose, "observed_right_pose")
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    planned_release = right[release_end].copy()
+    demonstrated_rest = right[return_end].copy()
+    right[release_end] = observed
+    right[release_end + 1 : return_end + 1] = interpolate_poses(
+        observed,
+        demonstrated_rest,
+        return_end - release_end,
+    )
+    right[return_end] = demonstrated_rest
+    pose_error = compose_pose(inverse_pose(planned_release), observed)
+    receipt = {
+        "strategy": "observed_release_to_unchanged_demonstrated_rest",
+        "planned_release_pose": planned_release.tolist(),
+        "observed_release_pose": observed.tolist(),
+        "demonstrated_rest_pose": demonstrated_rest.tolist(),
+        "release_position_error_m": float(
+            np.linalg.norm(observed[:3] - planned_release[:3])
+        ),
+        "release_rotation_error_rad": float(
+            2.0 * np.arccos(np.clip(abs(pose_error[3]), 0.0, 1.0))
+        ),
+        "direct_return_rows": int(return_end - release_end),
+        "rest_endpoint_unchanged": bool(
+            np.array_equal(right[return_end], demonstrated_rest)
+        ),
+    }
+    return (
+        SkillTrajectory(
+            left_poses=trajectory.left_poses.copy(),
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        receipt,
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 

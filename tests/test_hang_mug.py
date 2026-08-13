@@ -14,6 +14,7 @@ from judo_isaaclab.hang_mug import (
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
+    reanchor_post_release_return,
     reanchor_handover_contact_acquire,
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
@@ -1456,6 +1457,52 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     assert residuals.max() <= 1.0e-12
     assert np.all(np.diff(fractions) >= -1.0e-12)
+
+
+def test_post_release_return_reanchors_one_direct_interpolation_to_same_rest():
+    right_start = _pose(0.2, -0.7, 0.9)
+    insert = _pose(0.7, -0.2, 0.95)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1,
+    )
+    program.release_and_return_to_rest(
+        insert, right_start, support_steps=2, release_steps=3,
+        return_steps=5, settle_steps=2,
+    )
+    trajectory = program.build()
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    stable_end = trajectory.waypoint_steps["stable_support"]
+    original_rest = trajectory.right_poses[return_end].copy()
+    original_left = trajectory.left_poses.copy()
+    original_grippers = trajectory.grippers.copy()
+    observed = trajectory.right_poses[release_end].copy()
+    observed[:3] += np.asarray([0.004, -0.003, 0.002])
+
+    adjusted, receipt = reanchor_post_release_return(trajectory, observed)
+
+    np.testing.assert_allclose(adjusted.right_poses[release_end], observed)
+    np.testing.assert_allclose(adjusted.right_poses[return_end], original_rest)
+    np.testing.assert_allclose(
+        adjusted.right_poses[return_end + 1 : stable_end + 1],
+        np.repeat(original_rest[None], stable_end - return_end, axis=0),
+    )
+    np.testing.assert_array_equal(adjusted.left_poses, original_left)
+    np.testing.assert_array_equal(adjusted.grippers, original_grippers)
+    points = adjusted.right_poses[release_end + 1 : return_end + 1, :3]
+    direction = original_rest[:3] - observed[:3]
+    fractions = (points - observed[:3]) @ direction / float(direction @ direction)
+    residuals = np.linalg.norm(
+        points - (observed[:3] + fractions[:, None] * direction), axis=1
+    )
+    assert residuals.max() <= 1.0e-12
+    assert np.all(np.diff(fractions) >= -1.0e-12)
+    assert receipt["strategy"] == "observed_release_to_unchanged_demonstrated_rest"
+    assert receipt["direct_return_rows"] == 5
+    assert receipt["rest_endpoint_unchanged"] is True
+    json.dumps(receipt)
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
