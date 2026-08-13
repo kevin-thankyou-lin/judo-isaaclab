@@ -793,7 +793,7 @@ def test_handover_local_seat_translates_only_along_oriented_pad_depth_axis():
 
 def test_handover_local_pad_standoff_backs_out_along_affordance_axis():
     pose = _handover_target_with_local_pitch(_pose(0.4, -0.1, 0.9), np.pi / 4.0)
-    clear = _handover_orient_clear_pose(pose, 0.0, 0.08)
+    clear = _handover_orient_clear_pose(pose, 0.0, 0.0, 0.08)
     np.testing.assert_allclose(clear[3:], pose[3:], atol=0.0)
     np.testing.assert_allclose(
         clear[:3] - pose[:3],
@@ -801,7 +801,17 @@ def test_handover_local_pad_standoff_backs_out_along_affordance_axis():
         atol=1.0e-12,
     )
     with pytest.raises(ValueError, match="one approach frame"):
-        _handover_orient_clear_pose(pose, 0.08, 0.08)
+        _handover_orient_clear_pose(pose, 0.08, 0.0, 0.08)
+
+
+def test_handover_local_y_standoff_follows_signed_handle_outward_axis():
+    pose = _handover_target_with_local_pitch(_pose(0.4, -0.1, 0.9), np.pi / 4.0)
+    clear = _handover_orient_clear_pose(pose, 0.0, 0.08, 0.0)
+    np.testing.assert_allclose(
+        clear[:3] - pose[:3],
+        quaternion_rotate(pose[3:], [0.0, 0.08, 0.0]),
+        atol=1.0e-12,
+    )
 
 
 def test_pitched_receiver_orients_clear_then_descends_open_before_close():
