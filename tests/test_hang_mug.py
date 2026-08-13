@@ -1392,6 +1392,7 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     assert receipt["passed"] is True
     assert receipt["right_opening_transition_runs"] == 1
+    json.dumps(receipt)
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
