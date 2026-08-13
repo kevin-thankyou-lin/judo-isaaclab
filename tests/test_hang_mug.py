@@ -27,6 +27,7 @@ from judo_isaaclab.put_marker import (
     quaternion_rotate,
 )
 from run_hangmug_skill_program import (
+    _DEMO_SERIALIZATION_CONTROL_EXCLUSIONS,
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
@@ -40,6 +41,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _direct_segment_live_row,
+    _demo_hdf5_serialization_receipt,
     _return_contact_clearance_receipt,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
@@ -72,6 +74,7 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+from run_replay_success_semantic_audit import SEMANTIC_AUDIT_CONTROL_CHECKS
 
 
 def _return_clearance_row(environment_force, mug_force, prior_rows):
@@ -1016,6 +1019,48 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed",
     ):
         assert diagnostic not in skill
+
+
+def test_demo_serialization_excludes_only_direct_replay_classification_control():
+    assert (
+        _DEMO_SERIALIZATION_CONTROL_EXCLUSIONS
+        == SEMANTIC_AUDIT_CONTROL_CHECKS
+    )
+    ordinary = _demo_hdf5_serialization_receipt(
+        {"independent_terminal_hang": True, "fully_decodable": True}
+    )
+    assert ordinary == {
+        "passed": True,
+        "false_checks": [],
+        "excluded_controls": [],
+    }
+
+    classification_only = _demo_hdf5_serialization_receipt(
+        {
+            "independent_terminal_hang": True,
+            "fully_decodable": True,
+            "direct_source_action_replay_failed": False,
+        }
+    )
+    assert classification_only == {
+        "passed": True,
+        "false_checks": ["direct_source_action_replay_failed"],
+        "excluded_controls": ["direct_source_action_replay_failed"],
+    }
+
+    semantic_failure = _demo_hdf5_serialization_receipt(
+        {
+            "independent_terminal_hang": False,
+            "direct_source_action_replay_failed": False,
+        }
+    )
+    assert semantic_failure["passed"] is False
+    assert semantic_failure["false_checks"] == [
+        "direct_source_action_replay_failed",
+        "independent_terminal_hang",
+    ]
+
+    assert _demo_hdf5_serialization_receipt({})["passed"] is False
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
