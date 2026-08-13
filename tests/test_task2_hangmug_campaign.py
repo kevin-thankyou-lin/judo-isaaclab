@@ -322,6 +322,25 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     assert "--handover-contact-settle-steps" not in handover
 
 
+def test_quality_regeneration_does_not_claim_old_success_as_failed_baseline(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    selection = {
+        **campaign._repair_selection("pick", None),
+        "quality_regeneration_from_direct_success": True,
+    }
+    command = campaign._repair_command(
+        23,
+        tmp_path / "fresh",
+        tmp_path / "preserved_direct_success/result.json",
+        selection,
+    )
+    assert "--direct-replay-result" not in command
+    assert "--reuse-source-pick-prefix" not in command
+
+
 def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkeypatch):
     results = tmp_path / "task2"
     candidate = results / "pairs/000002/repair_candidate.json"

@@ -180,10 +180,15 @@ def _repair_command(
     arguments = [
         "--mode", "skill",
         "--source-keyframes", str(KEYFRAMES),
-        "--direct-replay-result", str(classification_result),
+    ]
+    if not selection.get("quality_regeneration_from_direct_success", False):
+        arguments.extend([
+            "--direct-replay-result", str(classification_result),
+        ])
+    arguments.extend([
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
-    ]
+    ])
     if strategy.get("require_broad_pad_contact"):
         arguments.append("--require-broad-pad-contact")
     if "pick_lift_margin_m" in strategy:
@@ -1063,6 +1068,11 @@ def independent_audit(index: int, attempt: Path) -> dict:
                 "actual_repair_boundary", "coarse_fallback",
             )
         }
+        selection["quality_regeneration_from_direct_success"] = bool(
+            manifest["classification"].get(
+                "quality_regeneration_from_direct_success", False
+            )
+        )
         action_binding = (
             selection["actual_repair_boundary"] != "pick"
             or np.array_equal(actions[:SOURCE_PREFIX_STEPS], source_actions[:SOURCE_PREFIX_STEPS])
