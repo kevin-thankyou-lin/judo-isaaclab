@@ -337,7 +337,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "left_branch_point_steps": 35,
         "require_broad_pad_contact": True,
         "pick_lift_margin_m": 0.01,
-        "pick_approach_advance_m": 0.007,
         "handover_handle_frame_transfer": True,
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_clearance_m": 0.08,
@@ -365,7 +364,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--left-branch-point-steps") + 1] == "35"
     assert "--require-broad-pad-contact" in command
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
-    assert float(command[command.index("--pick-approach-advance-m") + 1]) == 0.007
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
@@ -407,9 +405,6 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"pick_lift_margin_m": 0.031}))
     with pytest.raises(ValueError, match="pick lift margin"):
-        campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({"pick_approach_advance_m": 0.016}))
-    with pytest.raises(ValueError, match="pick approach advance"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"stable_support_steps": 241}))
     with pytest.raises(ValueError, match="stable support steps"):
@@ -527,16 +522,15 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert "--branch-orient-steps" not in command
 
 
-def test_pick_geometry_is_reset_boundary_only(tmp_path, monkeypatch):
+def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
     monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
-    strategy = {"pick_lift_margin_m": 0.01, "pick_approach_advance_m": 0.007}
+    strategy = {"pick_lift_margin_m": 0.01}
     reset = campaign._repair_command(
         6, tmp_path / "reset", tmp_path / "classification.json",
         campaign._repair_selection("pick", None), strategy,
     )
     assert reset[reset.index("--pick-lift-margin-m") + 1] == "0.01"
-    assert reset[reset.index("--pick-approach-advance-m") + 1] == "0.007"
     with pytest.raises(ValueError, match="valid only from reset"):
         campaign._repair_command(
             6, tmp_path / "prefix", tmp_path / "classification.json",
