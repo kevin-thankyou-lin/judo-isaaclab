@@ -43,6 +43,32 @@ def _source_left_first_requires_measured_corridor(
     return bool(requested and not has_measured_corridor and not quality_mode)
 
 
+def _source_contact_requires_acquisition_only(
+    *, requested: bool, acquisition_only: bool, quality_mode: bool
+) -> bool:
+    """Keep legacy source-contact repairs acquisition-only by default."""
+
+    return bool(requested and not acquisition_only and not quality_mode)
+
+
+def _quality_source_contact_requires_sequential_corridor(
+    *,
+    requested: bool,
+    acquisition_only: bool,
+    quality_mode: bool,
+    has_measured_corridor: bool,
+    left_first: bool,
+) -> bool:
+    """Require the quality contract when reusing a failed trace geometrically."""
+
+    return bool(
+        requested
+        and not acquisition_only
+        and quality_mode
+        and not (has_measured_corridor and left_first)
+    )
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -281,7 +307,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-left-source-contact-calibration-trace",
         help=(
             "Immutable failed acquisition trace used only to recover the rigid "
-            "open-jaw pad frame for a source-contact-frame correction."
+            "open-jaw pad frame for a source-contact-frame correction. Full "
+            "quality mode additionally requires the left-first source corridor."
         ),
     )
     parser.add_argument(
@@ -298,7 +325,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Map both source left pregrasp and grasp frames through the target "
-            "handle contact frame. Acquisition-only mode only."
+            "handle contact frame. Full quality mode additionally requires "
+            "left-first acquisition and a force-free failed-trace sample."
         ),
     )
     parser.add_argument(
@@ -2141,8 +2169,23 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError(
             "source-contact correction requires trace, sample step, and critic"
         )
-    if source_contact_requested and not args.acquisition_only:
+    if _source_contact_requires_acquisition_only(
+        requested=source_contact_requested,
+        acquisition_only=args.acquisition_only,
+        quality_mode=quality_config is not None,
+    ):
         raise ValueError("source-contact correction is acquisition-only")
+    if _quality_source_contact_requires_sequential_corridor(
+        requested=source_contact_requested,
+        acquisition_only=args.acquisition_only,
+        quality_mode=quality_config is not None,
+        has_measured_corridor=args.target_left_source_approach_corridor,
+        left_first=args.target_source_left_first_acquisition,
+    ):
+        raise ValueError(
+            "quality source-contact correction requires a left-first measured "
+            "source corridor"
+        )
     if source_contact_requested and calibration_requested:
         raise ValueError(
             "source-contact correction cannot reuse static translation calibration"
@@ -2718,6 +2761,10 @@ def main(argv: list[str] | None = None) -> None:
                     "left_pad_centers_world",
                     "left_pad_axes_world",
                 }
+                if quality_config is not None and not args.acquisition_only:
+                    required_arrays.update(
+                        {"left_finger_forces_n", "partial_trace"}
+                    )
                 if args.target_right_handle_local_mpc_bootstrap:
                     required_arrays.update(
                         {
@@ -2755,6 +2802,44 @@ def main(argv: list[str] | None = None) -> None:
                     calibration["left_pad_axes_world"][calibration_step],
                     dtype=np.float64,
                 )
+                if quality_config is not None and not args.acquisition_only:
+                    calibration_forces = np.asarray(
+                        calibration["left_finger_forces_n"][calibration_step],
+                        dtype=np.float64,
+                    )
+                    if bool(np.asarray(calibration["partial_trace"]).reshape(())):
+                        raise ValueError(
+                            "quality source-contact calibration trace is partial"
+                        )
+                    if (
+                        calibration_forces.shape != (2,)
+                        or not np.all(np.isfinite(calibration_forces))
+                        or np.any(calibration_forces > 1.0e-6)
+                    ):
+                        raise ValueError(
+                            "quality source-contact calibration sample must be "
+                            "force-free"
+                        )
+                    critic_sample = critic.get("calibration_sample", {})
+                    if (
+                        critic.get("lane_id")
+                        != os.environ.get("CPGEN_LANE_ID")
+                        or critic_sample.get("step") != calibration_step
+                        or critic_sample.get("force_free") is not True
+                        or not np.allclose(
+                            np.asarray(
+                                critic_sample.get("left_finger_forces_n", []),
+                                dtype=np.float64,
+                            ),
+                            calibration_forces,
+                            atol=1.0e-9,
+                            rtol=0.0,
+                        )
+                    ):
+                        raise ValueError(
+                            "quality source-contact critic does not own the "
+                            "force-free calibration sample"
+                        )
                 if args.target_right_handle_local_mpc_bootstrap:
                     calibration_right_wrist = np.asarray(
                         calibration["right_eef_poses"][calibration_step],

@@ -5,7 +5,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
-from run_putpot_skill_program import _source_left_first_requires_measured_corridor
+from run_putpot_skill_program import (
+    _quality_source_contact_requires_sequential_corridor,
+    _source_contact_requires_acquisition_only,
+    _source_left_first_requires_measured_corridor,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -27,6 +31,40 @@ def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():
         requested=True,
         has_measured_corridor=True,
         quality_mode=False,
+    )
+
+
+def test_quality_source_contact_repair_requires_left_first_measured_corridor():
+    assert _source_contact_requires_acquisition_only(
+        requested=True,
+        acquisition_only=False,
+        quality_mode=False,
+    )
+    assert not _source_contact_requires_acquisition_only(
+        requested=True,
+        acquisition_only=False,
+        quality_mode=True,
+    )
+    assert _quality_source_contact_requires_sequential_corridor(
+        requested=True,
+        acquisition_only=False,
+        quality_mode=True,
+        has_measured_corridor=False,
+        left_first=True,
+    )
+    assert _quality_source_contact_requires_sequential_corridor(
+        requested=True,
+        acquisition_only=False,
+        quality_mode=True,
+        has_measured_corridor=True,
+        left_first=False,
+    )
+    assert not _quality_source_contact_requires_sequential_corridor(
+        requested=True,
+        acquisition_only=False,
+        quality_mode=True,
+        has_measured_corridor=True,
+        left_first=True,
     )
 
 
