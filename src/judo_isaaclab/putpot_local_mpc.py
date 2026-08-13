@@ -951,15 +951,16 @@ def handle_local_mpc_step(
     loaded_pad_pivot_translation = np.zeros(3, dtype=np.float64)
     if loaded_pad_pivot_closure_active:
         # The two fingers move symmetrically about the wrist as the jaw closes.
-        # A fixed wrist therefore retracts the already-loaded pad by half the
-        # jaw stroke, which Pair 15 measured as an immediate contact dropout.
-        # Translate the wrist by the equal and opposite half-stroke so closure
-        # pivots about that pad while the peer pad traverses the full stroke.
+        # Pair 15 then measured that the Cartesian controller realizes only
+        # 0.821 mm of a 2 mm half-stroke command while the loaded finger moves
+        # 1.664 mm.  Use the full jaw increment (still bounded by the existing
+        # 4 mm Cartesian limit) so the realized wrist motion closes about the
+        # loaded pad while the peer pad traverses the stroke.
         pivot_sign = (
             1.0 if transverse_aligned_closure_pivot_pad_index == 1 else -1.0
         )
         loaded_pad_pivot_translation = (
-            pivot_sign * 0.5 * jaw_increment * jaw_axis
+            pivot_sign * jaw_increment * jaw_axis
         )
         translation_increment = _clip_norm(
             loaded_pad_pivot_translation,

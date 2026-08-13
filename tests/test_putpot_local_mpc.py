@@ -500,7 +500,7 @@ def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
     jaw_axis = np.asarray(
         command.frame_receipt["observed_frames"]["jaw_axis"]
     )
-    expected_translation = 0.5 * 0.004 * jaw_axis
+    expected_translation = 0.004 * jaw_axis
     assert command.closure_committed
     assert closure["loaded_pad_pivot_closure_enabled"]
     assert closure["loaded_pad_pivot_closure_active"]
@@ -509,7 +509,7 @@ def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
     np.testing.assert_allclose(
         closure["loaded_pad_pivot_translation_world_m"], expected_translation
     )
-    assert closure["loaded_pad_pivot_translation_norm_m"] == pytest.approx(0.002)
+    assert closure["loaded_pad_pivot_translation_norm_m"] == pytest.approx(0.004)
     np.testing.assert_allclose(
         command.wrist_target_pose[:3], _pose()[:3] + expected_translation
     )
