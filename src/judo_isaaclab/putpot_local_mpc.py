@@ -433,6 +433,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "geometric_preseat_satisfied",
             "geometric_preseat_finite_pad_count",
             "geometric_preseat_interior_pad_count",
+            "geometric_preseat_source_wrist_target_active",
+            "geometric_preseat_source_wrist_residual_world_m",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -615,9 +617,23 @@ def handle_local_mpc_step(
     pad_alignment = np.cross(mean_pad_axis, desired_pad_axis)
     rotation_residual = wrist_rotation + 0.25 * (jaw_alignment + pad_alignment)
     prior_weight = source_prior_weight(contact_window_step, config)
+    geometric_preseat_source_wrist_residual = prior[:3] - wrist[:3]
+    geometric_preseat_source_wrist_target_active = bool(
+        require_geometric_preseat_for_closure
+        and not physical_contact_observed
+    )
     blended_translation = (
         (1.0 - prior_weight) * translation_world + prior_weight * warm_residual
     )
+    if geometric_preseat_source_wrist_target_active:
+        # Attempt 58 correctly held the right jaw open, but the wrist converged
+        # to the nonintersecting jaw-midpoint target while the live source-
+        # mapped broad-contact wrist pose remained 4.190 mm away.  Its sealed
+        # geometry receipt predicts both pad fractions near 0.529.  Use that
+        # already-computed position only through the force-free geometric
+        # preseat; the existing depth guard, Cartesian bound, edge recenter,
+        # and force-backed controller remain authoritative downstream.
+        blended_translation = geometric_preseat_source_wrist_residual.copy()
     signed_depth_residual = float(np.dot(translation_world, depth_guard_axis))
     transverse_residual = (
         translation_world - signed_depth_residual * depth_guard_axis
@@ -1626,6 +1642,12 @@ def handle_local_mpc_step(
                     & (fractions >= config.minimum_pad_fraction_margin)
                     & (fractions <= 1.0 - config.minimum_pad_fraction_margin)
                 )
+            ),
+            "geometric_preseat_source_wrist_target_active": (
+                geometric_preseat_source_wrist_target_active
+            ),
+            "geometric_preseat_source_wrist_residual_world_m": (
+                geometric_preseat_source_wrist_residual.tolist()
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,

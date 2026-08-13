@@ -1280,7 +1280,15 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
     assert not closure["geometric_preseat_satisfied"]
     assert closure["geometric_preseat_finite_pad_count"] == 0
     assert closure["geometric_preseat_interior_pad_count"] == 0
+    assert closure["geometric_preseat_source_wrist_target_active"]
+    np.testing.assert_allclose(
+        closure["geometric_preseat_source_wrist_residual_world_m"],
+        [0.02, 0.0, 0.0],
+    )
     assert gated.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+    assert gated.frame_receipt["executed_control"][
+        "translation_world_m"
+    ][0] == pytest.approx(0.02 / 15.0)
 
     edge = handle_local_mpc_step(
         **{
@@ -1313,6 +1321,20 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
     assert interior_closure["geometric_preseat_interior_pad_count"] == 1
     assert interior.frame_receipt["executed_control"]["jaw_increment"] > 0.0
     assert handle_local_mpc_frame_receipt_complete(interior.frame_receipt)
+
+    force_backed = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_pad_fractions": [0.16, np.nan],
+            "active_finger_forces_n": [2.0, 0.0],
+        },
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    assert not force_backed.frame_receipt["closure"][
+        "geometric_preseat_source_wrist_target_active"
+    ]
 
 
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():

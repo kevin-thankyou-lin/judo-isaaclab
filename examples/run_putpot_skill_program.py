@@ -1396,7 +1396,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Pair-owned opt-in that keeps the right jaw open until at least "
             "one measured pad intersection is inside the unchanged quality "
-            "margin, routing an edge intersection through the existing "
+            "margin, targets the live source-mapped wrist pose while force-"
+            "free, and routes an edge intersection through the existing "
             "bounded geometric preseat."
         ),
     )
