@@ -1199,19 +1199,24 @@ def _contact_view_max_force(view, physics_dt: float) -> float:
     return float(np.linalg.norm(array, axis=-1).max(initial=0.0))
 
 
-def _contact_group_body_forces(
-    views, body_paths, physics_dt: float
+def _contact_force_by_body_receipt(
+    views: object, body_paths: object, physics_dt: float
 ) -> dict[str, float]:
-    """Attribute a predeclared filtered contact group to its sensor bodies."""
-    sensors = tuple(views)
-    paths = tuple(body_paths)
+    """Attribute nonzero filtered contact forces without changing any guard."""
+    sensors = tuple(views) if isinstance(views, (tuple, list)) else (views,)
+    paths = (
+        tuple(body_paths)
+        if isinstance(body_paths, (tuple, list))
+        else (body_paths,)
+    )
     if len(sensors) != len(paths):
         raise RuntimeError(
-            f"contact sensor/body topology mismatch: {len(sensors)} != {len(paths)}"
+            "contact sensor/body path count mismatch: "
+            f"{len(sensors)} sensors for {len(paths)} paths"
         )
     return {
-        path: force
-        for path, sensor in zip(paths, sensors, strict=True)
+        str(path): force
+        for path, sensor in zip(paths, sensors)
         if (force := _contact_view_max_force(sensor, physics_dt)) > 1.0e-6
     }
 
@@ -1476,6 +1481,17 @@ def _handover_wave_live_row(
         "maximum_environment_contact_force_n": environment_force,
         "maximum_right_mug_contact_force_n": mug_force,
         "maximum_left_tree_contact_force_n": left_tree_force,
+        "environment_contact_force_by_right_body_n": (
+            _contact_force_by_body_receipt(
+                views["environment"], views["right_body_paths"], physics_dt
+            )
+        ),
+        "mug_contact_force_by_right_body_n": _contact_force_by_body_receipt(
+            views["mug"], views["right_body_paths"], physics_dt
+        ),
+        "tree_contact_force_by_left_body_n": _contact_force_by_body_receipt(
+            views["left_tree"], views["left_body_paths"], physics_dt
+        ),
         "intended_right_mug_contact": intended_contact,
         "checks": checks,
         "passed": all(checks.values()),
@@ -1719,10 +1735,10 @@ def _direct_segment_live_row(
     physics_dt: float,
     prior_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    environment_body_forces = _contact_group_body_forces(
+    environment_body_forces = _contact_force_by_body_receipt(
         views["environment"], views["right_body_paths"], physics_dt
     )
-    mug_body_forces = _contact_group_body_forces(
+    mug_body_forces = _contact_force_by_body_receipt(
         views["mug"], views["right_body_paths"], physics_dt
     )
     environment_force = max(environment_body_forces.values(), default=0.0)
