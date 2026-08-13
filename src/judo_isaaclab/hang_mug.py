@@ -522,6 +522,7 @@ def reanchor_branch_transport_contact(
     completed_waypoint: str = "left_release",
     uniform_post_release_return: bool = False,
     post_release_return_orientation_delay_rows: int = 0,
+    post_release_return_endpoint_hold_rows: int = 0,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -578,6 +579,7 @@ def reanchor_branch_transport_contact(
             orientation_delay_rows=(
                 post_release_return_orientation_delay_rows
             ),
+            endpoint_hold_rows=post_release_return_endpoint_hold_rows,
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -604,6 +606,7 @@ class HangMugSkillProgram:
         self._waypoints: list[SkillWaypoint] = []
         self._uniform_pose_waypoints: set[str] = set()
         self._pose_orientation_delay_rows: dict[str, int] = {}
+        self._pose_endpoint_hold_rows: dict[str, int] = {}
 
     def _append(
         self,
@@ -933,6 +936,7 @@ class HangMugSkillProgram:
         opened: float = -0.0475,
         uniform_return: bool = False,
         return_orientation_delay_rows: int = 0,
+        return_endpoint_hold_rows: int = 0,
     ) -> None:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
@@ -951,10 +955,16 @@ class HangMugSkillProgram:
             release_steps,
             right_gripper=opened,
         )
+        if (
+            isinstance(return_endpoint_hold_rows, bool)
+            or not isinstance(return_endpoint_hold_rows, int)
+            or return_endpoint_hold_rows < 0
+        ):
+            raise ValueError("return endpoint hold rows must be a nonnegative integer")
         self._append(
             "post_release_return",
             "post_release_return",
-            return_steps,
+            return_steps + return_endpoint_hold_rows,
             right_pose=right_rest,
         )
         if uniform_return:
@@ -963,6 +973,10 @@ class HangMugSkillProgram:
             self._pose_orientation_delay_rows[
                 "post_release_return"
             ] = return_orientation_delay_rows
+        if return_endpoint_hold_rows:
+            self._pose_endpoint_hold_rows[
+                "post_release_return"
+            ] = return_endpoint_hold_rows
         self._append(
             "stable_support",
             "stable_settle",
@@ -993,6 +1007,9 @@ class HangMugSkillProgram:
                     waypoint.steps,
                     uniform=waypoint.name in self._uniform_pose_waypoints,
                     orientation_delay_rows=self._pose_orientation_delay_rows.get(
+                        waypoint.name, 0
+                    ),
+                    endpoint_hold_rows=self._pose_endpoint_hold_rows.get(
                         waypoint.name, 0
                     ),
                 )

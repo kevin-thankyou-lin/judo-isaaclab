@@ -160,6 +160,7 @@ def interpolate_poses(
     *,
     uniform: bool = False,
     orientation_delay_rows: int = 0,
+    endpoint_hold_rows: int = 0,
 ) -> np.ndarray:
     """Cartesian interpolation including the target, excluding the start.
 
@@ -168,41 +169,59 @@ def interpolate_poses(
     immediate, bounded clearance along an already-screened retreat.  A bounded
     orientation delay can hold the starting rotation briefly while translation
     begins, then complete the same shortest-arc rotation within the segment.
+    Endpoint hold rows repeat the target inside the same named segment so the
+    physical arm can settle without adding a waypoint or changing the path.
     """
     if steps < 1:
         raise ValueError("steps must be positive")
     start = _pose(start, "start")
     target = _pose(target, "target")
     if (
+        isinstance(endpoint_hold_rows, bool)
+        or not isinstance(endpoint_hold_rows, int)
+        or not 0 <= endpoint_hold_rows < steps
+    ):
+        raise ValueError("endpoint hold rows must be an integer in [0, steps)")
+    motion_steps = steps - endpoint_hold_rows
+    if (
         isinstance(orientation_delay_rows, bool)
         or not isinstance(orientation_delay_rows, int)
-        or not 0 <= orientation_delay_rows < steps
+        or not 0 <= orientation_delay_rows < motion_steps
     ):
-        raise ValueError("orientation delay rows must be an integer in [0, steps)")
+        raise ValueError(
+            "orientation delay rows must be an integer shorter than the motion rows"
+        )
     if orientation_delay_rows and not uniform:
         raise ValueError("orientation delay requires uniform interpolation")
-    fraction = np.linspace(1.0 / steps, 1.0, steps)
+    fraction = np.linspace(1.0 / motion_steps, 1.0, motion_steps)
     smooth = (
         fraction
         if uniform
         else fraction**3 * (10.0 - 15.0 * fraction + 6.0 * fraction**2)
     )
-    result = np.empty((steps, 7), dtype=np.float64)
-    result[:, :3] = start[:3] + smooth[:, None] * (target[:3] - start[:3])
+    motion = np.empty((motion_steps, 7), dtype=np.float64)
+    motion[:, :3] = start[:3] + smooth[:, None] * (target[:3] - start[:3])
     orientation_fraction = smooth
     if orientation_delay_rows:
         orientation_fraction = np.concatenate(
             (
                 np.zeros(orientation_delay_rows, dtype=np.float64),
                 np.linspace(
-                    1.0 / (steps - orientation_delay_rows),
+                    1.0 / (motion_steps - orientation_delay_rows),
                     1.0,
-                    steps - orientation_delay_rows,
+                    motion_steps - orientation_delay_rows,
                 ),
             )
         )
-    result[:, 3:] = _slerp(start[3:], target[3:], orientation_fraction)
-    return result
+    motion[:, 3:] = _slerp(start[3:], target[3:], orientation_fraction)
+    if not endpoint_hold_rows:
+        return motion
+    return np.concatenate(
+        (
+            motion,
+            np.repeat(target[None, :], endpoint_hold_rows, axis=0),
+        )
+    )
 
 
 @dataclass(frozen=True)

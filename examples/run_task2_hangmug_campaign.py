@@ -48,6 +48,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_release_return_to_rest_steps",
     "post_release_return_uniform_interpolation",
     "post_release_return_orientation_delay_rows",
+    "post_release_return_endpoint_hold_steps",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -196,6 +197,11 @@ def _repair_command(
             "--post-release-return-orientation-delay-rows",
             str(strategy["post_release_return_orientation_delay_rows"]),
         ])
+    if strategy.get("post_release_return_endpoint_hold_steps"):
+        arguments.extend([
+            "--post-release-return-endpoint-hold-steps",
+            str(strategy["post_release_return_endpoint_hold_steps"]),
+        ])
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -329,6 +335,7 @@ def _repair_strategy(index: int) -> dict:
         "post_release_return_to_rest_steps",
         "post_release_return_uniform_interpolation",
         "post_release_return_orientation_delay_rows",
+        "post_release_return_endpoint_hold_steps",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -460,6 +467,21 @@ def _repair_strategy(index: int) -> dict:
                 "post-release return orientation delay requires a longer direct return"
             )
         strategy["post_release_return_orientation_delay_rows"] = delay
+    if "post_release_return_endpoint_hold_steps" in value:
+        endpoint_hold = value["post_release_return_endpoint_hold_steps"]
+        if (
+            isinstance(endpoint_hold, bool)
+            or not isinstance(endpoint_hold, int)
+            or not 1 <= endpoint_hold <= 60
+        ):
+            raise ValueError(
+                "post-release return endpoint hold steps must be an integer in [1, 60]"
+            )
+        if not direct_steps[1]:
+            raise ValueError(
+                "post-release return endpoint hold requires direct choreography"
+            )
+        strategy["post_release_return_endpoint_hold_steps"] = endpoint_hold
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
