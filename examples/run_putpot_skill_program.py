@@ -1082,6 +1082,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-quality-handle-normal-depth-guard",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that defines the left depth-guard axis from "
+            "the observed handle contact-frame normal instead of the gripper "
+            "pad axis; all controller bounds and release gates are unchanged."
+        ),
+    )
+    parser.add_argument(
         "--target-handle-local-contact-fraction-recenter",
         action="store_true",
         help=(
@@ -3238,6 +3247,15 @@ def main(argv: list[str] | None = None) -> None:
             "left interior single-pad transverse intercept and immediate "
             "single-pad closure are mutually exclusive"
         )
+    if args.target_left_quality_handle_normal_depth_guard and not (
+        quality_left_first_local_mpc
+        and args.target_handle_local_depth_guarded_intercept
+        and args.target_left_quality_interior_single_pad_transverse_intercept
+    ):
+        raise ValueError(
+            "left handle-normal depth guard requires sequential quality MPC "
+            "with the depth guard and single-pad transverse intercept"
+        )
     if args.target_left_handle_pad_balance_limit_m is not None:
         if not quality_left_first_local_mpc:
             raise ValueError(
@@ -5210,6 +5228,10 @@ def main(argv: list[str] | None = None) -> None:
                                         or quality_left_first_local_mpc
                                     )
                                     and args.target_handle_local_depth_guarded_intercept
+                                ),
+                                depth_guard_use_handle_contact_normal=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_handle_normal_depth_guard
                                 ),
                                 depth_guard_alignment_streak=(
                                     local_mpc_left_depth_guard_alignment_streak
@@ -7379,6 +7401,11 @@ def main(argv: list[str] | None = None) -> None:
                         quality_left_first_local_mpc
                     ),
                     "inward_depth_suppressed_until_transverse_centering": True,
+                    "left_depth_axis_source": (
+                        "observed_handle_contact_normal"
+                        if args.target_left_quality_handle_normal_depth_guard
+                        else "mean_pad_depth_axis"
+                    ),
                 },
                 "contact_fraction_recenter": {
                     "enabled_arms": (

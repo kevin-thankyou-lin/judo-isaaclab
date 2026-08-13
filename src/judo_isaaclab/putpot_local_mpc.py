@@ -331,6 +331,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         == {
             "enabled",
             "active",
+            "depth_axis_source",
+            "depth_axis_world",
             "physical_contact_observed",
             "interior_single_pad_transverse_intercept_enabled",
             "interior_single_pad_transverse_intercept_active",
@@ -415,6 +417,7 @@ def handle_local_mpc_step(
     robust_streak: int,
     require_peer_latch: bool = True,
     depth_guarded_transverse_intercept: bool = False,
+    depth_guard_use_handle_contact_normal: bool = False,
     depth_guard_alignment_streak: int = 0,
     depth_guard_released: bool = False,
     contact_fraction_recenter: bool = False,
@@ -484,6 +487,15 @@ def handle_local_mpc_step(
     jaw_midpoint = np.mean(centers, axis=0)
     jaw_axis = _unit(centers[1] - centers[0], "jaw closing line")
     mean_pad_axis = _unit(np.mean(axes, axis=0), "mean pad depth axis")
+    handle_contact_normal = _unit(
+        quaternion_rotate(handle[3:], np.asarray([0.0, 0.0, 1.0])),
+        "handle contact normal",
+    )
+    depth_guard_axis = (
+        handle_contact_normal
+        if depth_guard_use_handle_contact_normal
+        else mean_pad_axis
+    )
     desired_jaw_axis = _unit(
         quaternion_rotate(pot[3:], jaw_axis_prior_local), "desired jaw axis"
     )
@@ -503,9 +515,9 @@ def handle_local_mpc_step(
     blended_translation = (
         (1.0 - prior_weight) * translation_world + prior_weight * warm_residual
     )
-    signed_depth_residual = float(np.dot(translation_world, mean_pad_axis))
+    signed_depth_residual = float(np.dot(translation_world, depth_guard_axis))
     transverse_residual = (
-        translation_world - signed_depth_residual * mean_pad_axis
+        translation_world - signed_depth_residual * depth_guard_axis
     )
     contacting = forces >= config.physical_contact_threshold_n
     physical_contact_observed = bool(np.any(contacting))
@@ -553,8 +565,8 @@ def handle_local_mpc_step(
     )
     suppressed_depth_control = np.zeros(3, dtype=np.float64)
     if depth_guard_active:
-        blended_depth = float(np.dot(blended_translation, mean_pad_axis))
-        suppressed_depth_control = blended_depth * mean_pad_axis
+        blended_depth = float(np.dot(blended_translation, depth_guard_axis))
+        suppressed_depth_control = blended_depth * depth_guard_axis
         blended_translation = blended_translation - suppressed_depth_control
     remaining = max(1, config.horizon_steps - contact_window_step)
     translation_increment = _clip_norm(
@@ -811,6 +823,12 @@ def handle_local_mpc_step(
         "contact_frame_guard": {
             "enabled": bool(depth_guarded_transverse_intercept),
             "active": depth_guard_active,
+            "depth_axis_source": (
+                "observed_handle_contact_normal"
+                if depth_guard_use_handle_contact_normal
+                else "mean_pad_depth_axis"
+            ),
+            "depth_axis_world": depth_guard_axis.tolist(),
             "physical_contact_observed": physical_contact_observed,
             "interior_single_pad_transverse_intercept_enabled": bool(
                 allow_interior_single_pad_transverse_intercept

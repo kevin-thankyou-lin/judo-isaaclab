@@ -396,6 +396,112 @@ def test_single_pad_transverse_intercept_keeps_open_jaw_and_depth_guard():
     np.testing.assert_allclose(edge.wrist_target_pose, _pose())
 
 
+def test_handle_normal_depth_guard_removes_inward_handle_motion():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    corrected = handle_local_mpc_step(
+        **_inputs(contact_window_step=22, observed_handle_contact_frame=handle),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+    )
+    guard = corrected.frame_receipt["contact_frame_guard"]
+    control = np.asarray(
+        corrected.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    assert guard["depth_axis_source"] == "observed_handle_contact_normal"
+    np.testing.assert_allclose(
+        guard["depth_axis_world"], [1.0, 0.0, 0.0], atol=1.0e-12
+    )
+    assert np.dot(control, np.asarray(guard["depth_axis_world"])) == pytest.approx(0.0)
+    np.testing.assert_allclose(control, [0.0, 0.0, -0.004], atol=1.0e-12)
+
+    legacy = handle_local_mpc_step(
+        **_inputs(contact_window_step=22, observed_handle_contact_frame=handle),
+        depth_guarded_transverse_intercept=True,
+    )
+    legacy_guard = legacy.frame_receipt["contact_frame_guard"]
+    assert legacy_guard["depth_axis_source"] == "mean_pad_depth_axis"
+    np.testing.assert_allclose(
+        legacy.frame_receipt["executed_control"]["translation_world_m"],
+        [0.004, 0.0, 0.0],
+    )
+
+
+def test_pair_15_attempt_32_handle_normal_counterfactual_is_tangential():
+    handle = np.asarray(
+        [
+            0.61187602806807,
+            0.23259209326643707,
+            0.8761085390776744,
+            -0.6751483904549511,
+            0.6651924157195416,
+            0.25275053902989103,
+            -0.19445016316627017,
+        ]
+    )
+    values = _inputs(
+        contact_window_step=22,
+        observed_handle_contact_frame=handle,
+        active_wrist_pose=np.asarray(
+            [
+                0.5336552262306213,
+                0.3293636441230774,
+                0.9304019808769226,
+                0.3299423321962161,
+                0.4734162923273498,
+                0.8141761826339007,
+                -0.06428230872982285,
+            ]
+        ),
+        active_pad_centers_world=np.asarray(
+            [
+                [0.5682171583175659, 0.3191834092140198, 0.8169037699699402],
+                [0.6023063659667969, 0.24947421252727509, 0.8754481077194214],
+            ]
+        ),
+        active_pad_axes_world=np.asarray(
+            [
+                [-0.4906572103500366, 0.4487762451171875, 0.7468975186347961],
+                [-0.46121275424957275, 0.38456183671951294, 0.799622118473053],
+            ]
+        ),
+        active_pad_fractions=[np.nan, 0.19592289626598358],
+        active_finger_forces_n=[0.0, 4.500335216522217],
+        peer_pad_fractions=[np.nan, np.nan],
+        peer_finger_forces_n=[0.0, 0.0],
+        pre_peer_pot_displacement_m=0.0,
+    )
+    legacy = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        allow_interior_single_pad_transverse_intercept=True,
+    )
+    corrected = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        allow_interior_single_pad_transverse_intercept=True,
+    )
+    normal = np.asarray(
+        corrected.frame_receipt["contact_frame_guard"]["depth_axis_world"]
+    )
+    legacy_control = np.asarray(
+        legacy.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    corrected_control = np.asarray(
+        corrected.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    assert np.dot(legacy_control, normal) == pytest.approx(-0.0031620383037050317)
+    assert np.dot(corrected_control, normal) == pytest.approx(0.0, abs=1.0e-12)
+    assert np.linalg.norm(corrected_control) == pytest.approx(0.004)
+    np.testing.assert_allclose(
+        corrected_control,
+        [-0.0010426901125651581, -0.0007217176380684674, 0.0037936685385072497],
+    )
+
+
 def test_committed_closure_pauses_only_while_both_pads_are_force_backed():
     paused = handle_local_mpc_step(
         **_inputs(

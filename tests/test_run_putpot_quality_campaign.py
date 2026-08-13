@@ -86,6 +86,8 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         parsed.target_left_quality_interior_single_pad_transverse_intercept
         is True
     )
+    parsed = _parser(required + ["--target-left-quality-handle-normal-depth-guard"])
+    assert parsed.target_left_quality_handle_normal_depth_guard is True
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
