@@ -14,6 +14,11 @@ def _digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def test_evidence_runner_disables_unused_builtin_hdf5_recorder():
+    runner = Path(campaign.__file__).with_name("run_hangmug_skill_program.py")
+    assert "enable_builtin_hdf5_recorder=False" in runner.read_text()
+
+
 def test_same_index_assets_and_proven_command_are_pinned(tmp_path, monkeypatch):
     objects = tmp_path / "objects"
     for kind, name in (
