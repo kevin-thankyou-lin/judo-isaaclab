@@ -521,6 +521,16 @@ def handle_local_mpc_step(
         and contact_recenter_total_m > 0.0
         and not depth_guard_released
     )
+    # A finite pad intersection immediately after force-backed recentering is
+    # retained only for bounded tangent control during a sub-threshold force
+    # dropout.  ``contacting`` remains unchanged and is still the sole source
+    # for force-backed margin, latch, closure, and acceptance decisions.
+    transient_geometric_contacting = bool(
+        handle_contact_normal_latched
+        and not physical_contact_observed
+    ) & np.isfinite(fractions)
+    control_contacting = contacting | transient_geometric_contacting
+    control_contact_observed = bool(np.any(control_contacting))
     use_contact_normal_depth_axis = bool(
         depth_guard_use_handle_contact_normal
         and (physical_contact_observed or handle_contact_normal_latched)
@@ -625,8 +635,11 @@ def handle_local_mpc_step(
     )
     next_streak = robust_streak + 1 if robust_frame else 0
     contact_fraction_axis_world = (
-        _unit(np.mean(axes[contacting], axis=0), "contacting pad tip-to-base axis")
-        if np.any(contacting)
+        _unit(
+            np.mean(axes[control_contacting], axis=0),
+            "contacting pad tip-to-base axis",
+        )
+        if control_contact_observed
         else mean_pad_axis
     )
     contact_fraction_handle_tangent = (
@@ -651,7 +664,7 @@ def handle_local_mpc_step(
         and contact_recenter_use_handle_tangent
         and depth_guarded_transverse_intercept
         and not next_depth_guard_released
-        and physical_contact_observed
+        and control_contact_observed
     )
     protected_pad_fraction_margin = config.minimum_pad_fraction_margin
     if pre_release_margin_protection_enabled:
@@ -667,9 +680,11 @@ def handle_local_mpc_step(
             / active_pad_fraction_axis_extent_m,
         )
     contact_fraction_delta = 0.0
-    if np.any(contacting) and np.all(np.isfinite(fractions[contacting])):
+    if control_contact_observed and np.all(
+        np.isfinite(fractions[control_contacting])
+    ):
         fraction_corrections = []
-        for fraction in fractions[contacting]:
+        for fraction in fractions[control_contacting]:
             if fraction < protected_pad_fraction_margin:
                 fraction_corrections.append(
                     protected_pad_fraction_margin - float(fraction)
@@ -705,7 +720,7 @@ def handle_local_mpc_step(
     )
     contact_recenter_active = bool(
         contact_fraction_recenter
-        and physical_contact_observed
+        and control_contact_observed
         and (not active_margin_ok or pre_release_margin_protection_active)
         and contact_fraction_delta != 0.0
         and remaining_recenter_m > 0.0
@@ -720,7 +735,7 @@ def handle_local_mpc_step(
             or next_depth_guard_released
             or (
                 contact_recenter_use_handle_tangent
-                and physical_contact_observed
+                and control_contact_observed
             )
         )
     )

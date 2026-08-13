@@ -465,7 +465,7 @@ def test_handle_normal_depth_guard_stays_latched_across_contact_dropout():
             contact_window_step=36,
             observed_handle_contact_frame=handle,
             active_finger_forces_n=[0.0, 0.089],
-            active_pad_fractions=[np.nan, 0.34],
+            active_pad_fractions=[np.nan, 0.156],
         ),
         depth_guarded_transverse_intercept=True,
         depth_guard_use_handle_contact_normal=True,
@@ -488,6 +488,10 @@ def test_handle_normal_depth_guard_stays_latched_across_contact_dropout():
     assert np.dot(control, guard["depth_axis_world"]) == pytest.approx(
         0.0, abs=1.0e-12
     )
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    assert recenter["pre_release_margin_protection_active"]
+    assert recenter["active"]
+    assert recenter["world_command_norm_m"] < 0.004
     assert not command.fail_closed
 
 
