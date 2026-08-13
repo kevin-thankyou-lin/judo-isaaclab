@@ -1420,12 +1420,13 @@ def _handover_wave_live_row(
     }
 
 
-def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
+def _sample_has_force_backed_pad_contact(
+    sample: dict[str, object], side: str
+) -> bool:
     fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=np.float64)
     forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=np.float64)
     return bool(
         sample[f"{side}_grasp"]
-        and sample["grasp_assist_engaged"].get(side, False)
         and fractions.shape == (2,)
         and forces.shape == (2,)
         and np.isfinite(fractions).all()
@@ -1433,6 +1434,13 @@ def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
         and (fractions >= 0.15).all()
         and (fractions <= 0.85).all()
         and (forces > 0.0).all()
+    )
+
+
+def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
+    return bool(
+        _sample_has_force_backed_pad_contact(sample, side)
+        and sample["grasp_assist_engaged"].get(side, False)
     )
 
 
@@ -1478,8 +1486,7 @@ def _handover_wave_contract_receipt(
     giver_held_until_secure = bool(
         first_secure is not None
         and all(
-            sample_rows[row]["left_grasp"]
-            and sample_rows[row]["grasp_assist_engaged"].get("left", False)
+            _sample_has_force_backed_pad_contact(sample_rows[row], "left")
             for row in observed_handover_rows
             if row <= first_secure
         )
@@ -2046,15 +2053,17 @@ def _handover_contact_acquire_guard_receipt(
     checks = {
         "pick_latched": bool(sample["stage1"]),
     }
+    receiver_secure = bool(
+        sample["right_grasp"]
+        and sample["grasp_assist_engaged"].get("right", False)
+    )
     if phase == "entry":
-        checks["left_assist_secure"] = bool(
+        checks["raw_left_contact_maintained"] = bool(sample["left_grasp"])
+        checks["assist_backed_support_secure"] = bool(
             sample["grasp_assist_engaged"].get("left", False)
+            or receiver_secure
         )
     elif phase == "row":
-        receiver_secure = bool(
-            sample["right_grasp"]
-            and sample["grasp_assist_engaged"].get("right", False)
-        )
         checks["assist_backed_support_secure"] = bool(
             sample["grasp_assist_engaged"].get("left", False)
             or receiver_secure

@@ -1416,6 +1416,83 @@ def test_handover_wave_contract_requires_screened_contact_before_release():
     ] == "right_grasp_settle"
 
 
+def test_handover_wave_contract_accepts_atomic_assist_swap_with_physical_giver_hold():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1, close_steps=2, release_steps=1,
+    )
+    program.post_handover_rest_and_observe(_pose(), _pose(), steps=1)
+    program.direct_rest_to_branch_insert(
+        _pose(), _pose(), direct_steps=1, insert_steps=1
+    )
+    program.release_and_return_to_rest(
+        _pose(), _pose(), support_steps=1, release_steps=1,
+        return_steps=1, settle_steps=1,
+    )
+    trajectory = program.build()
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    close_rows = np.flatnonzero(np.asarray(names) == "right_grasp")
+    secure_row = int(close_rows[-1])
+    samples = []
+    for row in range(len(names)):
+        secure = row == secure_row
+        samples.append(
+            {
+                "left_grasp": row <= secure_row,
+                "right_grasp": secure,
+                "grasp_assist_engaged": {
+                    "left": row < secure_row,
+                    "right": secure,
+                },
+                "left_finger_forces_n": [2.0, 2.0],
+                "left_pad_fractions": [0.5, 0.5],
+                "right_finger_forces_n": [2.0, 2.0] if secure else [0.0, 0.0],
+                "right_pad_fractions": [0.5, 0.5] if secure else [float("nan")] * 2,
+            }
+        )
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    handover = {"handover_pregrasp", "right_grasp"}
+    live_rows = [
+        {
+            "waypoint": name,
+            "maximum_right_mug_contact_force_n": 1.0 if name == "right_grasp" else 0.0,
+            "passed": True,
+        }
+        for name in names
+        if name in handover
+    ]
+
+    receipt = _handover_wave_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{}, *samples],
+        {"clear_pregrasp": {"passed": True}, "open_approach": {"passed": True}},
+        live_rows,
+    )
+
+    assert receipt["checks"]["left_giver_held_until_right_contact_secure"] is True
+    samples[secure_row]["left_pad_fractions"][0] = 0.05
+    unsupported = _handover_wave_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{}, *samples],
+        {"clear_pregrasp": {"passed": True}, "open_approach": {"passed": True}},
+        live_rows,
+    )
+    assert unsupported["checks"]["left_giver_held_until_right_contact_secure"] is False
+
+
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():
     transport = _pose(0.55, -0.1, 1.05)
     approach = _handover_target_with_local_pitch(
@@ -1930,12 +2007,14 @@ def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
     sample["right_grasp"] = True
     sample["grasp_assist_engaged"]["right"] = True
     sample["grasp_assist_engaged"]["left"] = False
+    assert _handover_contact_acquire_guard_receipt(sample, phase="entry")["passed"]
     assert _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
     assert _handover_contact_acquire_guard_receipt(
         sample, phase="completion"
     )["passed"]
     sample["right_grasp"] = False
     sample["grasp_assist_engaged"]["right"] = False
+    assert not _handover_contact_acquire_guard_receipt(sample, phase="entry")["passed"]
     assert not _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
 
 
