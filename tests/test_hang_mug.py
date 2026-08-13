@@ -13,6 +13,7 @@ from judo_isaaclab.hang_mug import (
     RigidAssetGeometry,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
+    profile_direct_return_with_endpoint_hold,
     reanchor_branch_transport_contact,
     reanchor_handover_contact_acquire,
     reanchor_physical_handover,
@@ -23,6 +24,7 @@ from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import (
     SkillTrajectory,
     compose_pose,
+    interpolate_poses,
     inverse_pose,
     quaternion_rotate,
 )
@@ -1419,6 +1421,71 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     json.dumps(curved_receipt)
 
 
+def test_direct_return_profile_clears_then_holds_without_a_new_waypoint():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(right_start, left_observer, steps=4)
+    program.direct_rest_to_branch_insert(
+        _pose(0.7, -0.2, 0.95), insert, direct_steps=5, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_return_to_rest(
+        insert, right_start, support_steps=2, release_steps=3,
+        return_steps=8, settle_steps=2,
+    )
+    base = program.build()
+    profiled = profile_direct_return_with_endpoint_hold(base, motion_steps=5)
+    release_end = profiled.waypoint_steps["right_release"]
+    return_end = profiled.waypoint_steps["post_release_return"]
+    return_start = release_end + 1
+    expected_motion = interpolate_poses(
+        profiled.right_poses[release_end], right_start, 5
+    )
+
+    assert profiled.waypoint_steps == base.waypoint_steps
+    assert profiled.stage_names == base.stage_names
+    np.testing.assert_allclose(
+        profiled.right_poses[return_start : return_start + 5], expected_motion
+    )
+    np.testing.assert_allclose(
+        profiled.right_poses[return_start + 5 : return_end + 1],
+        np.repeat(right_start[None], 3, axis=0),
+    )
+    np.testing.assert_allclose(
+        profiled.grippers[return_start : return_end + 1, 1], -0.0475
+    )
+
+    names = []
+    previous = 0
+    for name, endpoint in profiled.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((profiled.steps, 14), dtype=np.float64)
+    actions[:, 13] = profiled.grippers[:, 1]
+    samples = [
+        {
+            "left_eef_pose": profiled.left_poses[row].tolist(),
+            "right_grasp": name not in {"post_release_return", "stable_support"},
+        }
+        for row, name in enumerate(names)
+    ]
+    receipt = _direct_phase_contract_receipt(
+        profiled,
+        names,
+        actions,
+        [{"left_eef_pose": _pose().tolist(), "right_grasp": False}, *samples],
+    )
+    assert receipt["passed"] is True
+    assert receipt["post_release_return_interpolation"]["fractions_monotone"] is True
+    assert receipt["post_release_return_interpolation"]["maximum_line_residual_m"] <= 1e-12
+
+
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     right_start = _pose(0.2, -0.7, 0.9)
     left_observer = _pose(0.6, 0.1, 1.0)
@@ -1442,7 +1509,9 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
         insert, right_start, support_steps=2, release_steps=3,
         return_steps=5, settle_steps=2,
     )
-    trajectory = program.build()
+    trajectory = profile_direct_return_with_endpoint_hold(
+        program.build(), motion_steps=3
+    )
     planned_contact = _pose(0.05, -0.02, 0.03)
     observed_mug = _pose(0.35, -0.25, 0.82)
     observed_contact = _pose(0.075, -0.01, 0.045)
@@ -1473,6 +1542,24 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     assert residuals.max() <= 1.0e-12
     assert np.all(np.diff(fractions) >= -1.0e-12)
+    release_end = adjusted.waypoint_steps["right_release"]
+    return_end = adjusted.waypoint_steps["post_release_return"]
+    np.testing.assert_allclose(
+        adjusted.right_poses[release_end + 1 : release_end + 4],
+        interpolate_poses(
+            adjusted.right_poses[release_end],
+            adjusted.right_poses[return_end],
+            3,
+        ),
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[release_end + 4 : return_end + 1],
+        np.repeat(
+            adjusted.right_poses[return_end][None],
+            return_end - release_end - 3,
+            axis=0,
+        ),
+    )
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():

@@ -504,6 +504,7 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "post_handover_rest_observer_steps": 60,
         "direct_rest_to_preinsert_steps": 170,
         "post_release_return_to_rest_steps": 120,
+        "post_release_return_motion_steps": 21,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -520,7 +521,30 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert command[command.index("--post-handover-rest-observer-steps") + 1] == "60"
     assert command[command.index("--direct-rest-to-preinsert-steps") + 1] == "170"
     assert command[command.index("--post-release-return-to-rest-steps") + 1] == "120"
+    assert command[command.index("--post-release-return-motion-steps") + 1] == "21"
     assert "--branch-orient-steps" not in command
+
+
+def test_direct_return_motion_prefix_is_bounded_by_total_return(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000002/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    base = {
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 60,
+    }
+    candidate.write_text(json.dumps({**base, "post_release_return_motion_steps": 21}))
+    assert campaign._repair_strategy(2)["post_release_return_motion_steps"] == 21
+    candidate.write_text(json.dumps({**base, "post_release_return_motion_steps": 61}))
+    with pytest.raises(ValueError, match="motion steps"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"post_release_return_motion_steps": 21}))
+    with pytest.raises(ValueError, match="motion steps"):
+        campaign._repair_strategy(2)
 
 
 def test_independent_direct_choreography_audit_rejects_curved_outbound_segment():

@@ -568,11 +568,68 @@ def reanchor_branch_transport_contact(
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
         return_start = release_end + 1
-        right[return_start : direct_return + 1] = interpolate_poses(
+        motion_steps = _direct_return_motion_steps(trajectory)
+        target = trajectory.right_poses[direct_return]
+        right[return_start : return_start + motion_steps] = interpolate_poses(
             right[release_end],
-            trajectory.right_poses[direct_return],
-            direct_return - release_end,
+            target,
+            motion_steps,
         )
+        right[return_start + motion_steps : direct_return + 1] = target
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
+def _direct_return_motion_steps(trajectory: SkillTrajectory) -> int:
+    """Recover the moving prefix of a direct return with an endpoint hold."""
+    release_end = trajectory.waypoint_steps.get("right_release")
+    return_end = trajectory.waypoint_steps.get("post_release_return")
+    if release_end is None or return_end is None or return_end <= release_end:
+        raise ValueError("trajectory is missing an ordered direct return")
+    segment = np.asarray(
+        trajectory.right_poses[release_end + 1 : return_end + 1],
+        dtype=np.float64,
+    )
+    endpoint_rows = np.flatnonzero(
+        np.all(np.isclose(segment, segment[-1], atol=1.0e-12, rtol=0.0), axis=1)
+    )
+    if not len(endpoint_rows):
+        raise ValueError("direct return does not reach its endpoint")
+    return int(endpoint_rows[0] + 1)
+
+
+def profile_direct_return_with_endpoint_hold(
+    trajectory: SkillTrajectory, *, motion_steps: int
+) -> SkillTrajectory:
+    """Use one bounded direct interpolation, then hold its rest endpoint.
+
+    The waypoint name and total row count stay unchanged.  This lets a direct
+    retreat retain a collision-clearing rate while still providing enough
+    open-arm endpoint rows for the demonstrated rest joints to converge.
+    """
+    release_end = trajectory.waypoint_steps.get("right_release")
+    return_end = trajectory.waypoint_steps.get("post_release_return")
+    if release_end is None or return_end is None or return_end <= release_end:
+        raise ValueError("trajectory is missing an ordered direct return")
+    total_steps = return_end - release_end
+    if (
+        isinstance(motion_steps, bool)
+        or not isinstance(motion_steps, int)
+        or not 1 <= motion_steps <= total_steps
+    ):
+        raise ValueError("direct return motion steps must be in [1, total return steps]")
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    start = release_end + 1
+    target = right[return_end].copy()
+    right[start : start + motion_steps] = interpolate_poses(
+        right[release_end], target, motion_steps
+    )
+    right[start + motion_steps : return_end + 1] = target
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,

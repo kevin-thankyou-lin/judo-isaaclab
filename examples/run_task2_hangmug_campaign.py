@@ -46,6 +46,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_handover_rest_observer_steps",
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
+    "post_release_return_motion_steps",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -198,6 +199,7 @@ def _repair_command(
         ("post_handover_rest_observer_steps", "--post-handover-rest-observer-steps"),
         ("direct_rest_to_preinsert_steps", "--direct-rest-to-preinsert-steps"),
         ("post_release_return_to_rest_steps", "--post-release-return-to-rest-steps"),
+        ("post_release_return_motion_steps", "--post-release-return-motion-steps"),
         ("branch_orient_steps", "--branch-orient-steps"),
         ("insert_clearance_m", "--insert-clearance-m"),
         ("branch_approach_height_m", "--branch-approach-height-m"),
@@ -312,6 +314,7 @@ def _repair_strategy(index: int) -> dict:
         "post_handover_rest_observer_steps",
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
+        "post_release_return_motion_steps",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -412,6 +415,19 @@ def _repair_strategy(index: int) -> dict:
             )
         strategy["direct_rest_to_preinsert_steps"] = direct_steps[0]
         strategy["post_release_return_to_rest_steps"] = direct_steps[1]
+    return_motion_steps = value.get("post_release_return_motion_steps", 0)
+    if (
+        isinstance(return_motion_steps, bool)
+        or not isinstance(return_motion_steps, int)
+        or not 0 <= return_motion_steps <= direct_steps[1]
+    ):
+        raise ValueError(
+            "post-release return motion steps must be in [0, total return steps]"
+        )
+    if return_motion_steps and not direct_steps[0]:
+        raise ValueError("post-release return motion steps require direct choreography")
+    if return_motion_steps:
+        strategy["post_release_return_motion_steps"] = return_motion_steps
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (
