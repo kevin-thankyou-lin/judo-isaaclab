@@ -1,6 +1,6 @@
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,21 +21,30 @@ from judo_isaaclab.hang_mug import (
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
 from run_hangmug_skill_program import (
+    _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
+    _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_handover_offset,
-    _direct_replay_requires_repair,
     _direct_actions_exact,
+    _direct_phase_contract_receipt,
     _install_grasp_assist_config,
+    _install_quality_wave_contact_sensors,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
     _handover_contact_acquire_guard_receipt,
+    _handover_gripper_proxy_receipt,
+    _handover_outside_standoff,
     _handover_lift_guard_receipt,
+    _handover_wave_contract_receipt,
+    _pose_path_step_receipt,
+    _preserve_quality_wave_contact_reports_across_arm_rebuild,
+    _quality_wave_contact_views,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
@@ -56,11 +65,132 @@ from run_hangmug_skill_program import (
 )
 
 
-def test_privileged_hangmug_runner_disables_the_unused_environment_recorder():
-    source = (Path(__file__).parents[1] / "examples/run_hangmug_skill_program.py").read_text()
-    constructor = source.index("env = create_task_environment(")
-    end = source.index("physics_device = _physics_device_receipt(", constructor)
-    assert "disable_env_recording=True" in source[constructor:end]
+def test_quality_wave_contact_reports_cover_both_arms_and_tree():
+    spawn = lambda: SimpleNamespace(activate_contact_sensors=False)
+    scene = SimpleNamespace(
+        left_arm=SimpleNamespace(spawn=spawn()),
+        right_arm=SimpleNamespace(spawn=spawn()),
+        mug_tree=SimpleNamespace(spawn=spawn()),
+    )
+
+    assert _activate_quality_wave_contact_reports(scene) == (
+        "left_arm",
+        "right_arm",
+        "mug_tree",
+    )
+    assert scene.left_arm.spawn.activate_contact_sensors is True
+    assert scene.right_arm.spawn.activate_contact_sensors is True
+    assert scene.mug_tree.spawn.activate_contact_sensors is True
+
+
+def test_quality_wave_contact_reports_survive_gear_arm_rebuild():
+    def spawn():
+        return SimpleNamespace(activate_contact_sensors=False)
+
+    class Scene:
+        def __init__(self):
+            self.left_arm = SimpleNamespace(spawn=spawn())
+            self.right_arm = SimpleNamespace(spawn=spawn())
+            self.mug_tree = SimpleNamespace(spawn=spawn())
+
+        def build_from_spec(self, _spec):
+            self.left_arm = SimpleNamespace(spawn=spawn())
+            self.right_arm = SimpleNamespace(spawn=spawn())
+
+    scene = Scene()
+    _preserve_quality_wave_contact_reports_across_arm_rebuild(scene)
+    scene.build_from_spec("task-specific spec")
+
+    assert "build_from_spec" not in vars(scene)
+    assert scene.left_arm.spawn.activate_contact_sensors is True
+    assert scene.right_arm.spawn.activate_contact_sensors is True
+    assert scene.mug_tree.spawn.activate_contact_sensors is True
+
+
+def test_quality_wave_contact_views_resolve_only_predeclared_scene_sensors():
+    sensors = {
+        "right_environment": object(),
+        "right_mug": object(),
+        "left_tree": object(),
+    }
+    names = {
+        "environment": ("right_environment",),
+        "mug": ("right_mug",),
+        "left_tree": ("left_tree",),
+    }
+    paths = {
+        "right_body_paths": ("right",),
+        "left_body_paths": ("left",),
+        "tree_body_path": "tree",
+        "mug_body_path": "mug",
+    }
+    env = SimpleNamespace(
+        cfg=SimpleNamespace(
+            _quality_wave_contact_sensor_names=names,
+            _quality_wave_contact_body_paths=paths,
+        ),
+        scene=sensors,
+    )
+
+    views = _quality_wave_contact_views(
+        env, {"mug": "mug.usd", "mug_tree": "tree.usd"}
+    )
+
+    assert views["environment"] == (sensors["right_environment"],)
+    assert views["mug"] == (sensors["right_mug"],)
+    assert views["left_tree"] == (sensors["left_tree"],)
+    assert views["right_body_paths"] == ("right",)
+
+
+def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
+    class ContactSensorCfg:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    isaaclab = ModuleType("isaaclab")
+    sensors_module = ModuleType("isaaclab.sensors")
+    sensors_module.ContactSensorCfg = ContactSensorCfg
+    monkeypatch.setitem(sys.modules, "isaaclab", isaaclab)
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+    monkeypatch.setattr(
+        "run_hangmug_skill_program._usd_rigid_body_names",
+        lambda _path, _root: ("link", "finger"),
+    )
+
+    def spawn(path=None):
+        return SimpleNamespace(
+            activate_contact_sensors=False,
+            usd_path=path,
+        )
+
+    scene = SimpleNamespace(
+        left_arm=SimpleNamespace(
+            spawn=spawn("yam.usd"), articulation_root_prim_path="/arm"
+        ),
+        right_arm=SimpleNamespace(
+            spawn=spawn("yam.usd"), articulation_root_prim_path="/arm"
+        ),
+        mug_tree=SimpleNamespace(spawn=spawn()),
+    )
+    config = SimpleNamespace(
+        scene=scene,
+        sim=SimpleNamespace(dt=1.0 / 120.0),
+        decimation=4,
+        _contact_body_links={"mug": "cup", "mug_tree": "tree"},
+    )
+
+    names = _install_quality_wave_contact_sensors(config)
+
+    assert {name: len(values) for name, values in names.items()} == {
+        "environment": 2,
+        "mug": 2,
+        "left_tree": 2,
+    }
+    sensor = getattr(scene, names["environment"][0])
+    assert sensor.prim_path.endswith("/RightArm/arm/link")
+    assert sensor.filter_prim_paths_expr[0].endswith("/mug_tree/tree")
+    assert all(isinstance(path, str) for path in sensor.filter_prim_paths_expr)
+    assert config._quality_wave_contact_sensor_names == names
 
 
 def test_branch_approach_height_can_preserve_middle_branch_axis():
@@ -598,6 +728,34 @@ def test_hang_pose_centers_target_handle_hole_on_authored_branch_support():
             branch_roll_offset_rad=np.pi,
         )
 
+    _, _, middle = geometry_conditioned_hang_pose(
+        _pose(1.0, 0.02, 1.03),
+        _pose(),
+        source_parts,
+        target_parts,
+        (source_branch,),
+        _pose(),
+        tuple(
+            branch(float(index), height, 1.0)
+            for index, height in enumerate((0.3, 0.31, 0.9, 0.91, 1.5, 1.51))
+        ),
+        target_branch_row=2,
+    )
+    assert 0.44 <= middle.normalized_height <= 0.46
+
+
+def test_broad_pad_contact_rejects_fingertip_only_grasps():
+    interior = {
+        "left_grasp": True,
+        "left_finger_forces_n": [2.0, 3.0],
+        "left_pad_fractions": [0.35, 0.62],
+    }
+    assert _broad_pad_contact_receipt([interior] * 8, "left")["passed"]
+    fingertip = {**interior, "left_pad_fractions": [0.04, 0.62]}
+    receipt = _broad_pad_contact_receipt([fingertip] * 12, "left")
+    assert not receipt["passed"]
+    assert receipt["longest_consecutive_steps"] == 0
+
 
 def test_branch_support_seating_changes_only_vertical_waypoint_translation():
     pose = _pose(0.7, -0.2, 0.96)
@@ -729,35 +887,6 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed",
     ):
         assert diagnostic not in skill
-
-
-def test_direct_replay_contact_rejection_authorizes_a_repair():
-    contact_rejection = {
-        "status": "passed",
-        "terminal": {"task_success": True},
-        "independent_terminal_hang": {"passed": False},
-    }
-    task_rejection = {
-        "status": "passed",
-        "terminal": {"task_success": False},
-    }
-    assert _direct_replay_requires_repair(contact_rejection)
-    assert _direct_replay_requires_repair(task_rejection)
-
-
-def test_direct_replay_success_or_technical_failure_does_not_authorize_repair():
-    accepted = {
-        "status": "passed",
-        "terminal": {"task_success": True},
-        "independent_terminal_hang": {"passed": True},
-    }
-    technical_failure = {
-        "status": "failed",
-        "terminal": {"task_success": False},
-        "independent_terminal_hang": {"passed": False},
-    }
-    assert not _direct_replay_requires_repair(accepted)
-    assert not _direct_replay_requires_repair(technical_failure)
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
@@ -895,6 +1024,27 @@ def test_pitched_receiver_orients_clear_then_descends_open_before_close():
         )
 
 
+def test_handover_outside_standoff_moves_toward_receiver_without_moving_grasp():
+    grasp = _pose(0.50, 0.00, 0.90)
+    receiver_start = _pose(0.35, -0.30, 1.00)
+    mug = _pose(0.48, -0.01, 0.84)
+    standoff = _handover_outside_standoff(
+        grasp,
+        receiver_start,
+        mug,
+        vertical_clearance_m=0.12,
+        outside_clearance_m=0.08,
+    )
+    expected_direction = receiver_start[:2] - mug[:2]
+    expected_direction /= np.linalg.norm(expected_direction)
+    np.testing.assert_allclose(
+        standoff[:2] - grasp[:2], 0.08 * expected_direction
+    )
+    assert standoff[2] == pytest.approx(grasp[2] + 0.12)
+    np.testing.assert_allclose(standoff[3:], grasp[3:])
+    np.testing.assert_allclose(grasp, _pose(0.50, 0.00, 0.90))
+
+
 def test_hangmug_program_is_one_continuous_named_rollout():
     program = HangMugSkillProgram(_pose(), _pose(0.0, -1.0, 0.0))
     left_observer = _pose(0.4, 0.3, 0.4)
@@ -967,6 +1117,257 @@ def test_hangmug_program_is_one_continuous_named_rollout():
     assert trajectory.left_poses[transport_end:] == pytest.approx(
         np.broadcast_to(left_observer, trajectory.left_poses[transport_end:].shape)
     )
+
+
+def test_quality_setup_returns_right_then_points_left_before_insert():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_release = _pose(0.4, 0.2, 0.8)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    transport = _pose(0.5, -0.4, 1.0)
+    approach = _pose(0.7, -0.2, 0.9)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), left_release,
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_branch_setup(
+        right_start,
+        left_observer,
+        right_return_steps=3,
+        left_point_steps=4,
+    )
+    program.handle_to_branch_insert(
+        transport, approach, insert,
+        transport_steps=2, approach_steps=2, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_support(
+        insert, insert, unload_steps=1, release_steps=2, settle_steps=2
+    )
+    trajectory = program.build()
+    assert _branch_reanchor_waypoints(trajectory)[:2] == (
+        "right_return_start",
+        "left_branch_point",
+    )
+    return_end = trajectory.waypoint_steps["right_return_start"]
+    point_end = trajectory.waypoint_steps["left_branch_point"]
+    transport_end = trajectory.waypoint_steps["tree_transport"]
+    np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
+    np.testing.assert_allclose(
+        trajectory.right_poses[return_end + 1 : point_end + 1],
+        np.repeat(right_start[None], point_end - return_end, axis=0),
+    )
+    np.testing.assert_allclose(trajectory.left_poses[point_end], left_observer)
+    np.testing.assert_allclose(
+        trajectory.left_poses[point_end + 1 : transport_end + 1],
+        np.repeat(left_observer[None], transport_end - point_end, axis=0),
+    )
+    unload_end = trajectory.waypoint_steps["branch_unload"]
+    grasp_end = trajectory.waypoint_steps["right_grasp"]
+    assert np.all(trajectory.grippers[grasp_end : unload_end + 1, 1] == 0.0)
+    right = trajectory.grippers[:, 1]
+    assert np.all(np.diff(right[unload_end:]) <= 0.0)
+    assert right[-1] == pytest.approx(-0.0475)
+
+
+def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_to_rest():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    preinsert = _pose(0.7, -0.2, 0.95)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(
+        right_start, left_observer, steps=4
+    )
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=5, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_return_to_rest(
+        insert, right_start, support_steps=2, release_steps=3,
+        return_steps=5, settle_steps=2,
+    )
+    trajectory = program.build()
+
+    assert _branch_reanchor_waypoints(trajectory) == (
+        "carrying_rest_observer",
+        "direct_preinsert",
+        "branch_insert",
+        "supported_release_hold",
+    )
+    assert not {
+        "tree_transport", "branch_orient_clear", "branch_approach", "branch_unload"
+    } & trajectory.waypoint_steps.keys()
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
+    return_start = trajectory.waypoint_steps["right_release"] + 1
+    np.testing.assert_allclose(trajectory.grippers[return_start:, 1], -0.0475)
+
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    sample_rows = []
+    for row, name in enumerate(names):
+        sample_rows.append(
+            {
+                "left_eef_pose": trajectory.left_poses[row].tolist(),
+                "right_grasp": name not in {
+                    "post_release_return", "stable_support"
+                },
+            }
+        )
+    receipt = _direct_phase_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{"left_eef_pose": _pose().tolist(), "right_grasp": False}, *sample_rows],
+    )
+    assert receipt["passed"] is True
+    assert receipt["right_opening_transition_runs"] == 1
+
+
+def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
+    smooth = np.stack([_pose(0.0), _pose(0.01), _pose(0.02)])
+    jump = smooth.copy()
+    jump[-1, 0] = 0.2
+
+    assert _pose_path_step_receipt(
+        smooth, maximum_translation_m=0.02, maximum_rotation_rad=0.1
+    )["passed"]
+    receipt = _pose_path_step_receipt(
+        jump, maximum_translation_m=0.02, maximum_rotation_rad=0.1
+    )
+    assert receipt["passed"] is False
+    assert receipt["discontinuous_wrist_jump"] is True
+
+
+def test_handover_gripper_proxy_requires_clear_standoff_before_contact_phase():
+    report = {
+        "collision_steps": [8, 9, 10],
+        "valid": False,
+        "proxy_radius_m": 0.14,
+    }
+
+    clear_standoff = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=None
+    )
+    assert clear_standoff["passed"] is False
+    assert clear_standoff["unexpected_collision_steps"] == [8, 9, 10]
+
+    open_contact_approach = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=8
+    )
+    assert open_contact_approach["passed"] is True
+    assert open_contact_approach["unexpected_collision_steps"] == []
+
+    early_contact = _handover_gripper_proxy_receipt(
+        report, first_allowed_contact_step=9
+    )
+    assert early_contact["passed"] is False
+    assert early_contact["unexpected_collision_steps"] == [8]
+
+
+def test_handover_wave_contract_requires_screened_contact_before_release():
+    program = HangMugSkillProgram(_pose(), _pose(0.0, -0.5, 0.9))
+    program.semantic_left_grasp(
+        _pose(), _pose(), _pose(), approach_steps=1, close_steps=1, lift_steps=1
+    )
+    program.physical_handover(
+        _pose(),
+        _pose(0.0, -0.4, 0.9),
+        _pose(0.0, -0.3, 0.9),
+        _pose(0.0, 0.05, 0.0),
+        approach_steps=3,
+        contact_settle_steps=2,
+        close_steps=4,
+        release_steps=2,
+    )
+    program.post_handover_rest_and_observe(
+        _pose(0.0, -0.5, 0.9), _pose(0.4, 0.0, 1.0), steps=2
+    )
+    program.direct_rest_to_branch_insert(
+        _pose(0.5, -0.2, 1.0),
+        _pose(0.6, -0.2, 0.9),
+        direct_steps=2,
+        insert_steps=2,
+    )
+    program.release_and_return_to_rest(
+        _pose(0.6, -0.2, 0.9),
+        _pose(0.0, -0.5, 0.9),
+        support_steps=1,
+        release_steps=2,
+        return_steps=2,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    samples = []
+    close_rows = np.flatnonzero(np.asarray(names) == "right_grasp")
+    secure_row = int(close_rows[-1])
+    for row, name in enumerate(names):
+        secure = row == secure_row
+        samples.append(
+            {
+                "left_grasp": row <= secure_row,
+                "right_grasp": secure,
+                "grasp_assist_engaged": {
+                    "left": row <= secure_row,
+                    "right": secure,
+                },
+                "left_finger_forces_n": [2.0, 2.0],
+                "left_pad_fractions": [0.5, 0.5],
+                "right_finger_forces_n": [2.0, 2.0] if secure else [0.0, 0.0],
+                "right_pad_fractions": [0.5, 0.5] if secure else [float("nan")] * 2,
+            }
+        )
+    handover = {
+        "handover_pregrasp",
+        "right_grasp_settle",
+        "right_grasp",
+    }
+    live_rows = [
+        {
+            "waypoint": name,
+            "maximum_right_mug_contact_force_n": (
+                1.0 if name in {"right_grasp_settle", "right_grasp"} else 0.0
+            ),
+            "passed": True,
+        }
+        for name in names
+        if name in handover
+    ]
+    receipt = _handover_wave_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{}, *samples],
+        {
+            "clear_pregrasp": {"passed": True},
+            "open_approach": {"passed": True},
+        },
+        live_rows,
+    )
+
+    assert receipt["passed"] is True
+    assert receipt["first_broad_right_contact_trace_row"] == secure_row
+    assert receipt["live_physx_contact_guard"]["first_right_mug_contact"][
+        "waypoint"
+    ] == "right_grasp_settle"
 
 
 def test_branch_receiver_orients_clear_then_approaches_without_rotation():
