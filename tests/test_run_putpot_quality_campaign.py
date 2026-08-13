@@ -2,10 +2,14 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
+    _collision_clear_peer_pregrasp,
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
@@ -133,6 +137,24 @@ def test_semantic_arm_labels_map_to_live_yam_registry_keys():
         assert "left or right" in str(error)
     else:
         raise AssertionError("invalid semantic arm label was accepted")
+
+
+def test_collision_clear_peer_pregrasp_moves_only_outward_position():
+    pregrasp = [0.72, -0.16, 0.91, 0.1, 0.2, 0.3, 0.9]
+    pot = [0.71, 0.09, 0.81, 1.0, 0.0, 0.0, 0.0]
+    staged, receipt = _collision_clear_peer_pregrasp(
+        pregrasp, pot, clearance_m=0.025
+    )
+    before = np.asarray(pregrasp[:3]) - np.asarray(pot[:3])
+    after = staged[:3] - np.asarray(pot[:3])
+
+    assert np.linalg.norm(after) == pytest.approx(
+        np.linalg.norm(before) + 0.025
+    )
+    assert staged[3:] == pytest.approx(pregrasp[3:])
+    assert receipt["translation_norm_m"] == pytest.approx(0.025)
+    assert receipt["orientation_unchanged"]
+    assert receipt["grasp_endpoint_unchanged"]
 
 
 def test_measured_static_translation_moves_both_source_corridor_endpoints():

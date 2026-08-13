@@ -131,6 +131,46 @@ def _robot_arm_registry_key(semantic_arm: str) -> str:
     return f"{semantic_arm}_arm"
 
 
+def _collision_clear_peer_pregrasp(
+    peer_pregrasp, object_pose, clearance_m: float
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Move an open peer pregrasp radially clear without changing orientation."""
+
+    pregrasp = np.asarray(peer_pregrasp, dtype=np.float64)
+    root = np.asarray(object_pose, dtype=np.float64)
+    if pregrasp.shape != (7,) or root.shape != (7,):
+        raise ValueError("peer pregrasp and object pose must have shape (7,)")
+    if not np.all(np.isfinite(pregrasp)) or not np.all(np.isfinite(root)):
+        raise ValueError("peer pregrasp and object pose must be finite")
+    if not np.isfinite(clearance_m) or clearance_m <= 0.0:
+        raise ValueError("peer pregrasp clearance must be finite and positive")
+    outward = pregrasp[:3] - root[:3]
+    radial_distance = float(np.linalg.norm(outward))
+    if radial_distance <= 1.0e-9:
+        raise ValueError("peer pregrasp must be radially distinct from the object")
+    outward /= radial_distance
+    staged = pregrasp.copy()
+    translation = float(clearance_m) * outward
+    staged[:3] += translation
+    return staged, {
+        "enabled": True,
+        "classification": "open_peer_collision_clear_radial_pregrasp",
+        "original_pose_world": pregrasp.tolist(),
+        "staged_pose_world": staged.tolist(),
+        "translation_world_m": translation.tolist(),
+        "translation_norm_m": float(np.linalg.norm(translation)),
+        "outward_unit_vector_world": outward.tolist(),
+        "radial_distance_before_m": radial_distance,
+        "radial_distance_after_m": float(
+            np.linalg.norm(staged[:3] - root[:3])
+        ),
+        "orientation_unchanged": bool(
+            np.array_equal(staged[3:], pregrasp[3:])
+        ),
+        "grasp_endpoint_unchanged": True,
+    }
+
+
 def _translate_source_corridor_endpoints(
     desired_pregrasp, desired_grasp, static_precontact_receipt
 ):
@@ -448,6 +488,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "holding the right gripper open at pregrasp through left closure. "
             "Explicit quality mode may use this chronology directly; legacy "
             "repair runs still require a measured source corridor."
+        ),
+    )
+    parser.add_argument(
+        "--target-collision-clear-right-pregrasp",
+        action="store_true",
+        help=(
+            "In strict quality left-first acquisition, stage the open right "
+            "pregrasp one configured collision-clearance distance outward "
+            "from the target pot while preserving its orientation and grasp "
+            "endpoint."
         ),
     )
     parser.add_argument(
@@ -1353,6 +1403,19 @@ def _build_skill(
     grasp_geometry["left"]["source_left_first_acquisition"] = (
         source_left_first
     )
+    if getattr(args, "target_collision_clear_right_pregrasp", False):
+        if not source_left_first:
+            raise ValueError(
+                "collision-clear right pregrasp requires left-first acquisition"
+            )
+        right_pregrasp, peer_staging = _collision_clear_peer_pregrasp(
+            right_pregrasp,
+            target_initial.root_pose,
+            args.collision_clearance_m,
+        )
+        grasp_geometry["right"]["collision_clear_pregrasp_staging"] = (
+            peer_staging
+        )
 
     program = PutPotSkillProgram(left_start, right_start)
     program.bimanual_handle_grasp(
@@ -2406,6 +2469,14 @@ def main(argv: list[str] | None = None) -> None:
     ):
         raise ValueError(
             "quality left-first local MPC cannot request the legacy right-first bootstrap"
+        )
+    if (
+        args.target_collision_clear_right_pregrasp
+        and not quality_left_first_local_mpc
+    ):
+        raise ValueError(
+            "collision-clear right pregrasp requires strict quality left-first "
+            "handle-local MPC"
         )
     if quality_left_first_local_mpc != bool(
         args.target_quality_peer_axis_diagnosis_json
