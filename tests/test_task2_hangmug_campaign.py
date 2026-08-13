@@ -241,6 +241,11 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "left_release_retreat_m": 0.03,
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
+        "handover_target_offset_m": [
+            0.0004767246501909175,
+            -0.00005832851153687631,
+            0.0019414766011060344,
+        ],
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_local_y_clearance_m": 0.08,
         "handover_orient_steps": 30,
@@ -274,6 +279,13 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
     assert "--handover-handle-frame-transfer" in command
+    offset_cursor = command.index("--handover-target-offset-m")
+    offset_arguments = command[offset_cursor + 1 : offset_cursor + 4]
+    assert offset_arguments[1] == "-0.00005832851153688"
+    assert all("e" not in value.lower() for value in offset_arguments)
+    assert [float(value) for value in offset_arguments] == pytest.approx(
+        [0.0004767246501909175, -0.00005832851153687631, 0.0019414766011060344]
+    )
     assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
         0.7853981633974483
     )
