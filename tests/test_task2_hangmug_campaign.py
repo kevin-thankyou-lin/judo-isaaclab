@@ -59,6 +59,45 @@ def test_atomic_immutable_receipt_never_overwrites(tmp_path):
     assert json.loads(path.read_text()) == {"value": 1}
 
 
+def test_asset_provenance_matches_lane_symlink_to_canonical_assets(tmp_path):
+    canonical = tmp_path / "canonical"
+    mug = canonical / "MugHangable/mug_teacup_000010"
+    tree = canonical / "ThreeLayerMugTree/mug_tree_000010"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    alias = tmp_path / "lane-data"
+    alias.symlink_to(canonical, target_is_directory=True)
+    expected = {
+        "mug": alias / "MugHangable/mug_teacup_000010",
+        "mug_tree": alias / "ThreeLayerMugTree/mug_tree_000010",
+    }
+    recorded = {
+        "mug": {"path": str(mug)},
+        "mug_tree": {"path": str(tree)},
+    }
+    assert campaign._asset_provenance_matches(recorded, expected)
+
+
+def test_asset_provenance_rejects_wrong_or_incomplete_assets(tmp_path):
+    mug = tmp_path / "MugHangable/mug_teacup_000010"
+    tree = tmp_path / "ThreeLayerMugTree/mug_tree_000010"
+    wrong = tmp_path / "ThreeLayerMugTree/mug_tree_000011"
+    mug.mkdir(parents=True)
+    tree.mkdir(parents=True)
+    wrong.mkdir(parents=True)
+    expected = {"mug": mug, "mug_tree": tree}
+    assert not campaign._asset_provenance_matches(
+        {"mug": {"path": str(mug)}}, expected
+    )
+    assert not campaign._asset_provenance_matches(
+        {
+            "mug": {"path": str(mug)},
+            "mug_tree": {"path": str(wrong)},
+        },
+        expected,
+    )
+
+
 def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatch):
     results = tmp_path / "task2"
     results.mkdir()
@@ -84,40 +123,52 @@ def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatc
         campaign._claim_explicit_lane(12, "node2-gpu0")
 
 
-def test_explicit_lane_claim_allows_verified_deployed_descendant(
-    tmp_path, monkeypatch
+def test_explicit_lane_claim_allows_descendant_commit_without_rewriting_receipt(
+    tmp_path, monkeypatch,
 ):
     results = tmp_path / "task2"
-    assignment = results / "pairs/000012/lane_assignment.json"
-    assignment.parent.mkdir(parents=True)
-    assignment.write_text(json.dumps({
-        "schema_version": 1,
-        "pair_index": 12,
-        "human_pair": 13,
-        "lane_id": "node1-gpu3",
-        "judo_head": "base-head",
-        "results_root": str(results.resolve()),
-    }))
+    results.mkdir()
     monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "repair-head\n"))
     monkeypatch.setattr(
         campaign.subprocess,
         "check_output",
-        lambda *_args, **_kwargs: "deployed-head\n",
+        lambda *_args, **_kwargs: next(heads),
     )
-    calls = []
-
-    class Completed:
-        returncode = 0
+    ancestry_calls = []
 
     def run(command, **kwargs):
-        calls.append((command, kwargs))
-        return Completed()
+        ancestry_calls.append((command, kwargs))
+        return campaign.subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(campaign.subprocess, "run", run)
-    assert campaign._claim_explicit_lane(12, "node1-gpu3") == assignment
-    assert calls[0][0] == [
-        "git", "merge-base", "--is-ancestor", "base-head", "deployed-head"
+    path = campaign._claim_explicit_lane(12, "node1-gpu3")
+    original = path.read_bytes()
+    assert campaign._claim_explicit_lane(12, "node1-gpu3") == path
+    assert path.read_bytes() == original
+    assert ancestry_calls[0][0] == [
+        "git", "merge-base", "--is-ancestor", "base-head", "repair-head",
     ]
+
+
+def test_explicit_lane_claim_rejects_non_descendant_commit(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "unrelated-head\n"))
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: next(heads),
+    )
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "run",
+        lambda command, **_kwargs: campaign.subprocess.CompletedProcess(command, 1),
+    )
+    campaign._claim_explicit_lane(12, "node1-gpu3")
+    with pytest.raises(RuntimeError, match="assignment changed"):
+        campaign._claim_explicit_lane(12, "node1-gpu3")
 
 
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
@@ -290,6 +341,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.08,
         "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
@@ -329,6 +381,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     )
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
+    assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
     assert "--target-branch-rank" not in command
@@ -359,6 +412,27 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"post_handover_right_return_steps": 45}))
     with pytest.raises(ValueError, match="selected together"):
         campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_right_return_steps": 45,
+        "left_branch_point_steps": 35,
+        "direct_rest_to_preinsert_steps": 170,
+    }))
+    with pytest.raises(ValueError, match="must be selected together"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    with pytest.raises(ValueError, match="requires simultaneous"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+        "branch_orient_steps": 20,
+    }))
+    with pytest.raises(ValueError, match="forbids branch orientation"):
+        campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"require_broad_pad_contact": False}))
     with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
@@ -373,6 +447,16 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_standoff_outside_m": 0.08}))
+    with pytest.raises(ValueError, match="outside standoff"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_orient_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+        "handover_standoff_outside_m": 0.121,
+    }))
+    with pytest.raises(ValueError, match="outside standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
     with pytest.raises(ValueError, match="requires orient-first"):
@@ -407,6 +491,35 @@ def test_campaign_accepts_only_middle_row_branches():
     for branch in (None, "branch_layer_1_a", "branch_layer_3_b"):
         with pytest.raises(RuntimeError, match="middle-row branch"):
             campaign._require_middle_row_branch(branch)
+
+
+def test_direct_choreography_candidate_pins_both_single_segment_counts(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    candidate = results / "pairs/000002/repair_candidate.json"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(json.dumps({
+        "post_handover_rest_observer_steps": 60,
+        "direct_rest_to_preinsert_steps": 170,
+        "post_release_return_to_rest_steps": 120,
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    strategy = campaign._repair_strategy(2)
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    command = campaign._repair_command(
+        2,
+        tmp_path / "attempt",
+        tmp_path / "result.json",
+        campaign._repair_selection("pick", None),
+        strategy,
+    )
+
+    assert command[command.index("--post-handover-rest-observer-steps") + 1] == "60"
+    assert command[command.index("--direct-rest-to-preinsert-steps") + 1] == "170"
+    assert command[command.index("--post-release-return-to-rest-steps") + 1] == "120"
+    assert "--branch-orient-steps" not in command
 
 
 def test_pick_lift_margin_is_reset_boundary_only(tmp_path, monkeypatch):
@@ -648,6 +761,31 @@ def test_quality_wave_direct_success_forces_fresh_skill(tmp_path, monkeypatch):
     assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
 
 
+def test_quality_wave_direct_failure_still_forces_fresh_skill_from_reset(
+    tmp_path, monkeypatch
+):
+    result = {
+        "status": "repair_required", "first_failed_stage": "handover",
+        "last_completed_stage": "pick", "completed_stages": ["pick"],
+        "result_path": str(tmp_path / "result.json"),
+        "artifacts": {"result_sha256": "r"},
+    }
+    monkeypatch.setattr(campaign, "_force_semantic_regeneration", lambda _index: True)
+
+    events = _run_one_fixture(tmp_path, monkeypatch, result)
+
+    assert events == ["classification", "classification_audit", "repair_command", "repair", "accepted"]
+    attempt = (
+        tmp_path / "task2/pairs/000002/attempt_002_repair_quality_regeneration"
+    )
+    manifest = json.loads((attempt / "manifest.json").read_text())
+    assert manifest["classification"]["actual_repair_boundary"] == "reset"
+    assert manifest["classification"]["requested_failed_stage"] == "pick"
+    assert manifest["classification"][
+        "quality_regeneration_from_direct_success"
+    ] is True
+
+
 def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
     audit = tmp_path / "classification_audit.json"
     audit.write_text("{}")
@@ -664,47 +802,6 @@ def test_forced_quality_binding_restarts_from_reset(tmp_path, monkeypatch):
     )
     assert binding["actual_repair_boundary"] == "reset"
     assert binding["quality_regeneration_from_direct_success"] is True
-
-
-def test_reset_only_strategy_promotes_pick_boundary_to_reset():
-    binding = {
-        "requested_failed_stage": "handover",
-        "requested_last_completed_stage": "pick",
-        "actual_repair_boundary": "pick",
-        "coarse_fallback": False,
-        "quality_regeneration_from_direct_success": False,
-    }
-    strategy = {
-        "handover_contact_settle_steps": 30,
-        "handover_confirm_steps": 12,
-        "post_handover_right_return_steps": 60,
-        "left_branch_point_steps": 45,
-        "require_broad_pad_contact": True,
-    }
-    promoted = campaign._apply_strategy_repair_boundary(binding, strategy)
-    assert promoted["requested_failed_stage"] == "handover"
-    assert promoted["requested_last_completed_stage"] == "pick"
-    assert promoted["actual_repair_boundary"] == "reset"
-    assert promoted["coarse_fallback"] is False
-    assert promoted["quality_regeneration_from_direct_success"] is False
-    assert promoted["strategy_regeneration_from_reset"] is True
-    assert promoted["strategy_reset_fields"] == [
-        "handover_confirm_steps", "handover_contact_settle_steps"
-    ]
-
-
-def test_branch_suffix_strategy_preserves_pick_boundary():
-    binding = {
-        "actual_repair_boundary": "pick",
-        "coarse_fallback": True,
-    }
-    strategy = {
-        "post_handover_right_return_steps": 60,
-        "left_branch_point_steps": 45,
-        "require_broad_pad_contact": True,
-        "stable_support_steps": 90,
-    }
-    assert campaign._apply_strategy_repair_boundary(binding, strategy) == binding
 
 
 def test_serial_campaign_never_advances_after_first_failure(monkeypatch):
