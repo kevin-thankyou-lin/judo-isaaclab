@@ -235,6 +235,8 @@ def _repair_command(
                     strategy["handover_contact_acquire_target_mug_quaternion_wxyz"],
                 ),
             ])
+        if strategy.get("handover_contact_acquire_reanchor_right_assist"):
+            arguments.append("--handover-contact-acquire-reanchor-right-assist")
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
@@ -317,6 +319,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_contact_acquire_steps",
         "handover_contact_acquire_target_mug_position_m",
         "handover_contact_acquire_target_mug_quaternion_wxyz",
+        "handover_contact_acquire_reanchor_right_assist",
         "handover_confirm_steps",
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
@@ -514,6 +517,9 @@ def _repair_strategy(index: int) -> dict:
     acquire_target_quaternion = value.get(
         "handover_contact_acquire_target_mug_quaternion_wxyz"
     )
+    acquire_reanchor_right = value.get(
+        "handover_contact_acquire_reanchor_right_assist", False
+    )
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
@@ -551,6 +557,16 @@ def _repair_strategy(index: int) -> dict:
         if acquire_target is None:
             raise ValueError(
                 "handover contact-acquire quaternion requires a target position"
+            )
+    if (
+        "handover_contact_acquire_reanchor_right_assist" in value
+        and acquire_reanchor_right is not True
+    ):
+        raise ValueError("right-assist contact reanchor must be true when selected")
+    if acquire_reanchor_right:
+        if acquire_target is None or acquire_target_quaternion is None:
+            raise ValueError(
+                "right-assist contact reanchor requires an explicit target pose"
             )
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
@@ -629,6 +645,8 @@ def _repair_strategy(index: int) -> dict:
         strategy["handover_contact_acquire_target_mug_quaternion_wxyz"] = (
             acquire_target_quaternion.tolist()
         )
+    if acquire_reanchor_right:
+        strategy["handover_contact_acquire_reanchor_right_assist"] = True
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
     if "handover_target_local_roll_rad" in value:

@@ -53,6 +53,7 @@ from run_hangmug_skill_program import (
     _handover_outside_standoff,
     _handover_lift_guard_receipt,
     _handover_wave_contract_receipt,
+    _begin_right_assist_contact_reanchor,
     _pose_path_step_receipt,
     _preserve_quality_wave_contact_reports_across_arm_rebuild,
     _quality_wave_contact_views,
@@ -964,6 +965,58 @@ def test_authored_boundaries_release_both_grasp_assists():
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [True])
+
+
+def test_authored_contact_acquire_reanchors_right_assist_at_endpoint():
+    import torch
+
+    class Assist:
+        def __init__(self):
+            self.calls = []
+            self.engaged = torch.tensor([True])
+
+        def update(self, *, engage, disable):
+            self.calls.append((engage.tolist(), disable.tolist()))
+
+    right = Assist()
+    env = SimpleNamespace(
+        robot=SimpleNamespace(
+            is_grasping=lambda: (
+                torch.tensor([True]),
+                torch.tensor([True]),
+            )
+        ),
+        grasp_assists={"right": right},
+    )
+    trajectory = SimpleNamespace(
+        waypoint_steps={
+            "right_grasp": 3,
+            "handover_contact_acquire": 6,
+            "left_release": 8,
+            "branch_unload": 10,
+        }
+    )
+
+    _begin_right_assist_contact_reanchor(
+        env, trajectory, 4, enabled=True
+    )
+    assert right.calls[-1] == ([True], [True])
+
+    _update_authored_assist_releases(
+        env,
+        trajectory,
+        5,
+        reanchor_right_during_contact_acquire=True,
+    )
+    assert right.calls[-1] == ([True], [True])
+
+    _update_authored_assist_releases(
+        env,
+        trajectory,
+        6,
+        reanchor_right_during_contact_acquire=True,
+    )
+    assert right.calls[-1] == ([True], [False])
 
 
 def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
