@@ -30,6 +30,7 @@ from run_hangmug_skill_program import (
     _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_handover_offset,
+    _contact_force_by_body_receipt,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _return_contact_clearance_receipt,
@@ -187,6 +188,24 @@ def test_quality_wave_contact_views_resolve_only_predeclared_scene_sensors():
     assert views["mug"] == (sensors["right_mug"],)
     assert views["left_tree"] == (sensors["left_tree"],)
     assert views["right_body_paths"] == ("right",)
+
+
+def test_contact_force_receipt_attributes_only_nonzero_body_forces():
+    def sensor(forces):
+        return SimpleNamespace(
+            data=SimpleNamespace(force_matrix_w=np.asarray(forces, dtype=np.float64))
+        )
+
+    receipt = _contact_force_by_body_receipt(
+        (
+            sensor([[[0.0, 0.0, 0.0]]]),
+            sensor([[[0.0, 3.0, 4.0]]]),
+        ),
+        ("quiet_link", "colliding_link"),
+        1.0 / 120.0,
+    )
+
+    assert receipt == {"colliding_link": 5.0}
 
 
 def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
