@@ -983,28 +983,26 @@ def _quality_wave_contact_views(env, target_assets) -> dict[str, object]:
     tree_path = object_path("mug_tree")
     mug_path = object_path("mug")
     physics_view = env.scene["right_arm"]._physics_sim_view
-    environment_filters = [[tree_path, *left_paths] for _ in right_paths]
-    mug_filters = [[mug_path] for _ in right_paths]
-    left_tree_filters = [[tree_path] for _ in left_paths]
-    environment = physics_view.create_rigid_contact_view(
-        right_paths,
-        filter_patterns=environment_filters,
-        max_contact_data_count=4096,
-    )
-    mug = physics_view.create_rigid_contact_view(
-        right_paths,
-        filter_patterns=mug_filters,
-        max_contact_data_count=1024,
-    )
-    left_tree = physics_view.create_rigid_contact_view(
-        left_paths,
-        filter_patterns=left_tree_filters,
-        max_contact_data_count=1024,
-    )
-    if (
-        environment.sensor_count != len(right_paths)
-        or mug.sensor_count != len(right_paths)
-        or left_tree.sensor_count != len(left_paths)
+    # IsaacLab/PhysX filtered contacts support one sensor body to many filter
+    # bodies, not a many-sensor to many-filter matrix.  Create one initialized
+    # view per link and aggregate their maxima at read time.
+    def per_link_views(sensor_paths, filter_paths, maximum_contacts):
+        return tuple(
+            physics_view.create_rigid_contact_view(
+                sensor_path,
+                filter_patterns=list(filter_paths),
+                max_contact_data_count=maximum_contacts,
+            )
+            for sensor_path in sensor_paths
+        )
+
+    environment = per_link_views(right_paths, (tree_path, *left_paths), 512)
+    mug = per_link_views(right_paths, (mug_path,), 128)
+    left_tree = per_link_views(left_paths, (tree_path,), 128)
+    if any(
+        view.sensor_count != 1 or view.filter_count == 0
+        for group in (environment, mug, left_tree)
+        for view in group
     ):
         raise RuntimeError("quality-wave contact views resolved incomplete arms")
     return {
@@ -1023,6 +1021,11 @@ _direct_segment_contact_views = _quality_wave_contact_views
 
 
 def _contact_view_max_force(view, physics_dt: float) -> float:
+    if isinstance(view, (tuple, list)):
+        return max(
+            (_contact_view_max_force(item, physics_dt) for item in view),
+            default=0.0,
+        )
     values = view.get_contact_force_matrix(dt=physics_dt)
     if hasattr(values, "detach"):
         values = values.detach().cpu().numpy()

@@ -1,6 +1,6 @@
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -41,6 +41,7 @@ from run_hangmug_skill_program import (
     _handover_wave_contract_receipt,
     _pose_path_step_receipt,
     _preserve_quality_wave_contact_reports_across_arm_rebuild,
+    _quality_wave_contact_views,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
@@ -101,6 +102,64 @@ def test_quality_wave_contact_reports_survive_gear_arm_rebuild():
     assert scene.left_arm.spawn.activate_contact_sensors is True
     assert scene.right_arm.spawn.activate_contact_sensors is True
     assert scene.mug_tree.spawn.activate_contact_sensors is True
+
+
+def test_quality_wave_contact_views_use_supported_one_sensor_to_many_filters(
+    monkeypatch,
+):
+    class View:
+        sensor_count = 1
+        filter_count = 1
+
+    class Physics:
+        def __init__(self):
+            self.calls = []
+
+        def create_rigid_contact_view(
+            self, sensor_path, *, filter_patterns, max_contact_data_count
+        ):
+            self.calls.append(
+                (sensor_path, filter_patterns, max_contact_data_count)
+            )
+            return View()
+
+    physics = Physics()
+    arm = lambda names: SimpleNamespace(
+        body_names=names, _physics_sim_view=physics
+    )
+    env = SimpleNamespace(
+        scene={
+            "right_arm": arm(("right_link", "right_finger")),
+            "left_arm": arm(("left_link", "left_finger")),
+        }
+    )
+    assets_module = ModuleType("dc_study.utils.assets")
+    assets_module.find_contact_body_link = lambda _path: "body"
+    utils_module = ModuleType("dc_study.utils")
+    dc_study_module = ModuleType("dc_study")
+    monkeypatch.setitem(sys.modules, "dc_study", dc_study_module)
+    monkeypatch.setitem(sys.modules, "dc_study.utils", utils_module)
+    monkeypatch.setitem(sys.modules, "dc_study.utils.assets", assets_module)
+    monkeypatch.setattr(
+        "run_hangmug_skill_program._asset_root_usd", lambda path: path
+    )
+
+    views = _quality_wave_contact_views(
+        env, {"mug": "mug.usd", "mug_tree": "tree.usd"}
+    )
+
+    assert len(views["environment"]) == 2
+    assert len(views["mug"]) == 2
+    assert len(views["left_tree"]) == 2
+    assert all(isinstance(sensor_path, str) for sensor_path, _, _ in physics.calls)
+    assert all(
+        isinstance(filters, list) and filters
+        for _, filters, _ in physics.calls
+    )
+    assert not any(
+        isinstance(sensor_path, list) or any(isinstance(item, list) for item in filters)
+        for sensor_path, filters, _ in physics.calls
+    )
 
 
 def test_branch_approach_height_can_preserve_middle_branch_axis():
