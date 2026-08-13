@@ -78,6 +78,7 @@ class HandleLocalMpcCommand:
     depth_guard_alignment_streak: int
     depth_guard_released: bool
     contact_recenter_total_m: float
+    closure_committed: bool
     fail_closed: bool
     fail_reason: str | None
     frame_receipt: dict[str, Any]
@@ -267,6 +268,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
         "hard_constraints",
         "contact_frame_guard",
         "contact_fraction_recenter",
+        "closure",
         "latch",
         "fail_closed",
         "fail_reason",
@@ -293,6 +295,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
     constraints = receipt.get("hard_constraints", {})
     contact_frame_guard = receipt.get("contact_frame_guard", {})
     contact_fraction_recenter = receipt.get("contact_fraction_recenter", {})
+    closure = receipt.get("closure", {})
     latch = receipt.get("latch", {})
     return bool(
         set(residuals)
@@ -357,6 +360,15 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "maximum_step_m",
             "maximum_total_m",
         }
+        and set(closure)
+        == {
+            "commit_enabled",
+            "was_committed",
+            "initial_alignment_satisfied",
+            "increment_active",
+            "committed",
+            "closed_command_reached",
+        }
         and set(latch)
         == {
             "active_force_and_margin",
@@ -399,6 +411,8 @@ def handle_local_mpc_step(
     contact_fraction_recenter: bool = False,
     contact_recenter_preserve_transverse_centering: bool = False,
     contact_recenter_preserve_bounded_closure: bool = False,
+    allow_bounded_closure_commit: bool = False,
+    closure_committed: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -637,6 +651,10 @@ def handle_local_mpc_step(
         np.linalg.norm(translation_world) <= config.closure_position_tolerance_m
         and np.linalg.norm(rotation_residual) <= config.closure_rotation_tolerance_rad
     )
+    closure_authorized = bool(
+        aligned_for_closure
+        or (allow_bounded_closure_commit and closure_committed)
+    )
     jaw_increment = (
         float(
             np.clip(
@@ -645,7 +663,7 @@ def handle_local_mpc_step(
                 config.maximum_jaw_step,
             )
         )
-        if aligned_for_closure and not fail_closed and not robust_frame
+        if closure_authorized and not fail_closed and not robust_frame
         else 0.0
     )
     if contact_recenter_active and not contact_recenter_preserve_bounded_closure:
@@ -654,6 +672,10 @@ def handle_local_mpc_step(
         contact_recenter_active
         and contact_recenter_preserve_bounded_closure
         and jaw_increment != 0.0
+    )
+    next_closure_committed = bool(
+        allow_bounded_closure_commit
+        and (closure_committed or jaw_increment != 0.0)
     )
     if bounded_closure_priority_active:
         translation_increment = nominal_translation_increment
@@ -775,6 +797,16 @@ def handle_local_mpc_step(
             "maximum_step_m": config.maximum_contact_recenter_step_m,
             "maximum_total_m": config.maximum_contact_recenter_total_m,
         },
+        "closure": {
+            "commit_enabled": bool(allow_bounded_closure_commit),
+            "was_committed": bool(closure_committed),
+            "initial_alignment_satisfied": aligned_for_closure,
+            "increment_active": bool(jaw_increment != 0.0),
+            "committed": next_closure_committed,
+            "closed_command_reached": bool(
+                abs(jaw_command - config.closed_jaw_command) <= 1.0e-12
+            ),
+        },
         "latch": {
             "active_force_and_margin": active_robust,
             "peer_force_and_margin": peer_robust,
@@ -798,6 +830,7 @@ def handle_local_mpc_step(
         depth_guard_alignment_streak=next_depth_guard_streak,
         depth_guard_released=next_depth_guard_released,
         contact_recenter_total_m=next_contact_recenter_total_m,
+        closure_committed=next_closure_committed,
         fail_closed=fail_closed,
         fail_reason=fail_reason,
         frame_receipt=receipt,

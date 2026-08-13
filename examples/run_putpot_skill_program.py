@@ -835,6 +835,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "closure computed inside the unchanged pose and jaw-step bounds."
         ),
     )
+    parser.add_argument(
+        "--target-left-bounded-closure-commit",
+        action="store_true",
+        help=(
+            "After the unchanged left closure pose gate issues its first "
+            "bounded jaw increment, finish that monotone closure stroke despite "
+            "transient contact-induced pose residuals; all fail-close guards "
+            "and jaw bounds remain active."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -2831,6 +2841,13 @@ def main(argv: list[str] | None = None) -> None:
             "left closure-preserving recenter requires sequential quality "
             "MPC with depth guard and transverse-preserving recentering"
         )
+    if args.target_left_bounded_closure_commit and not (
+        args.target_left_contact_recenter_preserve_bounded_closure
+    ):
+        raise ValueError(
+            "left bounded-closure commitment requires closure-preserving "
+            "left recentering"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -3997,6 +4014,7 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_left_depth_guard_alignment_streak = 0
         local_mpc_left_depth_guard_released = False
         local_mpc_left_contact_recenter_total_m = 0.0
+        local_mpc_left_closure_committed = False
         local_mpc_right_contact_window_step = 0
         local_mpc_right_robust_streak = 0
         local_mpc_right_latch_ready = False
@@ -4705,6 +4723,14 @@ def main(argv: list[str] | None = None) -> None:
                                     active_arm == "left"
                                     and args.target_left_contact_recenter_preserve_bounded_closure
                                 ),
+                                allow_bounded_closure_commit=bool(
+                                    active_arm == "left"
+                                    and args.target_left_bounded_closure_commit
+                                ),
+                                closure_committed=bool(
+                                    active_arm == "left"
+                                    and local_mpc_left_closure_committed
+                                ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
                                     if active_arm == "left"
@@ -4785,6 +4811,9 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                                 local_mpc_left_contact_recenter_total_m = (
                                     local_command.contact_recenter_total_m
+                                )
+                                local_mpc_left_closure_committed = (
+                                    local_command.closure_committed
                                 )
                                 local_mpc_robust_streak = (
                                     local_command.robust_streak
@@ -6845,6 +6874,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_preserves_bounded_closure": bool(
                         args.target_left_contact_recenter_preserve_bounded_closure
+                    ),
+                    "left_commits_bounded_closure": bool(
+                        args.target_left_bounded_closure_commit
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,

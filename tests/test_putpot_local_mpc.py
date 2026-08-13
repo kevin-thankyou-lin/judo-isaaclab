@@ -231,6 +231,75 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     assert exhausted.fail_reason == "active_contact_outside_pad_margin"
 
 
+def test_bounded_closure_commit_preserves_initial_gate_and_all_hard_guards():
+    outside_gate = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=20,
+            observed_handle_contact_frame=_pose(x=0.011),
+        ),
+        allow_bounded_closure_commit=True,
+    )
+    assert outside_gate.jaw_command == pytest.approx(-0.0475)
+    assert not outside_gate.closure_committed
+    assert not outside_gate.frame_receipt["closure"][
+        "initial_alignment_satisfied"
+    ]
+
+    initial = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=20,
+            observed_handle_contact_frame=_pose(x=0.0099),
+        ),
+        allow_bounded_closure_commit=True,
+    )
+    assert initial.jaw_command == pytest.approx(-0.0435)
+    assert initial.closure_committed
+    assert initial.frame_receipt["closure"]["committed"]
+
+    continued = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=21,
+            observed_handle_contact_frame=_pose(x=0.011),
+            current_jaw_command=initial.jaw_command,
+        ),
+        allow_bounded_closure_commit=True,
+        closure_committed=initial.closure_committed,
+    )
+    assert not continued.frame_receipt["closure"][
+        "initial_alignment_satisfied"
+    ]
+    assert continued.frame_receipt["closure"]["was_committed"]
+    assert continued.jaw_command == pytest.approx(-0.0395)
+
+    motion_guard = handle_local_mpc_step(
+        **_inputs(
+            observed_handle_contact_frame=_pose(x=0.011),
+            current_jaw_command=continued.jaw_command,
+            pre_peer_pot_displacement_m=0.00301,
+        ),
+        allow_bounded_closure_commit=True,
+        closure_committed=continued.closure_committed,
+    )
+    assert motion_guard.fail_closed
+    assert motion_guard.fail_reason == "pre_peer_pot_motion_exceeded"
+    assert motion_guard.jaw_command == pytest.approx(continued.jaw_command)
+    assert motion_guard.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+
+    margin_guard = handle_local_mpc_step(
+        **_inputs(
+            observed_handle_contact_frame=_pose(x=0.011),
+            current_jaw_command=continued.jaw_command,
+            active_finger_forces_n=[2.0, 0.0],
+            active_pad_fractions=[0.05, np.nan],
+        ),
+        allow_bounded_closure_commit=True,
+        closure_committed=continued.closure_committed,
+    )
+    assert margin_guard.fail_closed
+    assert margin_guard.fail_reason == "active_contact_outside_pad_margin"
+    assert margin_guard.jaw_command == pytest.approx(continued.jaw_command)
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None
