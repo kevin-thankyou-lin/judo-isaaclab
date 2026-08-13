@@ -246,6 +246,11 @@ def _repair_command(
         ):
             if field in strategy:
                 arguments.extend([option, str(strategy[field])])
+        if "handover_standoff_local_offset_m" in strategy:
+            arguments.extend([
+                "--handover-standoff-local-offset-m",
+                *map(str, strategy["handover_standoff_local_offset_m"]),
+            ])
         if "left_release_retreat_m" in strategy:
             arguments.extend([
                 "--left-release-retreat-m",
@@ -309,6 +314,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_orient_clearance_m",
         "handover_orient_steps",
         "handover_standoff_outside_m",
+        "handover_standoff_local_offset_m",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
         "pick_lift_margin_m",
@@ -500,6 +506,9 @@ def _repair_strategy(index: int) -> dict:
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
     outside_standoff = value.get("handover_standoff_outside_m", 0.0)
+    local_standoff = np.asarray(
+        value.get("handover_standoff_local_offset_m", (0, 0, 0)), dtype=float
+    )
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
     if not isinstance(acquire, int) or not 0 <= acquire <= 60:
@@ -563,9 +572,13 @@ def _repair_strategy(index: int) -> dict:
         or not np.isfinite(outside_standoff)
         or not 0.0 <= outside_standoff <= 0.12
         or bool(outside_standoff) and not orient_steps
+        or local_standoff.shape != (3,)
+        or not np.all(np.isfinite(local_standoff))
+        or np.linalg.norm(local_standoff) > 0.08
+        or np.linalg.norm(local_standoff) > 0.0 and not orient_steps
     ):
         raise ValueError(
-            "handover orient clearance/steps and outside standoff must be bounded"
+            "handover orient clearance/steps and standoff offsets must be bounded"
         )
     strategy.update({
         "handover_contact_settle_steps": settle,
@@ -586,6 +599,8 @@ def _repair_strategy(index: int) -> dict:
         strategy["handover_orient_steps"] = orient_steps
     if outside_standoff:
         strategy["handover_standoff_outside_m"] = float(outside_standoff)
+    if np.linalg.norm(local_standoff) > 0.0:
+        strategy["handover_standoff_local_offset_m"] = local_standoff.tolist()
     if straddle:
         if not orient_steps:
             raise ValueError(

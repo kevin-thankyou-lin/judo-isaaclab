@@ -344,6 +344,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_standoff_outside_m": 0.08,
+        "handover_standoff_local_offset_m": [-0.02, -0.04, 0.015],
         "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
@@ -387,6 +388,10 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
+    local_cursor = command.index("--handover-standoff-local-offset-m")
+    assert list(map(float, command[local_cursor + 1 : local_cursor + 4])) == [
+        -0.02, -0.04, 0.015
+    ]
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
     assert "--target-branch-rank" not in command
@@ -459,14 +464,24 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     with pytest.raises(ValueError, match="orient clearance"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_standoff_outside_m": 0.08}))
-    with pytest.raises(ValueError, match="outside standoff"):
+    with pytest.raises(ValueError, match="standoff"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_standoff_local_offset_m": [0.01, 0, 0]}))
+    with pytest.raises(ValueError, match="standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_standoff_outside_m": 0.121,
     }))
-    with pytest.raises(ValueError, match="outside standoff"):
+    with pytest.raises(ValueError, match="standoff"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_orient_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+        "handover_standoff_local_offset_m": [0.081, 0, 0],
+    }))
+    with pytest.raises(ValueError, match="standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
     with pytest.raises(ValueError, match="requires orient-first"):
