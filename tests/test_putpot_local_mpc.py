@@ -600,6 +600,64 @@ def test_dual_force_pad_margin_pivot_compensates_measured_tracking_ratio():
     assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
 
 
+def test_pair_15_preseats_finite_edge_with_open_jaw_before_closure():
+    values = _inputs(
+        contact_window_step=20,
+        observed_handle_contact_frame=_pose(),
+        object_relative_wrist_prior=_pose(),
+        source_warm_start_wrist_pose=_pose(),
+        active_pad_fractions=[np.nan, -0.02293512225151062],
+        active_finger_forces_n=[0.0, 0.0],
+    )
+    command = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        allow_dual_force_pad_margin_pivot=True,
+        depth_guard_released=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    control = command.frame_receipt["executed_control"]
+    assert not command.fail_closed
+    assert recenter["preclosure_geometric_prestage_enabled"]
+    assert recenter["preclosure_geometric_prestage_active"]
+    assert recenter["preclosure_geometric_uses_raw_pad_axis"]
+    assert recenter["active"]
+    assert recenter["protected_pad_fraction_margin"] == pytest.approx(
+        0.1 + 0.004 / 0.06806614249944687
+    )
+    assert recenter["executed_translation_m"] == pytest.approx(0.001)
+    np.testing.assert_allclose(control["translation_world_m"], [0.0, 0.0, -0.001])
+    np.testing.assert_allclose(control["rotation_axis_angle_world_rad"], 0.0)
+    assert control["jaw_increment"] == 0.0
+    assert command.jaw_command == pytest.approx(-0.0475)
+    assert not command.closure_committed
+    assert not recenter["bounded_closure_priority_active"]
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
+
+    unopted = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+    assert not unopted.frame_receipt["contact_fraction_recenter"][
+        "preclosure_geometric_prestage_enabled"
+    ]
+    assert unopted.frame_receipt["executed_control"]["jaw_increment"] == pytest.approx(
+        0.004
+    )
+
+
 def test_handle_normal_depth_guard_removes_inward_handle_motion():
     half_sqrt_two = np.sqrt(0.5)
     handle = np.asarray(

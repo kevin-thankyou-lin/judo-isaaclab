@@ -361,6 +361,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "preserve_transverse_centering",
             "preserve_bounded_closure",
             "bounded_closure_priority_active",
+            "preclosure_geometric_prestage_enabled",
+            "preclosure_geometric_prestage_active",
+            "preclosure_geometric_uses_raw_pad_axis",
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
@@ -670,6 +673,36 @@ def handle_local_mpc_step(
         and (not require_peer_latch or (peer_grasp and peer_robust))
     )
     next_streak = robust_streak + 1 if robust_frame else 0
+    preclosure_pose_aligned = bool(
+        np.linalg.norm(translation_world) <= config.closure_position_tolerance_m
+        and np.linalg.norm(rotation_residual)
+        <= config.closure_rotation_tolerance_rad
+    )
+    finite_pad_intersections = np.isfinite(fractions)
+    preclosure_geometric_prestage_enabled = bool(
+        allow_dual_force_pad_margin_pivot
+    )
+    preclosure_geometric_prestage_eligible = bool(
+        preclosure_geometric_prestage_enabled
+        and not closure_committed
+        and np.count_nonzero(finite_pad_intersections) == 1
+        and (preclosure_pose_aligned or contact_recenter_total_m > 0.0)
+        and pot_motion_ok
+        and peer_margin_ok
+    )
+    # Attempt 53 first authorized closure while the only finite pad
+    # intersection was still at fraction -0.0229 and the pot was unloaded.
+    # Expose that geometric intersection to the existing bounded recenter only
+    # once the ordinary closure pose gate is met.  A measured recenter response
+    # then latches this open-jaw prestage even if the tangent move perturbs the
+    # pose residual.
+    if preclosure_geometric_prestage_eligible:
+        control_contacting = control_contacting | finite_pad_intersections
+        control_contact_observed = bool(np.any(control_contacting))
+    preclosure_geometric_uses_raw_pad_axis = bool(
+        preclosure_geometric_prestage_eligible
+        and not physical_contact_observed
+    )
     contact_fraction_axis_world = (
         _unit(
             np.mean(axes[control_contacting], axis=0),
@@ -690,10 +723,14 @@ def handle_local_mpc_step(
         contact_fraction_handle_tangent_norm > 1.0e-9
     )
     contact_recenter_axis_world = (
-        contact_fraction_handle_tangent
-        / contact_fraction_handle_tangent_norm
-        if contact_recenter_use_handle_tangent and surface_tangent_axis_valid
-        else contact_fraction_axis_world
+        contact_fraction_axis_world
+        if preclosure_geometric_uses_raw_pad_axis
+        else (
+            contact_fraction_handle_tangent
+            / contact_fraction_handle_tangent_norm
+            if contact_recenter_use_handle_tangent and surface_tangent_axis_valid
+            else contact_fraction_axis_world
+        )
     )
     pre_release_margin_protection_enabled = bool(
         contact_fraction_recenter
@@ -703,7 +740,10 @@ def handle_local_mpc_step(
         and control_contact_observed
     )
     protected_pad_fraction_margin = config.minimum_pad_fraction_margin
-    if pre_release_margin_protection_enabled:
+    if (
+        pre_release_margin_protection_enabled
+        or preclosure_geometric_prestage_eligible
+    ):
         # A full transverse command can consume pad-edge margin before its
         # effect is visible on the next observation.  Maintain one maximum
         # command of measured pad-fraction reserve while the contact-normal
@@ -757,7 +797,11 @@ def handle_local_mpc_step(
     contact_recenter_active = bool(
         contact_fraction_recenter
         and control_contact_observed
-        and (not active_margin_ok or pre_release_margin_protection_active)
+        and (
+            not active_margin_ok
+            or pre_release_margin_protection_active
+            or preclosure_geometric_prestage_eligible
+        )
         and contact_fraction_delta != 0.0
         and remaining_recenter_m > 0.0
         and pot_motion_ok
@@ -765,6 +809,7 @@ def handle_local_mpc_step(
         and (
             not contact_recenter_use_handle_tangent
             or surface_tangent_axis_valid
+            or preclosure_geometric_uses_raw_pad_axis
         )
         and (
             not depth_guarded_transverse_intercept
@@ -792,6 +837,9 @@ def handle_local_mpc_step(
             not depth_guarded_transverse_intercept
             or next_depth_guard_released
         )
+    )
+    preclosure_geometric_prestage_active = bool(
+        preclosure_geometric_prestage_eligible and contact_recenter_active
     )
     dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
     pad_edge_margins = np.minimum(fractions, 1.0 - fractions)
@@ -944,6 +992,12 @@ def handle_local_mpc_step(
     fail_reason = None
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
+    elif (
+        preclosure_geometric_prestage_eligible
+        and contact_fraction_delta != 0.0
+        and remaining_recenter_m <= 1.0e-12
+    ):
+        fail_reason = "preclosure_geometric_prestage_budget_exhausted"
     elif not active_margin_ok and not (
         contact_recenter_active
         or guarded_depth_completion_active
@@ -992,7 +1046,13 @@ def handle_local_mpc_step(
             -executed_recenter_translation_m * contact_recenter_axis_world
         )
         if contact_recenter_preserve_transverse_centering:
-            if contact_recenter_use_handle_tangent:
+            if preclosure_geometric_prestage_eligible:
+                # The geometric preseat is deliberately a single-axis move.
+                # Retaining the nominal Cartesian step here would combine the
+                # correction with the same approach motion that exposed the
+                # edge-only intersection in Attempt 53.
+                retained_transverse_translation = np.zeros(3, dtype=np.float64)
+            elif contact_recenter_use_handle_tangent:
                 handle_tangent_translation = translation_increment - float(
                     np.dot(translation_increment, depth_guard_axis)
                 ) * depth_guard_axis
@@ -1088,10 +1148,16 @@ def handle_local_mpc_step(
     )
     if contact_recenter_active and not contact_recenter_preserve_bounded_closure:
         jaw_increment = 0.0
+    if preclosure_geometric_prestage_active:
+        # This is an open-jaw correction.  Do not let the legacy
+        # preserve-bounded-closure option override it: closing on the measured
+        # edge was the earliest causal quality failure in Attempt 53.
+        jaw_increment = 0.0
     bounded_closure_priority_active = bool(
         contact_recenter_active
         and contact_recenter_preserve_bounded_closure
         and jaw_increment != 0.0
+        and not preclosure_geometric_prestage_active
     )
     next_closure_committed = bool(
         allow_bounded_closure_commit
@@ -1286,6 +1352,15 @@ def handle_local_mpc_step(
                 contact_recenter_preserve_bounded_closure
             ),
             "bounded_closure_priority_active": bounded_closure_priority_active,
+            "preclosure_geometric_prestage_enabled": (
+                preclosure_geometric_prestage_enabled
+            ),
+            "preclosure_geometric_prestage_active": (
+                preclosure_geometric_prestage_active
+            ),
+            "preclosure_geometric_uses_raw_pad_axis": (
+                preclosure_geometric_uses_raw_pad_axis
+            ),
             "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),
             "pad_fraction_axis_extent_m": float(
                 active_pad_fraction_axis_extent_m
