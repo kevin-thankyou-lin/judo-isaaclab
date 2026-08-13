@@ -58,6 +58,7 @@ HANDOVER_SUFFIX_STRATEGY_FIELDS = frozenset({
     "handover_straddle_local_x_m",
     "handover_seat_local_z_m",
     "handover_orient_clearance_m",
+    "handover_orient_local_z_clearance_m",
     "handover_orient_steps",
     "handover_handle_frame_transfer",
     "left_release_retreat_m",
@@ -242,6 +243,10 @@ def _repair_command(
             ])
         for field, option in (
             ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
+            (
+                "handover_orient_local_z_clearance_m",
+                "--handover-orient-local-z-clearance-m",
+            ),
             ("handover_orient_steps", "--handover-orient-steps"),
         ):
             if field in strategy:
@@ -307,6 +312,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_straddle_local_x_m",
         "handover_seat_local_z_m",
         "handover_orient_clearance_m",
+        "handover_orient_local_z_clearance_m",
         "handover_orient_steps",
         "handover_handle_frame_transfer",
         "left_release_retreat_m",
@@ -409,6 +415,7 @@ def _repair_strategy(index: int) -> dict:
     straddle = value.get("handover_straddle_local_x_m", 0.0)
     seat = value.get("handover_seat_local_z_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
+    orient_local_z = value.get("handover_orient_local_z_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
     if not isinstance(settle, int) or not 0 <= settle <= 60:
         raise ValueError("handover contact settle must be an integer in [0, 60]")
@@ -417,6 +424,8 @@ def _repair_strategy(index: int) -> dict:
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
     post_release_lift = value.get("handover_post_release_lift_m", 0.0)
+    if bool(orient_clearance) and bool(orient_local_z):
+        raise ValueError("handover orient clearance must use one approach frame")
     if (
         isinstance(post_release_lift, bool)
         or not isinstance(post_release_lift, (int, float))
@@ -462,10 +471,14 @@ def _repair_strategy(index: int) -> dict:
         or not isinstance(orient_clearance, (int, float))
         or not np.isfinite(orient_clearance)
         or not 0.0 <= orient_clearance <= 0.12
+        or isinstance(orient_local_z, bool)
+        or not isinstance(orient_local_z, (int, float))
+        or not np.isfinite(orient_local_z)
+        or not 0.0 <= orient_local_z <= 0.12
         or isinstance(orient_steps, bool)
         or not isinstance(orient_steps, int)
         or not 0 <= orient_steps <= 60
-        or bool(orient_clearance) != bool(orient_steps)
+        or bool(orient_clearance or orient_local_z) != bool(orient_steps)
     ):
         raise ValueError(
             "handover orient clearance and steps must both be zero or bounded positive values"
@@ -481,7 +494,10 @@ def _repair_strategy(index: int) -> dict:
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
     if orient_steps:
-        strategy["handover_orient_clearance_m"] = float(orient_clearance)
+        if orient_clearance:
+            strategy["handover_orient_clearance_m"] = float(orient_clearance)
+        if orient_local_z:
+            strategy["handover_orient_local_z_clearance_m"] = float(orient_local_z)
         strategy["handover_orient_steps"] = orient_steps
     if straddle:
         if not orient_steps:

@@ -242,7 +242,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "pick_lift_margin_m": 0.01,
         "handover_handle_frame_transfer": True,
         "handover_target_local_pitch_rad": 0.7853981633974483,
-        "handover_orient_clearance_m": 0.08,
+        "handover_orient_local_z_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_straddle_local_x_m": -0.124,
         "handover_seat_local_z_m": 0.018739788666255294,
@@ -277,7 +277,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
         0.7853981633974483
     )
-    assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
+    assert float(
+        command[command.index("--handover-orient-local-z-clearance-m") + 1]
+    ) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert float(command[command.index("--handover-seat-local-z-m") + 1]) == pytest.approx(
@@ -323,13 +325,20 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_orient_clearance_m": 0.08,
+        "handover_orient_local_z_clearance_m": 0.08,
+        "handover_orient_steps": 30,
+    }))
+    with pytest.raises(ValueError, match="one approach frame"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_straddle_local_x_m": -0.141,
     }))
     with pytest.raises(ValueError, match="within 14 cm"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
-        "handover_orient_clearance_m": 0.08,
+        "handover_orient_local_z_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_seat_local_z_m": 0.040001,
     }))
@@ -381,7 +390,7 @@ def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeyp
     monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
     strategy = {
         "handover_handle_frame_transfer": True,
-        "handover_orient_clearance_m": 0.08,
+        "handover_orient_local_z_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 12,
@@ -402,7 +411,9 @@ def test_handover_candidate_is_allowed_after_exact_pick_prefix(tmp_path, monkeyp
 
     assert "--reuse-source-pick-prefix" in command
     assert "--handover-handle-frame-transfer" in command
-    assert command[command.index("--handover-orient-clearance-m") + 1] == "0.08"
+    assert command[
+        command.index("--handover-orient-local-z-clearance-m") + 1
+    ] == "0.08"
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "12"
