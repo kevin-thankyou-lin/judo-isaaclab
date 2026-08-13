@@ -84,6 +84,42 @@ def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatc
         campaign._claim_explicit_lane(12, "node2-gpu0")
 
 
+def test_explicit_lane_claim_allows_verified_deployed_descendant(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    assignment = results / "pairs/000012/lane_assignment.json"
+    assignment.parent.mkdir(parents=True)
+    assignment.write_text(json.dumps({
+        "schema_version": 1,
+        "pair_index": 12,
+        "human_pair": 13,
+        "lane_id": "node1-gpu3",
+        "judo_head": "base-head",
+        "results_root": str(results.resolve()),
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: "deployed-head\n",
+    )
+    calls = []
+
+    class Completed:
+        returncode = 0
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    assert campaign._claim_explicit_lane(12, "node1-gpu3") == assignment
+    assert calls[0][0] == [
+        "git", "merge-base", "--is-ancestor", "base-head", "deployed-head"
+    ]
+
+
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
 def test_explicit_lane_claim_rejects_ambiguous_ids(tmp_path, monkeypatch, lane):
     monkeypatch.setattr(campaign, "RESULTS", tmp_path)

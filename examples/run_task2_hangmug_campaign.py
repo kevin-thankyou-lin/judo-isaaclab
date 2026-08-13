@@ -1308,8 +1308,32 @@ def _claim_explicit_lane(index: int, lane_id: str) -> Path:
     }
     path = RESULTS / "pairs" / f"{index:06d}" / "lane_assignment.json"
     if path.exists():
-        if _load(path) != receipt:
-            raise RuntimeError(f"pair/lane assignment changed: {path}")
+        recorded = _load(path)
+        if recorded != receipt:
+            recorded_static = {
+                name: value for name, value in recorded.items()
+                if name != "judo_head"
+            }
+            receipt_static = {
+                name: value for name, value in receipt.items()
+                if name != "judo_head"
+            }
+            recorded_head = recorded.get("judo_head")
+            deployed_descendant = (
+                recorded_static == receipt_static
+                and isinstance(recorded_head, str)
+                and subprocess.run(
+                    [
+                        "git", "merge-base", "--is-ancestor",
+                        recorded_head, receipt["judo_head"],
+                    ],
+                    cwd=REPO_ROOT,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ).returncode == 0
+            )
+            if not deployed_descendant:
+                raise RuntimeError(f"pair/lane assignment changed: {path}")
         return path
     _atomic_json(path, receipt, immutable=True)
     return path
