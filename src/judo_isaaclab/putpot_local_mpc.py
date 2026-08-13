@@ -398,6 +398,16 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "loaded_pad_pivot_translation_world_m",
             "loaded_pad_pivot_translation_norm_m",
             "loaded_pad_pivot_jaw_scale",
+            "dual_force_pad_margin_pivot_enabled",
+            "dual_force_pad_margin_pivot_active",
+            "dual_force_pad_margin_pivot_geometry_feasible",
+            "dual_force_pad_margin_pivot_strong_index",
+            "dual_force_pad_margin_pivot_weak_index",
+            "dual_force_pad_margin_pivot_target_fraction",
+            "dual_force_pad_margin_pivot_predicted_fraction",
+            "dual_force_pad_margin_pivot_translation_world_m",
+            "dual_force_pad_margin_pivot_rotation_axis_angle_world_rad",
+            "dual_force_pad_margin_pivot_point_world_m",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -455,6 +465,7 @@ def handle_local_mpc_step(
     allow_interior_single_pad_transverse_intercept: bool = False,
     allow_transverse_aligned_two_pad_closure: bool = False,
     transverse_aligned_closure_pivot_pad_index: int | None = None,
+    allow_dual_force_pad_margin_pivot: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -516,10 +527,11 @@ def handle_local_mpc_step(
     if not np.all(np.isfinite(scalars)):
         raise ValueError("pot displacement and jaw command must be finite")
     if not np.isfinite(active_pad_fraction_axis_extent_m) or (
-        contact_fraction_recenter and active_pad_fraction_axis_extent_m <= 0.0
+        (contact_fraction_recenter or allow_dual_force_pad_margin_pivot)
+        and active_pad_fraction_axis_extent_m <= 0.0
     ):
         raise ValueError(
-            "contact recentering requires a positive finite pad-fraction axis extent"
+            "contact repair requires a positive finite pad-fraction axis extent"
         )
 
     jaw_midpoint = np.mean(centers, axis=0)
@@ -779,6 +791,132 @@ def handle_local_mpc_step(
             or next_depth_guard_released
         )
     )
+    dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
+    pad_edge_margins = np.minimum(fractions, 1.0 - fractions)
+    dual_force_pad_margin_pivot_active = bool(
+        allow_dual_force_pad_margin_pivot
+        and closure_committed
+        and dual_force_backed
+        and np.all(np.isfinite(pad_edge_margins))
+        and np.all(np.linalg.norm(axes, axis=1) > 1.0e-9)
+        and np.count_nonzero(
+            pad_edge_margins < config.minimum_pad_fraction_margin - 1.0e-12
+        )
+        == 1
+        and np.count_nonzero(
+            pad_edge_margins >= config.minimum_pad_fraction_margin - 1.0e-12
+        )
+        == 1
+        and pot_motion_ok
+        and peer_margin_ok
+    )
+    dual_force_pad_margin_pivot_geometry_feasible = False
+    dual_force_pad_margin_pivot_strong_index = None
+    dual_force_pad_margin_pivot_weak_index = None
+    dual_force_pad_margin_pivot_target_fraction = None
+    dual_force_pad_margin_pivot_predicted_fraction = None
+    dual_force_pad_margin_pivot_translation = np.zeros(3, dtype=np.float64)
+    dual_force_pad_margin_pivot_rotation = np.zeros(3, dtype=np.float64)
+    dual_force_pad_margin_pivot_point = np.zeros(3, dtype=np.float64)
+    if dual_force_pad_margin_pivot_active:
+        # Attempt 22 is the pair-local force-backed baseline: its ordinary
+        # bounded closure captured both pads while pad 0 was broad and pad 1
+        # remained at fraction 0.0268.  Once that dual-force state exists,
+        # rotate the wrist about the measured broad-pad contact instead of
+        # translating both contacts together.  The rigid-contact prediction
+        # moves only the weak contact toward a conservative 25%/75% interior
+        # target, while the ordinary Cartesian and rotation step bounds cap
+        # every command.  This path is opt-in and leaves all gains and quality
+        # predicates unchanged.
+        weak = int(np.argmin(pad_edge_margins))
+        strong = 1 - weak
+        target_fraction = 0.25 if fractions[weak] < 0.5 else 0.75
+        fraction_direction = float(np.sign(target_fraction - fractions[weak]))
+        unit_axes = axes / np.linalg.norm(axes, axis=1)[:, None]
+        contacts = centers + (
+            (fractions[:, None] - 0.5)
+            * active_pad_fraction_axis_extent_m
+            * unit_axes
+        )
+        pivot_point = contacts[strong]
+        separation = contacts[weak] - pivot_point
+        desired_motion = -fraction_direction * unit_axes[weak]
+        rotation_axis = np.cross(separation, desired_motion)
+        rotation_axis_norm = float(np.linalg.norm(rotation_axis))
+        if rotation_axis_norm > 1.0e-9:
+            rotation_axis /= rotation_axis_norm
+            coefficient_cos = float(np.dot(desired_motion, separation))
+            coefficient_sin = float(
+                np.dot(desired_motion, np.cross(rotation_axis, separation))
+            )
+            required_motion_m = float(
+                abs(target_fraction - fractions[weak])
+                * active_pad_fraction_axis_extent_m
+            )
+
+            def predicted_motion(angle: float) -> float:
+                return float(
+                    coefficient_cos * (np.cos(angle) - 1.0)
+                    + coefficient_sin * np.sin(angle)
+                )
+
+            maximum_pivot_rotation_rad = 0.35
+            if predicted_motion(maximum_pivot_rotation_rad) >= required_motion_m:
+                low, high = 0.0, maximum_pivot_rotation_rad
+                for _ in range(64):
+                    midpoint = 0.5 * (low + high)
+                    if predicted_motion(midpoint) < required_motion_m:
+                        low = midpoint
+                    else:
+                        high = midpoint
+                step_angle = min(high, config.maximum_rotation_step_rad)
+
+                def pivot_translation(angle: float) -> np.ndarray:
+                    delta = np.concatenate(
+                        (
+                            [np.cos(0.5 * angle)],
+                            rotation_axis * np.sin(0.5 * angle),
+                        )
+                    )
+                    return (
+                        pivot_point
+                        + quaternion_rotate(delta, wrist[:3] - pivot_point)
+                        - wrist[:3]
+                    )
+
+                if (
+                    np.linalg.norm(pivot_translation(step_angle))
+                    > config.maximum_translation_step_m
+                ):
+                    low, high = 0.0, step_angle
+                    for _ in range(64):
+                        midpoint = 0.5 * (low + high)
+                        if (
+                            np.linalg.norm(pivot_translation(midpoint))
+                            <= config.maximum_translation_step_m
+                        ):
+                            low = midpoint
+                        else:
+                            high = midpoint
+                    step_angle = low
+                dual_force_pad_margin_pivot_geometry_feasible = True
+                dual_force_pad_margin_pivot_strong_index = strong
+                dual_force_pad_margin_pivot_weak_index = weak
+                dual_force_pad_margin_pivot_target_fraction = target_fraction
+                dual_force_pad_margin_pivot_predicted_fraction = float(
+                    fractions[weak]
+                    + fraction_direction
+                    * predicted_motion(step_angle)
+                    / active_pad_fraction_axis_extent_m
+                )
+                dual_force_pad_margin_pivot_translation = pivot_translation(
+                    step_angle
+                )
+                dual_force_pad_margin_pivot_rotation = rotation_axis * step_angle
+                dual_force_pad_margin_pivot_point = pivot_point.copy()
+        dual_force_pad_margin_pivot_active = bool(
+            dual_force_pad_margin_pivot_geometry_feasible
+        )
     # ``contact_recenter_total_m`` is the realized positive axial wrist motion
     # accumulated by the runtime from the preceding commands.  Do not charge
     # this physical-motion budget for a command before its realization is
@@ -788,13 +926,14 @@ def handle_local_mpc_step(
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
     elif not active_margin_ok and not (
-        contact_recenter_active or guarded_depth_completion_active
+        contact_recenter_active
+        or guarded_depth_completion_active
+        or dual_force_pad_margin_pivot_active
     ):
         fail_reason = "active_contact_outside_pad_margin"
     elif not peer_margin_ok:
         fail_reason = "peer_contact_outside_pad_margin"
     fail_closed = fail_reason is not None
-    dual_force_backed = bool(np.all(forces >= config.minimum_force_n))
     interior_single_pad_triggered = bool(
         allow_interior_single_pad_closure
         and np.count_nonzero(contacting) == 1
@@ -974,6 +1113,10 @@ def handle_local_mpc_step(
             config.maximum_translation_step_m,
         )
         rotation_increment = np.zeros(3, dtype=np.float64)
+    if dual_force_pad_margin_pivot_active:
+        translation_increment = dual_force_pad_margin_pivot_translation.copy()
+        rotation_increment = dual_force_pad_margin_pivot_rotation.copy()
+        jaw_increment = 0.0
     actual_recenter_translation_m = (
         max(
             0.0,
@@ -1206,6 +1349,36 @@ def handle_local_mpc_step(
                 np.linalg.norm(loaded_pad_pivot_translation)
             ),
             "loaded_pad_pivot_jaw_scale": loaded_pad_pivot_jaw_scale,
+            "dual_force_pad_margin_pivot_enabled": bool(
+                allow_dual_force_pad_margin_pivot
+            ),
+            "dual_force_pad_margin_pivot_active": (
+                dual_force_pad_margin_pivot_active
+            ),
+            "dual_force_pad_margin_pivot_geometry_feasible": (
+                dual_force_pad_margin_pivot_geometry_feasible
+            ),
+            "dual_force_pad_margin_pivot_strong_index": (
+                dual_force_pad_margin_pivot_strong_index
+            ),
+            "dual_force_pad_margin_pivot_weak_index": (
+                dual_force_pad_margin_pivot_weak_index
+            ),
+            "dual_force_pad_margin_pivot_target_fraction": (
+                dual_force_pad_margin_pivot_target_fraction
+            ),
+            "dual_force_pad_margin_pivot_predicted_fraction": (
+                dual_force_pad_margin_pivot_predicted_fraction
+            ),
+            "dual_force_pad_margin_pivot_translation_world_m": (
+                dual_force_pad_margin_pivot_translation.tolist()
+            ),
+            "dual_force_pad_margin_pivot_rotation_axis_angle_world_rad": (
+                dual_force_pad_margin_pivot_rotation.tolist()
+            ),
+            "dual_force_pad_margin_pivot_point_world_m": (
+                dual_force_pad_margin_pivot_point.tolist()
+            ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,
             "closed_command_reached": bool(

@@ -1381,6 +1381,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-quality-dual-force-pad-margin-pivot",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that pivots an already dual-force-backed left "
+            "grasp about its broad pad until the weak pad reaches an interior "
+            "margin; all Cartesian, rotation, motion, and contact gates remain "
+            "unchanged."
+        ),
+    )
+    parser.add_argument(
         "--target-left-quality-interior-single-pad-closure",
         action="store_true",
         help=(
@@ -3512,6 +3522,16 @@ def main(argv: list[str] | None = None) -> None:
     ):
         raise ValueError(
             "left dual-force closure stop requires bounded-closure commitment"
+        )
+    if args.target_left_quality_dual_force_pad_margin_pivot and not (
+        quality_left_first_local_mpc
+        and args.target_handle_local_contact_fraction_recenter
+        and args.target_left_bounded_closure_commit
+        and args.target_left_bounded_closure_dual_force_stop
+    ):
+        raise ValueError(
+            "left dual-force pad-margin pivot requires sequential quality MPC, "
+            "contact-fraction telemetry, committed closure, and the dual-force stop"
         )
     if args.target_left_quality_interior_single_pad_closure and not (
         quality_left_first_local_mpc
@@ -5821,6 +5841,10 @@ def main(argv: list[str] | None = None) -> None:
                                     and args.target_left_quality_loaded_pad_pivot_closure
                                     else None
                                 ),
+                                allow_dual_force_pad_margin_pivot=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_dual_force_pad_margin_pivot
+                                ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
                                     if active_arm == "left"
@@ -8016,6 +8040,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_pauses_committed_closure_on_dual_force_backing": bool(
                         args.target_left_bounded_closure_dual_force_stop
+                    ),
+                    "left_dual_force_pad_margin_pivot": bool(
+                        args.target_left_quality_dual_force_pad_margin_pivot
                     ),
                     "left_interior_single_pad_closure": bool(
                         args.target_left_quality_interior_single_pad_closure

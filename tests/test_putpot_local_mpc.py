@@ -3,6 +3,7 @@ import copy
 import numpy as np
 import pytest
 
+from judo_isaaclab.put_marker import quaternion_rotate
 from judo_isaaclab.putpot_local_mpc import (
     HandleLocalMpcConfig,
     contact_window_joint_nominal_weight,
@@ -521,6 +522,88 @@ def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
             **values,
             transverse_aligned_closure_pivot_pad_index=1,
         )
+
+
+def test_dual_force_pad_margin_pivot_preserves_broad_contact_point():
+    wrist = np.asarray(
+        [
+            0.5640213,
+            0.2785081,
+            0.94189227,
+            0.41531724,
+            0.463308,
+            0.7726191,
+            -0.12616195,
+        ],
+        dtype=np.float64,
+    )
+    centers = np.asarray(
+        [
+            [0.6142322, 0.23112977, 0.85405874],
+            [0.62944, 0.19547606, 0.9000379],
+        ],
+        dtype=np.float64,
+    )
+    axes = np.asarray(
+        [
+            [-0.5342989, 0.60616183, 0.58914596],
+            [-0.5144022, 0.5522913, 0.65602213],
+        ],
+        dtype=np.float64,
+    )
+    fractions = np.asarray([0.56464046, 0.0268029], dtype=np.float64)
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=27,
+            active_wrist_pose=wrist,
+            object_relative_wrist_prior=wrist,
+            source_warm_start_wrist_pose=wrist,
+            active_pad_centers_world=centers,
+            active_pad_axes_world=axes,
+            active_pad_fractions=fractions,
+            active_finger_forces_n=[11.55667, 22.79371],
+            active_grasp=True,
+            current_jaw_command=-0.0195,
+        ),
+        require_peer_latch=False,
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_dual_force_pad_margin_pivot=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+    closure = command.frame_receipt["closure"]
+    assert not command.fail_closed
+    assert closure["dual_force_pad_margin_pivot_enabled"]
+    assert closure["dual_force_pad_margin_pivot_active"]
+    assert closure["dual_force_pad_margin_pivot_geometry_feasible"]
+    assert closure["dual_force_pad_margin_pivot_strong_index"] == 0
+    assert closure["dual_force_pad_margin_pivot_weak_index"] == 1
+    assert closure["dual_force_pad_margin_pivot_target_fraction"] == 0.25
+    assert closure["dual_force_pad_margin_pivot_predicted_fraction"] > fractions[1]
+    assert np.linalg.norm(
+        closure["dual_force_pad_margin_pivot_translation_world_m"]
+    ) == pytest.approx(0.004)
+    assert np.linalg.norm(
+        closure["dual_force_pad_margin_pivot_rotation_axis_angle_world_rad"]
+    ) < 0.08
+    pivot = np.asarray(
+        closure["dual_force_pad_margin_pivot_point_world_m"], dtype=np.float64
+    )
+    wrist_inverse_quaternion = wrist[3:] * np.asarray(
+        [1.0, -1.0, -1.0, -1.0], dtype=np.float64
+    )
+    pivot_wrist_local = quaternion_rotate(
+        wrist_inverse_quaternion, pivot - wrist[:3]
+    )
+    transformed_pivot = command.wrist_target_pose[:3] + quaternion_rotate(
+        command.wrist_target_pose[3:], pivot_wrist_local
+    )
+    np.testing.assert_allclose(transformed_pivot, pivot, atol=1.0e-10)
+    assert command.jaw_command == pytest.approx(-0.0195)
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
 
 
 def test_handle_normal_depth_guard_removes_inward_handle_motion():
