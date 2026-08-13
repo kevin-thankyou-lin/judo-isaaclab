@@ -341,6 +341,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_handle_frame_transfer": True,
         "handover_target_offset_m": [-0.00007178218907226269, 0.0, 0.0002],
         "handover_target_local_pitch_rad": 0.7853981633974483,
+        "handover_target_local_roll_rad": -0.005,
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_standoff_outside_m": 0.08,
@@ -388,6 +389,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert all("e" not in value.lower() for value in offset_arguments)
     assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
         0.7853981633974483
+    )
+    assert float(command[command.index("--handover-target-local-roll-rad") + 1]) == pytest.approx(
+        -0.005
     )
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
@@ -453,6 +457,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     with pytest.raises(ValueError, match="contact acquire"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
+    with pytest.raises(ValueError, match="within 45 degrees"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_target_local_roll_rad": 0.8}))
     with pytest.raises(ValueError, match="within 45 degrees"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))

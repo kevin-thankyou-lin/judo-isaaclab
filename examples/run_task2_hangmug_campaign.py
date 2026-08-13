@@ -235,6 +235,11 @@ def _repair_command(
                 "--handover-target-local-pitch-rad",
                 str(strategy["handover_target_local_pitch_rad"]),
             ])
+        if "handover_target_local_roll_rad" in strategy:
+            arguments.extend([
+                "--handover-target-local-roll-rad",
+                str(strategy["handover_target_local_roll_rad"]),
+            ])
         if "handover_straddle_local_x_m" in strategy:
             arguments.extend([
                 "--handover-straddle-local-x-m",
@@ -305,6 +310,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_post_release_lift_steps",
         "handover_target_offset_m",
         "handover_target_local_pitch_rad",
+        "handover_target_local_roll_rad",
         "handover_straddle_local_x_m",
         "handover_orient_clearance_m",
         "handover_orient_steps",
@@ -493,6 +499,7 @@ def _repair_strategy(index: int) -> dict:
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
+    roll = value.get("handover_target_local_roll_rad", 0.0)
     straddle = value.get("handover_straddle_local_x_m", 0.0)
     orient_clearance = value.get("handover_orient_clearance_m", 0.0)
     orient_steps = value.get("handover_orient_steps", 0)
@@ -531,6 +538,13 @@ def _repair_strategy(index: int) -> dict:
     ):
         raise ValueError("handover target local pitch must be within 45 degrees")
     if (
+        isinstance(roll, bool)
+        or not isinstance(roll, (int, float))
+        or not np.isfinite(roll)
+        or abs(roll) > np.pi / 4.0
+    ):
+        raise ValueError("handover target local roll must be within 45 degrees")
+    if (
         isinstance(straddle, bool)
         or not isinstance(straddle, (int, float))
         or not np.isfinite(straddle)
@@ -565,6 +579,8 @@ def _repair_strategy(index: int) -> dict:
     })
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)
+    if "handover_target_local_roll_rad" in value:
+        strategy["handover_target_local_roll_rad"] = float(roll)
     if orient_steps:
         strategy["handover_orient_clearance_m"] = float(orient_clearance)
         strategy["handover_orient_steps"] = orient_steps
