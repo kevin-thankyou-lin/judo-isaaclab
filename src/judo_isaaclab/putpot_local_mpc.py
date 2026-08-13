@@ -370,6 +370,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "acceptance_pad_fraction_margin",
             "requested_translation_m",
             "executed_translation_m",
+            "budgeted_axial_translation_world_m",
             "retained_transverse_translation_world_m",
             "executed_handle_normal_component_m",
             "world_command_budget_m",
@@ -1070,6 +1071,9 @@ def handle_local_mpc_step(
             "executed_translation_m": (
                 reported_recenter_translation_m
             ),
+            "budgeted_axial_translation_world_m": (
+                -actual_recenter_translation_m * contact_recenter_axis_world
+            ).tolist(),
             "retained_transverse_translation_world_m": (
                 retained_transverse_translation.tolist()
             ),

@@ -152,6 +152,10 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
         centered_recenter["retained_transverse_translation_world_m"],
         [0.003, 0.002, 0.0],
     )
+    np.testing.assert_allclose(
+        centered_recenter["budgeted_axial_translation_world_m"],
+        [0.0, 0.0, -0.001],
+    )
     np.testing.assert_allclose(centered_translation, [0.003, 0.002, -0.001])
     assert np.linalg.norm(centered_translation) < 0.004
     assert not centered_recenter["preserve_bounded_closure"]
@@ -185,6 +189,9 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
     assert centered_closing.frame_receipt["executed_control"][
         "jaw_increment"
     ] == pytest.approx(0.004)
+    np.testing.assert_allclose(
+        closing_recenter["budgeted_axial_translation_world_m"], 0.0
+    )
     assert centered_closing.jaw_command == pytest.approx(-0.0435)
 
     realized = realized_contact_recenter_displacement_m(
@@ -203,6 +210,14 @@ def test_contact_fraction_recenter_is_bounded_and_defers_margin_fail_close():
         [0.0, 0.0, 0.0003],
         translation,
     ) == pytest.approx(0.0)
+
+    # Retained orthogonal centering is governed by the unchanged Cartesian
+    # step bound, not the 12 mm axial contact-recenter allowance.
+    assert realized_contact_recenter_displacement_m(
+        [0.0, 0.0, 0.0],
+        [0.003, 0.002, -0.0003],
+        centered_recenter["budgeted_axial_translation_world_m"],
+    ) == pytest.approx(0.0003)
 
     observed = handle_local_mpc_step(
         **_inputs(

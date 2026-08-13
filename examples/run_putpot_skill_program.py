@@ -5425,8 +5425,10 @@ def main(argv: list[str] | None = None) -> None:
                                     )[:3].copy(),
                                     "translation_world_m": np.asarray(
                                         local_command.frame_receipt[
-                                            "executed_control"
-                                        ]["translation_world_m"],
+                                            "contact_fraction_recenter"
+                                        ][
+                                            "budgeted_axial_translation_world_m"
+                                        ],
                                         dtype=np.float64,
                                     ).copy(),
                                 }
