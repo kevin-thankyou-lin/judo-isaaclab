@@ -23,6 +23,7 @@ from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rota
 from run_hangmug_skill_program import (
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
+    _branch_support_mug_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
     _add_right_handover_assist,
@@ -601,6 +602,49 @@ def test_branch_support_seating_changes_only_vertical_waypoint_translation():
     assert pose[2] == pytest.approx(0.96)
     with pytest.raises(ValueError, match="seat-down"):
         _branch_support_seated_pose(pose, 0.031)
+
+
+def test_branch_support_seating_starts_only_after_closed_carrier_insertion():
+    pose = _pose(0.7, -0.2, 0.96)
+    insert_mug, unload_mug = _branch_support_mug_waypoints(pose, 0.01)
+    assert insert_mug == pytest.approx(pose)
+    assert unload_mug == pytest.approx([0.7, -0.2, 0.95, *pose[3:]])
+
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.physical_handover(
+        _pose(),
+        _pose(),
+        _pose(),
+        _pose(),
+        approach_steps=1,
+        close_steps=1,
+        release_steps=1,
+    )
+    program.handle_to_branch_insert(
+        insert_mug,
+        insert_mug,
+        insert_mug,
+        transport_steps=1,
+        approach_steps=1,
+        insert_steps=2,
+    )
+    program.release_and_support(
+        unload_mug,
+        unload_mug,
+        unload_steps=2,
+        release_steps=2,
+        settle_steps=1,
+    )
+    trajectory = program.build()
+    insert_end = trajectory.waypoint_steps["branch_insert"]
+    unload_end = trajectory.waypoint_steps["branch_unload"]
+    insert_start = trajectory.waypoint_steps["left_release"] + 1
+    assert trajectory.right_poses[insert_end, 2] == pytest.approx(0.96)
+    assert trajectory.right_poses[unload_end, 2] == pytest.approx(0.95)
+    assert np.allclose(
+        trajectory.grippers[insert_start : unload_end + 1, 1], 0.0
+    )
+    assert trajectory.grippers[unload_end + 1, 1] < 0.0
 
 
 def test_datagen_grasp_assist_validation_requires_canonical_mechanism():

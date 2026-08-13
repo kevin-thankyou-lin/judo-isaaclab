@@ -765,6 +765,17 @@ def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
     return seated
 
 
+def _branch_support_mug_waypoints(
+    value, seat_down_m: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep insertion on-axis, then seat downward during closed-carrier unload."""
+    insert = np.asarray(value, dtype=np.float64)
+    if insert.shape != (7,) or not np.all(np.isfinite(insert)):
+        raise ValueError("branch support pose must contain seven finite values")
+    insert = insert.copy()
+    return insert, _branch_support_seated_pose(insert, seat_down_m)
+
+
 def _bounded_branch_support_seat_down(value: float) -> float:
     amount = float(value)
     if not np.isfinite(amount) or not 0.0 <= amount <= 0.03:
@@ -1435,20 +1446,22 @@ def _build_skill(
         branch_roll_offset_rad=args.branch_roll_offset_rad,
         target_branch_rank=args.target_branch_rank,
     )
-    final_mug_pose = _branch_support_seated_pose(
+    insert_mug_pose, final_mug_pose = _branch_support_mug_waypoints(
         final_mug_pose, args.branch_support_seat_down_m
     )
     target_branch_world = compose_pose(target_tree.root_pose, target_branch.frame)
+    insert_mug = RigidAssetGeometry(insert_mug_pose, target_geometry.size)
     final_mug = RigidAssetGeometry(final_mug_pose, target_geometry.size)
     transport_mug_pose = target_handover_mug.root_pose.copy()
     transport_mug_pose[:2] = 0.5 * (
-        target_handover_mug.root_pose[:2] + final_mug_pose[:2]
+        target_handover_mug.root_pose[:2] + insert_mug_pose[:2]
     )
     transport_mug_pose[2] = max(
-        target_handover_mug.root_pose[2], final_mug_pose[2] + args.insert_clearance_m
+        target_handover_mug.root_pose[2],
+        insert_mug_pose[2] + args.insert_clearance_m,
     )
     approach_mug_pose = _branch_approach_mug_pose(
-        final_mug_pose,
+        insert_mug_pose,
         target_branch_world,
         args.insert_clearance_m,
         args.branch_approach_height_m,
@@ -1471,7 +1484,8 @@ def _build_skill(
     receiver_lift[2] += receiver_lift_m
     right_transport = held(transport_mug_pose, right_contact)
     right_approach = held(approach_mug_pose, right_contact)
-    right_insert = held(final_mug.root_pose, right_contact)
+    right_insert = held(insert_mug.root_pose, right_contact)
+    right_unload = held(final_mug.root_pose, right_contact)
     right_branch_orient = None
     if args.branch_orient_steps:
         right_branch_orient = right_transport.copy()
@@ -1519,8 +1533,8 @@ def _build_skill(
         left_observer=left_branch_observer,
     )
     program.release_and_support(
-        right_insert,
-        right_insert,
+        right_unload,
+        right_unload,
         unload_steps=40,
         release_steps=40,
         settle_steps=60,
