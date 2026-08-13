@@ -1330,6 +1330,45 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
         "jaw_increment"
     ] == 0.0
 
+    committed = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_wrist_pose": _pose(x=0.018),
+        },
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.5286, 0.5287],
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    assert committed.closure_committed
+    continued = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_wrist_pose": _pose(x=0.019),
+            "active_pad_fractions": [-0.02, np.nan],
+            "active_finger_forces_n": [0.5, 0.0],
+            "current_jaw_command": committed.jaw_command,
+        },
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=committed.closure_committed,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.5286, 0.5287],
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    continued_closure = continued.frame_receipt["closure"]
+    assert continued_closure["was_committed"]
+    assert continued_closure["geometric_preseat_satisfied"]
+    assert continued_closure["geometric_preseat_source_wrist_target_active"]
+    assert continued.frame_receipt["contact_fraction_recenter"][
+        "bounded_closure_priority_active"
+    ]
+    assert continued.frame_receipt["executed_control"]["jaw_increment"] > 0.0
+    assert handle_local_mpc_frame_receipt_complete(continued.frame_receipt)
+
     edge = handle_local_mpc_step(
         **{
             **aligned,

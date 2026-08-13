@@ -1395,7 +1395,8 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Pair-owned opt-in that targets the live source-mapped wrist pose "
-            "while force-free and keeps the right jaw open until either a "
+            "through preseat and committed closure, and keeps the right jaw "
+            "open until either a "
             "measured pad intersection is interior or the mapped pose is "
             "aligned with both prospective pad fractions inside the unchanged "
             "quality margin; an actual edge intersection still routes through "
@@ -5032,6 +5033,7 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_right_depth_guard_alignment_streak = 0
         local_mpc_right_depth_guard_released = False
         local_mpc_right_contact_recenter_total_m = 0.0
+        local_mpc_right_closure_committed = False
         local_mpc_pending_recenter_measurements = {
             "left": None,
             "right": None,
@@ -5849,16 +5851,34 @@ def main(argv: list[str] | None = None) -> None:
                                     and args.target_left_contact_recenter_preserve_transverse_centering
                                 ),
                                 contact_recenter_preserve_bounded_closure=bool(
-                                    active_arm == "left"
-                                    and args.target_left_contact_recenter_preserve_bounded_closure
+                                    (
+                                        active_arm == "left"
+                                        and args.target_left_contact_recenter_preserve_bounded_closure
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and args.target_right_quality_geometric_preseat
+                                    )
                                 ),
                                 allow_bounded_closure_commit=bool(
-                                    active_arm == "left"
-                                    and args.target_left_bounded_closure_commit
+                                    (
+                                        active_arm == "left"
+                                        and args.target_left_bounded_closure_commit
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and args.target_right_quality_geometric_preseat
+                                    )
                                 ),
                                 closure_committed=bool(
-                                    active_arm == "left"
-                                    and local_mpc_left_closure_committed
+                                    (
+                                        active_arm == "left"
+                                        and local_mpc_left_closure_committed
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and local_mpc_right_closure_committed
+                                    )
                                 ),
                                 pause_committed_closure_on_dual_force_backing=bool(
                                     active_arm == "left"
@@ -5952,6 +5972,9 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                                 local_mpc_right_contact_recenter_total_m = (
                                     local_command.contact_recenter_total_m
+                                )
+                                local_mpc_right_closure_committed = (
+                                    local_command.closure_committed
                                 )
                                 local_mpc_right_robust_streak = (
                                     local_command.robust_streak

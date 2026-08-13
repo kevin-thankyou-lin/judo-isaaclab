@@ -634,7 +634,10 @@ def handle_local_mpc_step(
     geometric_preseat_source_wrist_residual = prior[:3] - wrist[:3]
     geometric_preseat_source_wrist_target_active = bool(
         require_geometric_preseat_for_closure
-        and not physical_contact_observed
+        and (
+            not physical_contact_observed
+            or closure_committed
+        )
     )
     blended_translation = (
         (1.0 - prior_weight) * translation_world + prior_weight * warm_residual
@@ -644,9 +647,11 @@ def handle_local_mpc_step(
         # to the nonintersecting jaw-midpoint target while the live source-
         # mapped broad-contact wrist pose remained 4.190 mm away.  Its sealed
         # geometry receipt predicts both pad fractions near 0.529.  Use that
-        # already-computed position only through the force-free geometric
-        # preseat; the existing depth guard, Cartesian bound, edge recenter,
-        # and force-backed controller remain authoritative downstream.
+        # already-computed position through the force-free geometric preseat
+        # and the bounded closure it authorizes.  This keeps the pot still
+        # while the peer pad arrives; the existing depth guard, Cartesian
+        # bound, edge recenter, and force-backed controller remain
+        # authoritative downstream.
         blended_translation = geometric_preseat_source_wrist_residual.copy()
     signed_depth_residual = float(np.dot(translation_world, depth_guard_axis))
     transverse_residual = (
@@ -763,6 +768,10 @@ def handle_local_mpc_step(
     geometric_preseat_satisfied = bool(
         finite_interior_pad_intersections
         or geometric_preseat_prospective_closure_ready
+        or (
+            require_geometric_preseat_for_closure
+            and closure_committed
+        )
     )
     preclosure_geometric_prestage_enabled = bool(
         allow_dual_force_pad_margin_pivot
