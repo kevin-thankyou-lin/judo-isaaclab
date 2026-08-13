@@ -10,7 +10,7 @@
     0.005
   ],
   "handover_standoff_outside_m": 0.11,
-  "handover_straddle_local_x_m": 0.02733,
+  "handover_straddle_local_x_m": 0.0256,
   "handover_target_camera_clockwise_roll_rad": 0.6510078109938848,
   "handover_target_local_pitch_rad": 0.23561944901923448,
   "handover_target_offset_m": [
