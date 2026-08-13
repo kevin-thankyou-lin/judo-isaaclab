@@ -355,6 +355,47 @@ def test_interior_single_pad_event_freezes_wrist_and_starts_bounded_closure():
     assert edge.jaw_command == pytest.approx(-0.0475)
 
 
+def test_single_pad_transverse_intercept_keeps_open_jaw_and_depth_guard():
+    intercepted = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=_pose(x=0.030, z=-0.020),
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.196],
+        ),
+        depth_guarded_transverse_intercept=True,
+        allow_bounded_closure_commit=True,
+        allow_interior_single_pad_transverse_intercept=True,
+    )
+    guard = intercepted.frame_receipt["contact_frame_guard"]
+    control = intercepted.frame_receipt["executed_control"]
+    assert guard["physical_contact_observed"]
+    assert guard["interior_single_pad_transverse_intercept_enabled"]
+    assert guard["interior_single_pad_transverse_intercept_active"]
+    assert guard["active"]
+    assert guard["rotation_held_during_interior_single_pad_intercept"]
+    np.testing.assert_allclose(control["translation_world_m"], [0.004, 0.0, 0.0])
+    np.testing.assert_allclose(control["rotation_axis_angle_world_rad"], 0.0)
+    assert control["jaw_increment"] == 0.0
+    assert intercepted.jaw_command == pytest.approx(-0.0475)
+    assert not intercepted.closure_committed
+
+    edge = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=_pose(x=0.030, z=-0.020),
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.05],
+        ),
+        depth_guarded_transverse_intercept=True,
+        allow_bounded_closure_commit=True,
+        allow_interior_single_pad_transverse_intercept=True,
+    )
+    assert edge.fail_closed
+    assert edge.fail_reason == "active_contact_outside_pad_margin"
+    np.testing.assert_allclose(edge.wrist_target_pose, _pose())
+
+
 def test_committed_closure_pauses_only_while_both_pads_are_force_backed():
     paused = handle_local_mpc_step(
         **_inputs(

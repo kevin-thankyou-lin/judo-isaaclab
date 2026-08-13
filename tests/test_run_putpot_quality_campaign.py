@@ -78,6 +78,14 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         required + ["--target-left-quality-interior-single-pad-closure"]
     )
     assert parsed.target_left_quality_interior_single_pad_closure is True
+    parsed = _parser(
+        required
+        + ["--target-left-quality-interior-single-pad-transverse-intercept"]
+    )
+    assert (
+        parsed.target_left_quality_interior_single_pad_transverse_intercept
+        is True
+    )
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():

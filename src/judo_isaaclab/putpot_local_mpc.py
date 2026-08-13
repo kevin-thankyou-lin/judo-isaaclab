@@ -332,6 +332,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "enabled",
             "active",
             "physical_contact_observed",
+            "interior_single_pad_transverse_intercept_enabled",
+            "interior_single_pad_transverse_intercept_active",
+            "rotation_held_during_interior_single_pad_intercept",
             "transverse_tolerance_m",
             "transverse_residual_world_m",
             "transverse_residual_norm_m",
@@ -421,6 +424,7 @@ def handle_local_mpc_step(
     closure_committed: bool = False,
     pause_committed_closure_on_dual_force_backing: bool = False,
     allow_interior_single_pad_closure: bool = False,
+    allow_interior_single_pad_transverse_intercept: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -503,8 +507,23 @@ def handle_local_mpc_step(
     transverse_residual = (
         translation_world - signed_depth_residual * mean_pad_axis
     )
-    physical_contact_observed = bool(
-        np.any(forces >= config.physical_contact_threshold_n)
+    contacting = forces >= config.physical_contact_threshold_n
+    physical_contact_observed = bool(np.any(contacting))
+    active_margin_ok = _pad_margin_ok(forces, fractions, config)
+    peer_margin_ok = _pad_margin_ok(peer_forces, peer_fractions, config)
+    pot_motion_ok = bool(
+        pre_peer_pot_displacement_m
+        <= config.maximum_pre_peer_pot_motion_m + 1.0e-12
+    )
+    interior_single_pad_transverse_intercept_active = bool(
+        allow_interior_single_pad_transverse_intercept
+        and np.count_nonzero(contacting) == 1
+        and active_margin_ok
+        and pot_motion_ok
+    )
+    depth_guard_alignment_observation_valid = bool(
+        not physical_contact_observed
+        or interior_single_pad_transverse_intercept_active
     )
     transverse_residual_norm = float(np.linalg.norm(transverse_residual))
     transverse_aligned = bool(
@@ -515,7 +534,7 @@ def handle_local_mpc_step(
         if (
             depth_guarded_transverse_intercept
             and not depth_guard_released
-            and not physical_contact_observed
+            and depth_guard_alignment_observation_valid
             and transverse_aligned
         )
         else 0
@@ -529,7 +548,7 @@ def handle_local_mpc_step(
     )
     depth_guard_active = bool(
         depth_guarded_transverse_intercept
-        and not physical_contact_observed
+        and depth_guard_alignment_observation_valid
         and not next_depth_guard_released
     )
     suppressed_depth_control = np.zeros(3, dtype=np.float64)
@@ -547,12 +566,6 @@ def handle_local_mpc_step(
     nominal_translation_increment = translation_increment.copy()
     nominal_rotation_increment = rotation_increment.copy()
 
-    active_margin_ok = _pad_margin_ok(forces, fractions, config)
-    peer_margin_ok = _pad_margin_ok(peer_forces, peer_fractions, config)
-    pot_motion_ok = bool(
-        pre_peer_pot_displacement_m
-        <= config.maximum_pre_peer_pot_motion_m + 1.0e-12
-    )
     active_robust = _robust_arm(forces, fractions, config)
     peer_robust = _robust_arm(peer_forces, peer_fractions, config)
     strict_four_pad_frame = bool(
@@ -569,7 +582,6 @@ def handle_local_mpc_step(
         and (not require_peer_latch or (peer_grasp and peer_robust))
     )
     next_streak = robust_streak + 1 if robust_frame else 0
-    contacting = forces >= config.physical_contact_threshold_n
     contact_fraction_axis_world = (
         _unit(np.mean(axes[contacting], axis=0), "contacting pad tip-to-base axis")
         if np.any(contacting)
@@ -667,6 +679,14 @@ def handle_local_mpc_step(
         rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
         translation_increment = np.zeros(3, dtype=np.float64)
+        rotation_increment = np.zeros(3, dtype=np.float64)
+    if interior_single_pad_transverse_intercept_active and not fail_closed:
+        # A lone interior pad can touch while the open jaw is still
+        # transversely offset from the handle center.  Keep the existing
+        # depth guard active so the commanded translation remains tangent to
+        # the contact, and hold orientation so that the loaded pad is not
+        # swept around the handle.  Closure remains governed by the unchanged
+        # two-sided pose gate below.
         rotation_increment = np.zeros(3, dtype=np.float64)
     if interior_single_pad_closure_hold_active:
         # A force-backed interior pad is stronger near-contact evidence than
@@ -792,6 +812,16 @@ def handle_local_mpc_step(
             "enabled": bool(depth_guarded_transverse_intercept),
             "active": depth_guard_active,
             "physical_contact_observed": physical_contact_observed,
+            "interior_single_pad_transverse_intercept_enabled": bool(
+                allow_interior_single_pad_transverse_intercept
+            ),
+            "interior_single_pad_transverse_intercept_active": (
+                interior_single_pad_transverse_intercept_active
+            ),
+            "rotation_held_during_interior_single_pad_intercept": bool(
+                interior_single_pad_transverse_intercept_active
+                and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
+            ),
             "transverse_tolerance_m": config.depth_guard_transverse_tolerance_m,
             "transverse_residual_world_m": transverse_residual.tolist(),
             "transverse_residual_norm_m": float(

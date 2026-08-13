@@ -1136,6 +1136,16 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--target-left-quality-interior-single-pad-transverse-intercept",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that keeps the existing depth guard active "
+            "and holds wrist rotation when exactly one force-backed pad is "
+            "inside the unchanged quality margin; the jaw stays open until "
+            "the unchanged closure pose gate is reached."
+        ),
+    )
+    parser.add_argument(
         "--target-left-handle-pad-balance-limit-m",
         type=float,
         help=(
@@ -3206,6 +3216,28 @@ def main(argv: list[str] | None = None) -> None:
             "sequential quality MPC with committed bounded closure and the "
             "dual-force stop"
         )
+    if (
+        args.target_left_quality_interior_single_pad_transverse_intercept
+        and not (
+            quality_left_first_local_mpc
+            and args.target_left_quality_peer_axis_preorientation
+            and args.target_handle_local_depth_guarded_intercept
+            and args.target_left_bounded_closure_commit
+        )
+    ):
+        raise ValueError(
+            "left interior single-pad transverse intercept requires "
+            "peer-preoriented sequential quality MPC with the depth guard "
+            "and committed bounded closure"
+        )
+    if (
+        args.target_left_quality_interior_single_pad_transverse_intercept
+        and args.target_left_quality_interior_single_pad_closure
+    ):
+        raise ValueError(
+            "left interior single-pad transverse intercept and immediate "
+            "single-pad closure are mutually exclusive"
+        )
     if args.target_left_handle_pad_balance_limit_m is not None:
         if not quality_left_first_local_mpc:
             raise ValueError(
@@ -5219,6 +5251,10 @@ def main(argv: list[str] | None = None) -> None:
                                 allow_interior_single_pad_closure=bool(
                                     active_arm == "left"
                                     and args.target_left_quality_interior_single_pad_closure
+                                ),
+                                allow_interior_single_pad_transverse_intercept=bool(
+                                    active_arm == "left"
+                                    and args.target_left_quality_interior_single_pad_transverse_intercept
                                 ),
                                 active_pad_fraction_axis_extent_m=(
                                     local_mpc_left_pad_fraction_axis_extent_m
@@ -7372,6 +7408,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "left_interior_single_pad_closure": bool(
                         args.target_left_quality_interior_single_pad_closure
+                    ),
+                    "left_interior_single_pad_transverse_intercept": bool(
+                        args.target_left_quality_interior_single_pad_transverse_intercept
                     ),
                     "maximum_step_m": local_mpc_config.maximum_contact_recenter_step_m,
                     "maximum_total_m": local_mpc_config.maximum_contact_recenter_total_m,
