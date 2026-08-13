@@ -267,6 +267,14 @@ def _parser() -> argparse.Namespace:
     parser.add_argument("--demo-hdf5")
     parser.add_argument("--result-json", required=True)
     parser.add_argument("--direct-replay-result")
+    parser.add_argument(
+        "--quality-regeneration",
+        action="store_true",
+        help=(
+            "Run a fresh reset-to-finish quality artifact regardless of the "
+            "technically qualified direct replay's task outcome."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -913,6 +921,27 @@ def _schema_aware_success_acceptance(
     else:
         acceptance.pop("right_grasp_assist_engaged", None)
     return acceptance
+
+
+def _direct_replay_outcome_acceptance(
+    direct_replay: dict, *, quality_regeneration: bool
+) -> dict[str, bool]:
+    """Bind the direct classification outcome to the selected campaign route."""
+    technically_qualified = direct_replay.get("status") == "passed"
+    task_succeeded = bool(
+        direct_replay.get("terminal", {}).get("task_success", False)
+    )
+    if quality_regeneration:
+        return {
+            "quality_regeneration_direct_replay_qualified": bool(
+                technically_qualified
+            )
+        }
+    return {
+        "direct_source_action_replay_failed": bool(
+            technically_qualified and not task_succeeded
+        )
+    }
 
 
 def _requires_observed_handover_reanchor(
@@ -2869,6 +2898,12 @@ def main() -> None:
         )
     if args.reuse_source_pick_prefix and args.mode != "skill":
         raise ValueError("--reuse-source-pick-prefix requires --mode skill")
+    if args.quality_regeneration and (
+        args.mode != "skill" or not args.direct_replay_result
+    ):
+        raise ValueError(
+            "--quality-regeneration requires --mode skill and --direct-replay-result"
+        )
     _physics_device_receipt(
         args.device,
         require_cpu=args.require_cpu_physics,
@@ -3718,7 +3753,12 @@ def main() -> None:
             )
             if direct_replay is not None and target_assets != source_assets:
                 acceptance = dict(acceptance)
-                acceptance["direct_source_action_replay_failed"] = bool(direct_replay.get("status") == "passed" and not direct_replay.get("terminal", {}).get("task_success", True))
+                acceptance.update(
+                    _direct_replay_outcome_acceptance(
+                        direct_replay,
+                        quality_regeneration=args.quality_regeneration,
+                    )
+                )
                 acceptance["direct_replay_grasp_assistance_matched"] = (
                     direct_replay.get("protocol", {}).get("grasp_assistance")
                     == grasp_assistance

@@ -186,6 +186,8 @@ def _repair_command(
     ]
     if strategy.get("require_broad_pad_contact"):
         arguments.append("--require-broad-pad-contact")
+    if selection.get("quality_regeneration_from_direct_success"):
+        arguments.append("--quality-regeneration")
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])

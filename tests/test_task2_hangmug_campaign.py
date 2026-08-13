@@ -311,6 +311,7 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     )
     assert "--direct-replay-result" in command
     assert "--reuse-source-pick-prefix" not in command
+    assert "--quality-regeneration" not in command
     assert command[command.index("--handover-confirm-steps") + 1] == "12"
     assert command[command.index("--handover-contact-settle-steps") + 1] == "30"
     handover_selection = campaign._repair_selection("handover", "pick")
@@ -321,6 +322,18 @@ def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch)
     assert "--reuse-source-pick-prefix" in handover
     assert handover[handover.index("--handover-confirm-steps") + 1] == "12"
     assert "--handover-contact-settle-steps" not in handover
+
+    quality = {
+        **pick,
+        "quality_regeneration_from_direct_success": True,
+    }
+    quality_command = campaign._repair_command(
+        2,
+        tmp_path / "quality",
+        tmp_path / "classification/result.json",
+        quality,
+    )
+    assert "--quality-regeneration" in quality_command
 
 
 def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkeypatch):

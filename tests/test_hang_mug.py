@@ -38,6 +38,7 @@ from run_hangmug_skill_program import (
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
     _direct_actions_exact,
+    _direct_replay_outcome_acceptance,
     _direct_phase_contract_receipt,
     _direct_segment_live_row,
     _return_contact_clearance_receipt,
@@ -997,6 +998,28 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed",
     ):
         assert diagnostic not in skill
+
+
+def test_quality_regeneration_accepts_either_qualified_direct_task_outcome():
+    direct_success = {"status": "passed", "terminal": {"task_success": True}}
+    direct_failure = {"status": "passed", "terminal": {"task_success": False}}
+
+    assert _direct_replay_outcome_acceptance(
+        direct_success, quality_regeneration=True
+    ) == {"quality_regeneration_direct_replay_qualified": True}
+    assert _direct_replay_outcome_acceptance(
+        direct_failure, quality_regeneration=True
+    ) == {"quality_regeneration_direct_replay_qualified": True}
+    assert _direct_replay_outcome_acceptance(
+        direct_success, quality_regeneration=False
+    ) == {"direct_source_action_replay_failed": False}
+    assert _direct_replay_outcome_acceptance(
+        direct_failure, quality_regeneration=False
+    ) == {"direct_source_action_replay_failed": True}
+    assert _direct_replay_outcome_acceptance(
+        {"status": "failed", "terminal": {"task_success": False}},
+        quality_regeneration=True,
+    ) == {"quality_regeneration_direct_replay_qualified": False}
 
 
 def test_observed_handover_reanchor_is_geometry_conditioned_for_tall_mugs():
