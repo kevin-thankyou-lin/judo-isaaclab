@@ -402,9 +402,15 @@ def test_handle_normal_depth_guard_removes_inward_handle_motion():
         [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
     )
     corrected = handle_local_mpc_step(
-        **_inputs(contact_window_step=22, observed_handle_contact_frame=handle),
+        **_inputs(
+            contact_window_step=22,
+            observed_handle_contact_frame=handle,
+            active_finger_forces_n=[0.0, 4.5],
+            active_pad_fractions=[np.nan, 0.196],
+        ),
         depth_guarded_transverse_intercept=True,
         depth_guard_use_handle_contact_normal=True,
+        allow_interior_single_pad_transverse_intercept=True,
     )
     guard = corrected.frame_receipt["contact_frame_guard"]
     control = np.asarray(
@@ -425,6 +431,26 @@ def test_handle_normal_depth_guard_removes_inward_handle_motion():
     assert legacy_guard["depth_axis_source"] == "mean_pad_depth_axis"
     np.testing.assert_allclose(
         legacy.frame_receipt["executed_control"]["translation_world_m"],
+        [0.004, 0.0, 0.0],
+    )
+
+
+def test_handle_normal_depth_guard_preserves_force_free_pad_axis_corridor():
+    half_sqrt_two = np.sqrt(0.5)
+    handle = np.asarray(
+        [0.030, 0.0, -0.020, half_sqrt_two, 0.0, half_sqrt_two, 0.0]
+    )
+    force_free = handle_local_mpc_step(
+        **_inputs(contact_window_step=22, observed_handle_contact_frame=handle),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+    )
+    guard = force_free.frame_receipt["contact_frame_guard"]
+    assert not guard["physical_contact_observed"]
+    assert guard["depth_axis_source"] == "mean_pad_depth_axis"
+    np.testing.assert_allclose(guard["depth_axis_world"], [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(
+        force_free.frame_receipt["executed_control"]["translation_world_m"],
         [0.004, 0.0, 0.0],
     )
 

@@ -482,6 +482,8 @@ def handle_local_mpc_step(
     peer_forces = _vector(peer_finger_forces_n, (2,), "peer_finger_forces_n")
     if fractions.shape != (2,) or peer_fractions.shape != (2,):
         raise ValueError("pad fractions must contain two values per gripper")
+    contacting = forces >= config.physical_contact_threshold_n
+    physical_contact_observed = bool(np.any(contacting))
     scalars = np.asarray(
         [pre_peer_pot_displacement_m, current_jaw_command], dtype=np.float64
     )
@@ -501,10 +503,16 @@ def handle_local_mpc_step(
         quaternion_rotate(handle[3:], np.asarray([0.0, 0.0, 1.0])),
         "handle contact normal",
     )
+    # Preserve the demonstrated force-free corridor on the gripper's pad-depth
+    # axis.  The target handle normal becomes authoritative only once physical
+    # contact exists; enabling it earlier changed Pair 15's interior first
+    # contact into an edge intersection.  After contact, the live handle axis
+    # still removes the inward component that dragged the pot in Attempt 32.
+    use_contact_normal_depth_axis = bool(
+        depth_guard_use_handle_contact_normal and physical_contact_observed
+    )
     depth_guard_axis = (
-        handle_contact_normal
-        if depth_guard_use_handle_contact_normal
-        else mean_pad_axis
+        handle_contact_normal if use_contact_normal_depth_axis else mean_pad_axis
     )
     desired_jaw_axis = _unit(
         quaternion_rotate(pot[3:], jaw_axis_prior_local), "desired jaw axis"
@@ -529,8 +537,6 @@ def handle_local_mpc_step(
     transverse_residual = (
         translation_world - signed_depth_residual * depth_guard_axis
     )
-    contacting = forces >= config.physical_contact_threshold_n
-    physical_contact_observed = bool(np.any(contacting))
     active_margin_ok = _pad_margin_ok(forces, fractions, config)
     peer_margin_ok = _pad_margin_ok(peer_forces, peer_fractions, config)
     pot_motion_ok = bool(
@@ -929,7 +935,7 @@ def handle_local_mpc_step(
             "active": depth_guard_active,
             "depth_axis_source": (
                 "observed_handle_contact_normal"
-                if depth_guard_use_handle_contact_normal
+                if use_contact_normal_depth_axis
                 else "mean_pad_depth_axis"
             ),
             "depth_axis_world": depth_guard_axis.tolist(),
