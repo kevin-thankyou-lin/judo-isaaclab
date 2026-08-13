@@ -681,10 +681,21 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
 
     right_assist = env.grasp_assists.get("right")
     if right_assist is not None:
-        releasing_right = step > trajectory.waypoint_steps["branch_unload"]
+        # The right-release waypoint opens over many controller steps.  Dropping
+        # a fixed-joint assist on its first (near-zero) command increment leaves
+        # the pads physically clamped around the mug and can kick it off its
+        # branch support.  Keep the assist through that single monotonic opening
+        # transition and release it as soon as raw two-finger grasp contact is
+        # clear.  This changes no gripper command or semantic waypoint.
+        release_phase = torch.full_like(
+            right_grasping,
+            step > trajectory.waypoint_steps["branch_unload"],
+            dtype=torch.bool,
+        )
+        releasing_right = release_phase & ~right_grasping
         right_assist.update(
             engage=right_grasping,
-            disable=torch.full_like(right_grasping, releasing_right),
+            disable=releasing_right,
         )
 
 

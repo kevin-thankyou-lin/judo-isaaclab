@@ -720,11 +720,12 @@ def test_authored_boundaries_release_both_grasp_assists():
 
     left = Assist()
     right = Assist()
+    right_grasping = torch.tensor([True])
     env = SimpleNamespace(
         robot=SimpleNamespace(
             is_grasping=lambda: (
                 torch.tensor([True]),
-                torch.tensor([True]),
+                right_grasping,
             )
         ),
         grasp_assists={"left": left, "right": right},
@@ -743,7 +744,45 @@ def test_authored_boundaries_release_both_grasp_assists():
 
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
-    assert right.calls[-1] == ([True], [True])
+    assert right.calls[-1] == ([True], [False])
+
+    right_grasping[0] = False
+    _update_authored_assist_releases(env, trajectory, 9)
+    assert left.calls[-1] == ([True], [True])
+    assert right.calls[-1] == ([False], [True])
+
+
+def test_right_assist_release_waits_through_single_opening_transition():
+    import torch
+
+    class Assist:
+        def __init__(self):
+            self.calls = []
+
+        def update(self, *, engage, disable):
+            self.calls.append((engage.tolist(), disable.tolist()))
+
+    right = Assist()
+    grasping = torch.tensor([True])
+    env = SimpleNamespace(
+        robot=SimpleNamespace(
+            is_grasping=lambda: (torch.tensor([False]), grasping)
+        ),
+        grasp_assists={"right": right},
+    )
+    trajectory = SimpleNamespace(
+        waypoint_steps={"left_release": 5, "branch_unload": 7}
+    )
+
+    # The first release waypoint already begins the one monotonic gripper-open
+    # transition, but raw pad contact is still present.
+    _update_authored_assist_releases(env, trajectory, 8)
+    assert right.calls[-1] == ([True], [False])
+
+    # The assist drops immediately once the opening pads have cleared the mug.
+    grasping[0] = False
+    _update_authored_assist_releases(env, trajectory, 9)
+    assert right.calls[-1] == ([False], [True])
 
 
 def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
