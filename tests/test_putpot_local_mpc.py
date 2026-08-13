@@ -482,6 +482,129 @@ def test_handle_tangent_contact_recenter_removes_normal_motion_and_honors_budget
     assert limited["world_command_norm_m"] == pytest.approx(0.0004)
     assert limited["executed_translation_m"] == pytest.approx(0.0004)
 
+    depth_completion = handle_local_mpc_step(
+        **values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        contact_recenter_total_m=0.012,
+    )
+    completion = depth_completion.frame_receipt["contact_fraction_recenter"]
+    completion_control = np.asarray(
+        depth_completion.frame_receipt["executed_control"]["translation_world_m"]
+    )
+    handle_normal = np.asarray(
+        depth_completion.frame_receipt["contact_frame_guard"]["depth_axis_world"]
+    )
+    assert not depth_completion.fail_closed
+    assert completion["guarded_depth_completion_enabled"]
+    assert completion["guarded_depth_completion_active"]
+    np.testing.assert_allclose(
+        completion_control,
+        completion["guarded_depth_completion_translation_world_m"],
+    )
+    np.testing.assert_allclose(
+        completion_control - np.dot(completion_control, handle_normal) * handle_normal,
+        0.0,
+        atol=1.0e-12,
+    )
+    assert np.linalg.norm(completion_control) <= 0.004 + 1.0e-12
+    np.testing.assert_allclose(
+        depth_completion.frame_receipt["executed_control"][
+            "rotation_axis_angle_world_rad"
+        ],
+        0.0,
+    )
+    assert depth_completion.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+
+    pot_motion_values = {**values, "pre_peer_pot_displacement_m": 0.0031}
+    pot_motion_exceeded = handle_local_mpc_step(
+        **pot_motion_values,
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        active_pad_fraction_axis_extent_m=0.068,
+        contact_recenter_total_m=0.012,
+    )
+    assert pot_motion_exceeded.fail_closed
+    assert pot_motion_exceeded.fail_reason == "pre_peer_pot_motion_exceeded"
+    assert not pot_motion_exceeded.frame_receipt["contact_fraction_recenter"][
+        "guarded_depth_completion_active"
+    ]
+
+
+def test_pair_15_attempt_34_exhausted_tangent_budget_completes_depth_open_jaw():
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=85,
+            observed_handle_contact_frame=[
+                0.6225847730164783,
+                0.22119748566733805,
+                0.8636750852797689,
+                -0.6751265205259744,
+                0.6651734204239027,
+                0.25282198785588494,
+                -0.19449818636855173,
+            ],
+            active_wrist_pose=[
+                0.5253683924674988,
+                0.33023208379745483,
+                0.941718339920044,
+                0.33117954685149137,
+                0.47353861946063636,
+                0.8136624389727908,
+                -0.06351943821701292,
+            ],
+            active_pad_centers_world=[
+                [0.5602778196334839, 0.32006704807281494, 0.8283215165138245],
+                [0.5941927433013916, 0.2503335773944855, 0.8869801163673401],
+            ],
+            active_pad_axes_world=[
+                [-0.49295365810394287, 0.4487238824367523, 0.745415210723877],
+                [-0.463673859834671, 0.38450437784194946, 0.798224925994873],
+            ],
+            active_pad_fractions=[np.nan, 0.00905468687415123],
+            active_finger_forces_n=[0.0, 1.117085576057434],
+            pre_peer_pot_displacement_m=4.2613424260753435e-05,
+            current_jaw_command=-0.04749999940395355,
+        ),
+        depth_guarded_transverse_intercept=True,
+        depth_guard_use_handle_contact_normal=True,
+        depth_guard_released=True,
+        contact_fraction_recenter=True,
+        contact_recenter_use_handle_tangent=True,
+        contact_recenter_preserve_transverse_centering=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        pause_committed_closure_on_dual_force_backing=True,
+        allow_interior_single_pad_transverse_intercept=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+        contact_recenter_total_m=0.012,
+    )
+    receipt = command.frame_receipt["contact_fraction_recenter"]
+    assert not command.fail_closed
+    assert receipt["guarded_depth_completion_active"]
+    np.testing.assert_allclose(
+        command.frame_receipt["executed_control"]["translation_world_m"],
+        [
+            0.0023947056063658764,
+            -0.0031915069011783036,
+            5.087410576909503e-05,
+        ],
+    )
+    assert command.frame_receipt["executed_control"]["jaw_increment"] == 0.0
+    np.testing.assert_allclose(
+        command.frame_receipt["executed_control"]["rotation_axis_angle_world_rad"],
+        0.0,
+    )
+
 
 def test_handle_tangent_contact_recenter_fails_closed_for_degenerate_axis():
     half_sqrt_two = np.sqrt(0.5)

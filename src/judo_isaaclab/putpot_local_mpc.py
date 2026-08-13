@@ -355,6 +355,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "surface_tangent_enabled",
             "surface_tangent_axis_valid",
             "surface_tangent_axis_world",
+            "guarded_depth_completion_enabled",
+            "guarded_depth_completion_active",
+            "guarded_depth_completion_translation_world_m",
             "preserve_transverse_centering",
             "preserve_bounded_closure",
             "bounded_closure_priority_active",
@@ -672,6 +675,24 @@ def handle_local_mpc_step(
             or next_depth_guard_released
         )
     )
+    nominal_depth_completion_component_m = float(
+        np.dot(nominal_translation_increment, depth_guard_axis)
+    )
+    guarded_depth_completion_active = bool(
+        contact_fraction_recenter
+        and contact_recenter_use_handle_tangent
+        and physical_contact_observed
+        and not active_margin_ok
+        and contact_fraction_delta > 0.0
+        and remaining_recenter_m <= 1.0e-12
+        and signed_depth_residual * nominal_depth_completion_component_m > 0.0
+        and pot_motion_ok
+        and peer_margin_ok
+        and (
+            not depth_guarded_transverse_intercept
+            or next_depth_guard_released
+        )
+    )
     # ``contact_recenter_total_m`` is the realized positive axial wrist motion
     # accumulated by the runtime from the preceding commands.  Do not charge
     # this physical-motion budget for a command before its realization is
@@ -680,7 +701,9 @@ def handle_local_mpc_step(
     fail_reason = None
     if not pot_motion_ok:
         fail_reason = "pre_peer_pot_motion_exceeded"
-    elif not active_margin_ok and not contact_recenter_active:
+    elif not active_margin_ok and not (
+        contact_recenter_active or guarded_depth_completion_active
+    ):
         fail_reason = "active_contact_outside_pad_margin"
     elif not peer_margin_ok:
         fail_reason = "peer_contact_outside_pad_margin"
@@ -737,6 +760,21 @@ def handle_local_mpc_step(
             contact_recenter_translation + retained_transverse_translation,
             recenter_world_command_budget_m,
         )
+        rotation_increment = np.zeros(3, dtype=np.float64)
+    guarded_depth_completion_translation = np.zeros(3, dtype=np.float64)
+    if guarded_depth_completion_active:
+        # The bounded tangent sweep can bring a low, force-backed fingertip
+        # intersection to the handle opening without yet placing the pad's
+        # unchanged 10% margin over the surface.  Once that existing 12 mm
+        # budget is physically exhausted, finish the still-open approach only
+        # along the live handle normal.  The ordinary 4 mm Cartesian bound and
+        # 3 mm pre-peer pot-motion guard remain authoritative, and orientation
+        # and jaw commands stay fixed until the original broad-contact pose
+        # gate is satisfied.
+        guarded_depth_completion_translation = (
+            nominal_depth_completion_component_m * depth_guard_axis
+        )
+        translation_increment = guarded_depth_completion_translation.copy()
         rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
         translation_increment = np.zeros(3, dtype=np.float64)
@@ -930,6 +968,15 @@ def handle_local_mpc_step(
             "surface_tangent_axis_valid": surface_tangent_axis_valid,
             "surface_tangent_axis_world": (
                 contact_recenter_axis_world.tolist()
+            ),
+            "guarded_depth_completion_enabled": bool(
+                contact_recenter_use_handle_tangent
+            ),
+            "guarded_depth_completion_active": (
+                guarded_depth_completion_active
+            ),
+            "guarded_depth_completion_translation_world_m": (
+                guarded_depth_completion_translation.tolist()
             ),
             "preserve_transverse_centering": bool(
                 contact_recenter_preserve_transverse_centering
