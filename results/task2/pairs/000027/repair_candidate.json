@@ -4,7 +4,19 @@
   "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.03,
   "handover_orient_steps": 30,
-  "handover_target_camera_clockwise_roll_rad": 0.08290313946973066,
+  "handover_standoff_local_offset_m": [
+    -0.03,
+    -0.04,
+    0.005
+  ],
+  "handover_standoff_outside_m": 0.11,
+  "handover_straddle_local_x_m": 0.01276,
+  "handover_target_camera_clockwise_roll_rad": 0.15707963267948966,
+  "handover_target_offset_m": [
+    -0.005122186541537234,
+    -0.023709177523309245,
+    0.01195358131280758
+  ],
   "post_handover_rest_observer_steps": 60,
   "post_release_return_to_rest_steps": 120,
   "require_broad_pad_contact": true
