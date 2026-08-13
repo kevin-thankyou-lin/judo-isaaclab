@@ -72,6 +72,8 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         parsed.target_left_measured_contact_pivot_pregrasp_radial_clearance_m
         == pytest.approx(0.05)
     )
+    parsed = _parser(required + ["--target-left-quality-peer-axis-preorientation"])
+    assert parsed.target_left_quality_peer_axis_preorientation is True
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():

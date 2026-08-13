@@ -271,6 +271,26 @@ def test_contact_frame_preorientation_changes_only_early_left_orientations():
     assert corrected.grippers == pytest.approx(corridor.grippers)
     assert receipt["force_free_lead_steps"] == 15
     assert receipt["left_translations_unchanged"] is True
+    assert receipt["hold_through_grasp"] is False
+
+    peer_aligned = desired.copy()
+    peer_aligned[3:] = [np.cos(0.3), 0.0, 0.0, np.sin(0.3)]
+    held, held_receipt = apply_contact_frame_preorientation(
+        corridor,
+        start,
+        peer_aligned,
+        alignment_complete_step=10,
+        prior_first_force_step=25,
+        maximum_orientation_step_rad=0.2,
+        hold_through_grasp=True,
+    )
+    grasp = corridor.waypoint_steps["left_handle_grasp"]
+    assert held.left_poses[10 : grasp + 1, 3:] == pytest.approx(
+        np.tile(peer_aligned[3:], (grasp - 9, 1))
+    )
+    assert held.left_poses[:, :3] == pytest.approx(corridor.left_poses[:, :3])
+    assert held_receipt["hold_through_grasp"] is True
+    assert held_receipt["orientation_hold_end_step"] == grasp
 
 
 def test_contact_frame_preorientation_rejects_short_force_free_lead():

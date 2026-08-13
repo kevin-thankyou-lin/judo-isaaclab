@@ -1156,6 +1156,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "pregrasp. The measured grasp endpoint and controller are unchanged."
         ),
     )
+    parser.add_argument(
+        "--target-left-quality-peer-axis-preorientation",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that completes the already-required quality "
+            "peer-axis wrist correction during the force-free left preorientation."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -3227,6 +3235,15 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError(
                 "measured pivot pregrasp clearance must be in (0, 0.05] m"
             )
+    if args.target_left_quality_peer_axis_preorientation and not (
+        quality_left_first_local_mpc
+        and measured_contact_pivot_requested
+        and preorientation_requested
+    ):
+        raise ValueError(
+            "quality peer-axis preorientation requires strict quality left-first "
+            "MPC, a measured contact pivot, and force-free preorientation"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -4474,6 +4491,33 @@ def main(argv: list[str] | None = None) -> None:
             quality_peer_axis_receipt["receiving_alignment"] = (
                 peer_axis_alignment
             )
+            if args.target_left_quality_peer_axis_preorientation:
+                aligned_world = compose_pose(
+                    target_geometry.root_pose,
+                    local_mpc_left_contact_prior,
+                )
+                aligned_pregrasp = trajectory.left_poses[
+                    pregrasp_complete_step
+                ].copy()
+                aligned_pregrasp[3:] = aligned_world[3:]
+                trajectory, peer_preorientation_receipt = (
+                    apply_contact_frame_preorientation(
+                        trajectory,
+                        left_reset_pose,
+                        aligned_pregrasp,
+                        alignment_complete_step=(
+                            args.target_left_contact_frame_preorientation_complete_step
+                        ),
+                        prior_first_force_step=(
+                            args.target_left_contact_frame_prior_first_force_step
+                        ),
+                        maximum_orientation_step_rad=args.max_rotation_step,
+                        hold_through_grasp=True,
+                    )
+                )
+                source_contact_frame_correction["trajectory_correction"][
+                    "quality_peer_axis_preorientation"
+                ] = peer_preorientation_receipt
         local_mpc_left_pad_fraction_axis_extent_m = 0.0
         local_mpc_right_pad_fraction_axis_extent_m = 0.0
         if args.target_handle_local_contact_fraction_recenter:

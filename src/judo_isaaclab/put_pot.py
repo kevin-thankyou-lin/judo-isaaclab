@@ -761,6 +761,7 @@ def apply_contact_frame_preorientation(
     prior_first_force_step: int,
     minimum_force_free_lead_steps: int = ROBUST_BIMANUAL_LATCH_STEPS,
     maximum_orientation_step_rad: float = 0.16,
+    hold_through_grasp: bool = False,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Finish the source-mapped wrist orientation before the contact sweep.
 
@@ -811,7 +812,8 @@ def apply_contact_frame_preorientation(
         complete + 1,
     )[:, 3:]
     left[: complete + 1, 3:] = orientation_ramp
-    left[complete + 1 : pregrasp_end + 1, 3:] = desired_pregrasp[3:]
+    orientation_hold_end = grasp_anchor if hold_through_grasp else pregrasp_end
+    left[complete + 1 : orientation_hold_end + 1, 3:] = desired_pregrasp[3:]
 
     previous_quaternions = np.concatenate(
         (start[None, 3:], left[:grasp_anchor, 3:]), axis=0
@@ -866,6 +868,8 @@ def apply_contact_frame_preorientation(
             "left_pregrasp_pose_unchanged": bool(
                 np.allclose(left[pregrasp_end], desired_pregrasp, atol=1.0e-12)
             ),
+            "hold_through_grasp": bool(hold_through_grasp),
+            "orientation_hold_end_step": int(orientation_hold_end),
             "right_trajectory_unchanged": True,
             "grippers_unchanged": True,
         },
