@@ -82,6 +82,37 @@ def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatc
         campaign._claim_explicit_lane(12, "node2-gpu0")
 
 
+def test_classification_only_runtime_gate_stops_before_repair(
+    tmp_path, monkeypatch, capsys
+):
+    results = tmp_path / "task2"
+    results.mkdir()
+    (results / "ledger.json").write_text(json.dumps({"pairs": {}}))
+    classification_attempt = results / "pairs/000031/attempt_002_direct_source_classification"
+    classification_attempt.mkdir(parents=True)
+    classification = {
+        "status": "repair_required",
+        "first_failed_stage": "handover",
+    }
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(campaign, "_require_zero_workers", lambda: None)
+    monkeypatch.setattr(
+        campaign,
+        "_reusable_classification",
+        lambda _index: (classification_attempt, classification),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_repair_strategy",
+        lambda _index: pytest.fail("classification-only run entered repair"),
+    )
+    monkeypatch.setenv(campaign.CLASSIFICATION_ONLY_ENV, "1")
+
+    campaign.run_one(31)
+
+    assert "TASK2_HANGMUG_CLASSIFICATION_ONLY_STOP=000031" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
 def test_explicit_lane_claim_rejects_ambiguous_ids(tmp_path, monkeypatch, lane):
     monkeypatch.setattr(campaign, "RESULTS", tmp_path)

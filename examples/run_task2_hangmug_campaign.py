@@ -47,6 +47,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_support_fraction",
     "branch_support_seat_down_m",
 })
+CLASSIFICATION_ONLY_ENV = "CPGEN_TASK2_CLASSIFICATION_ONLY"
 LD_LIBRARY_PATH = ":".join(
     (
         "/home/linke/miniforge3/envs/yam_lab/lib",
@@ -1168,6 +1169,13 @@ def run_one(index: int, *, replace_existing: bool = False) -> None:
         _accept_attempt(
             index, classification_attempt, ledger_sha256,
             replace_existing=replace_existing,
+        )
+        return
+    if os.environ.get(CLASSIFICATION_ONLY_ENV) == "1":
+        print(
+            f"TASK2_HANGMUG_CLASSIFICATION_ONLY_STOP={index:06d} "
+            f"attempt={classification_attempt}",
+            flush=True,
         )
         return
     failed_stage = classification["first_failed_stage"]
