@@ -838,7 +838,7 @@ def test_authored_boundaries_release_both_grasp_assists():
         grasp_assists={"left": left, "right": right},
     )
     trajectory = SimpleNamespace(
-        waypoint_steps={"left_release": 5, "branch_unload": 7}
+        waypoint_steps={"right_grasp": 4, "left_release": 5, "branch_unload": 7}
     )
 
     _update_authored_assist_releases(env, trajectory, 4)

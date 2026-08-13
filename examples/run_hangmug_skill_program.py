@@ -862,7 +862,14 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
 
     left_grasping, right_grasping = env.robot.is_grasping()
     left_assist = env.grasp_assists.get("left")
-    releasing_left = step >= trajectory.waypoint_steps["left_release"]
+    waypoint_names = list(trajectory.waypoint_steps)
+    release_index = waypoint_names.index("left_release")
+    release_start = (
+        0
+        if release_index == 0
+        else trajectory.waypoint_steps[waypoint_names[release_index - 1]] + 1
+    )
+    releasing_left = step >= release_start
     if left_assist is not None and releasing_left:
         left_assist.update(
             engage=left_grasping,
@@ -2774,6 +2781,10 @@ def main() -> None:
                 args,
             )
             if keyframes is not None else (None, None, None, None, None, None)
+        )
+        env.defer_hangmug_left_assist_release_to_authored_boundary = bool(
+            trajectory is not None
+            and "direct_preinsert" in trajectory.waypoint_steps
         )
         source_prefix_steps = (
             _source_pick_prefix_steps(keyframes)
