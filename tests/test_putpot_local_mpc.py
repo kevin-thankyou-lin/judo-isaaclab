@@ -1280,6 +1280,8 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
     assert not closure["geometric_preseat_satisfied"]
     assert closure["geometric_preseat_finite_pad_count"] == 0
     assert closure["geometric_preseat_interior_pad_count"] == 0
+    assert closure["geometric_preseat_prospective_pad_fractions"] == [None, None]
+    assert not closure["geometric_preseat_prospective_broad_contact"]
     assert closure["geometric_preseat_source_wrist_target_active"]
     np.testing.assert_allclose(
         closure["geometric_preseat_source_wrist_residual_world_m"],
@@ -1289,6 +1291,44 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
     assert gated.frame_receipt["executed_control"][
         "translation_world_m"
     ][0] == pytest.approx(0.02 / 15.0)
+
+    prospective = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_wrist_pose": _pose(x=0.018),
+        },
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.5286, 0.5287],
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    prospective_closure = prospective.frame_receipt["closure"]
+    assert prospective_closure["geometric_preseat_satisfied"]
+    assert prospective_closure["geometric_preseat_source_wrist_aligned"]
+    assert prospective_closure["geometric_preseat_prospective_broad_contact"]
+    assert prospective_closure["geometric_preseat_prospective_closure_ready"]
+    assert prospective_closure[
+        "geometric_preseat_prospective_pad_fractions"
+    ] == pytest.approx([0.5286, 0.5287])
+    assert prospective.frame_receipt["executed_control"]["jaw_increment"] > 0.0
+    assert handle_local_mpc_frame_receipt_complete(prospective.frame_receipt)
+
+    one_predicted_pad = handle_local_mpc_step(
+        **{
+            **aligned,
+            "active_wrist_pose": _pose(x=0.018),
+        },
+        contact_fraction_recenter=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.5286, np.nan],
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    assert not one_predicted_pad.frame_receipt["closure"][
+        "geometric_preseat_prospective_closure_ready"
+    ]
+    assert one_predicted_pad.frame_receipt["executed_control"][
+        "jaw_increment"
+    ] == 0.0
 
     edge = handle_local_mpc_step(
         **{

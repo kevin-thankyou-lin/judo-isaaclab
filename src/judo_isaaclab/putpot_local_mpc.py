@@ -433,8 +433,12 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "geometric_preseat_satisfied",
             "geometric_preseat_finite_pad_count",
             "geometric_preseat_interior_pad_count",
+            "geometric_preseat_prospective_pad_fractions",
+            "geometric_preseat_prospective_broad_contact",
             "geometric_preseat_source_wrist_target_active",
             "geometric_preseat_source_wrist_residual_world_m",
+            "geometric_preseat_source_wrist_aligned",
+            "geometric_preseat_prospective_closure_ready",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -494,6 +498,7 @@ def handle_local_mpc_step(
     transverse_aligned_closure_pivot_pad_index: int | None = None,
     allow_dual_force_pad_margin_pivot: bool = False,
     require_geometric_preseat_for_closure: bool = False,
+    geometric_preseat_predicted_pad_fractions: Any | None = None,
     budget_committed_closure_by_pre_peer_motion: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
@@ -548,6 +553,15 @@ def handle_local_mpc_step(
     peer_forces = _vector(peer_finger_forces_n, (2,), "peer_finger_forces_n")
     if fractions.shape != (2,) or peer_fractions.shape != (2,):
         raise ValueError("pad fractions must contain two values per gripper")
+    prospective_fractions = (
+        np.full(2, np.nan, dtype=np.float64)
+        if geometric_preseat_predicted_pad_fractions is None
+        else np.asarray(
+            geometric_preseat_predicted_pad_fractions, dtype=np.float64
+        )
+    )
+    if prospective_fractions.shape != (2,):
+        raise ValueError("predicted pad fractions must contain two values")
     contacting = forces >= config.physical_contact_threshold_n
     physical_contact_observed = bool(np.any(contacting))
     scalars = np.asarray(
@@ -723,6 +737,32 @@ def handle_local_mpc_step(
             & (fractions >= config.minimum_pad_fraction_margin)
             & (fractions <= 1.0 - config.minimum_pad_fraction_margin)
         )
+    )
+    geometric_preseat_prospective_broad_contact = bool(
+        np.all(
+            np.isfinite(prospective_fractions)
+            & (prospective_fractions >= config.minimum_pad_fraction_margin)
+            & (
+                prospective_fractions
+                <= 1.0 - config.minimum_pad_fraction_margin
+            )
+        )
+    )
+    geometric_preseat_source_wrist_aligned = bool(
+        np.linalg.norm(geometric_preseat_source_wrist_residual)
+        <= config.maximum_translation_step_m + 1.0e-12
+        and np.linalg.norm(wrist_rotation)
+        <= config.closure_rotation_tolerance_rad + 1.0e-12
+    )
+    geometric_preseat_prospective_closure_ready = bool(
+        require_geometric_preseat_for_closure
+        and not physical_contact_observed
+        and geometric_preseat_prospective_broad_contact
+        and geometric_preseat_source_wrist_aligned
+    )
+    geometric_preseat_satisfied = bool(
+        finite_interior_pad_intersections
+        or geometric_preseat_prospective_closure_ready
     )
     preclosure_geometric_prestage_enabled = bool(
         allow_dual_force_pad_margin_pivot
@@ -1199,7 +1239,7 @@ def handle_local_mpc_step(
         )
         and (
             not require_geometric_preseat_for_closure
-            or finite_interior_pad_intersections
+            or geometric_preseat_satisfied
         )
     )
     pause_committed_closure = bool(
@@ -1631,7 +1671,7 @@ def handle_local_mpc_step(
                 require_geometric_preseat_for_closure
             ),
             "geometric_preseat_satisfied": (
-                finite_interior_pad_intersections
+                geometric_preseat_satisfied
             ),
             "geometric_preseat_finite_pad_count": int(
                 np.count_nonzero(finite_pad_intersections)
@@ -1643,11 +1683,24 @@ def handle_local_mpc_step(
                     & (fractions <= 1.0 - config.minimum_pad_fraction_margin)
                 )
             ),
+            "geometric_preseat_prospective_pad_fractions": [
+                float(value) if np.isfinite(value) else None
+                for value in prospective_fractions
+            ],
+            "geometric_preseat_prospective_broad_contact": (
+                geometric_preseat_prospective_broad_contact
+            ),
             "geometric_preseat_source_wrist_target_active": (
                 geometric_preseat_source_wrist_target_active
             ),
             "geometric_preseat_source_wrist_residual_world_m": (
                 geometric_preseat_source_wrist_residual.tolist()
+            ),
+            "geometric_preseat_source_wrist_aligned": (
+                geometric_preseat_source_wrist_aligned
+            ),
+            "geometric_preseat_prospective_closure_ready": (
+                geometric_preseat_prospective_closure_ready
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,

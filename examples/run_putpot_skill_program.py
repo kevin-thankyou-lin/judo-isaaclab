@@ -1394,11 +1394,12 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-right-quality-geometric-preseat",
         action="store_true",
         help=(
-            "Pair-owned opt-in that keeps the right jaw open until at least "
-            "one measured pad intersection is inside the unchanged quality "
-            "margin, targets the live source-mapped wrist pose while force-"
-            "free, and routes an edge intersection through the existing "
-            "bounded geometric preseat."
+            "Pair-owned opt-in that targets the live source-mapped wrist pose "
+            "while force-free and keeps the right jaw open until either a "
+            "measured pad intersection is interior or the mapped pose is "
+            "aligned with both prospective pad fractions inside the unchanged "
+            "quality margin; an actual edge intersection still routes through "
+            "the existing bounded geometric preseat."
         ),
     )
     parser.add_argument(
@@ -5888,6 +5889,12 @@ def main(argv: list[str] | None = None) -> None:
                                 require_geometric_preseat_for_closure=bool(
                                     active_arm == "right"
                                     and args.target_right_quality_geometric_preseat
+                                ),
+                                geometric_preseat_predicted_pad_fractions=(
+                                    right_predicted_fractions
+                                    if active_arm == "right"
+                                    and args.target_right_quality_geometric_preseat
+                                    else None
                                 ),
                                 budget_committed_closure_by_pre_peer_motion=bool(
                                     active_arm == "left"
