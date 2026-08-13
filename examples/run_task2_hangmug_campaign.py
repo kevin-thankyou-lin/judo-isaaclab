@@ -136,7 +136,7 @@ def _common_workload(index: int, attempt: Path) -> list[str]:
     assets = _asset_pair(index)
     return [
         "env",
-        f"PYTHONPATH={REPO_ROOT}:{GEAR_REPO}",
+        f"PYTHONPATH={REPO_ROOT / 'src'}:{REPO_ROOT}:{GEAR_REPO}",
         f"LD_LIBRARY_PATH={LD_LIBRARY_PATH}",
         str(PYTHON),
         "examples/run_hangmug_skill_program.py",

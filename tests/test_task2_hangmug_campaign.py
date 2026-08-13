@@ -44,6 +44,27 @@ def test_evidence_runner_disables_unused_environment_hdf5_recorder():
     assert "disable_env_recorders=True" in source
 
 
+def test_guarded_workload_imports_lane_judo_package_before_shared_install(
+    tmp_path, monkeypatch
+):
+    objects = tmp_path / "objects"
+    for kind, name in (
+        ("MugHangable", "mug_teacup_000001"),
+        ("ThreeLayerMugTree", "mug_tree_000001"),
+    ):
+        (objects / kind / name).mkdir(parents=True)
+    monkeypatch.setattr(campaign, "OBJECTS", objects)
+    monkeypatch.setattr(campaign, "REPO_ROOT", tmp_path / "lane-repo")
+    monkeypatch.setattr(campaign, "GEAR_REPO", tmp_path / "lane-gear")
+
+    workload = campaign._common_workload(1, tmp_path / "attempt")
+
+    assert workload[1] == (
+        f"PYTHONPATH={tmp_path / 'lane-repo/src'}:"
+        f"{tmp_path / 'lane-repo'}:{tmp_path / 'lane-gear'}"
+    )
+
+
 def test_missing_or_cross_index_asset_fails_before_command(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "OBJECTS", tmp_path)
     (tmp_path / "MugHangable/mug_teacup_000003").mkdir(parents=True)
