@@ -23,6 +23,7 @@ from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import (
     SkillTrajectory,
     compose_pose,
+    interpolate_poses,
     inverse_pose,
     quaternion_rotate,
 )
@@ -1377,6 +1378,55 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
         "maximum_line_residual_m"
     ] > 0.01
     json.dumps(curved_receipt)
+
+
+def test_direct_quality_contract_applies_support_offset_only_after_insertion():
+    right_start = _pose(0.2, -0.7, 0.9)
+    preinsert = _pose(0.7, -0.2, 0.95)
+    insert = _pose(0.75, -0.15, 0.85)
+    supported_hold = insert.copy()
+    supported_hold[:3] += [-0.0006, 0.0008, 0.0]
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(
+        right_start, _pose(0.6, 0.1, 1.0), steps=4
+    )
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=5, insert_steps=3,
+    )
+    program.release_and_return_to_rest(
+        insert,
+        right_start,
+        right_supported_hold=supported_hold,
+        support_steps=4,
+        release_steps=3,
+        return_steps=5,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+
+    insert_end = trajectory.waypoint_steps["branch_insert"]
+    hold_end = trajectory.waypoint_steps["supported_release_hold"]
+    release_end = trajectory.waypoint_steps["right_release"]
+    np.testing.assert_allclose(trajectory.right_poses[insert_end], insert)
+    np.testing.assert_allclose(trajectory.right_poses[hold_end], supported_hold)
+    np.testing.assert_allclose(
+        trajectory.right_poses[insert_end + 1 : hold_end + 1],
+        interpolate_poses(insert, supported_hold, hold_end - insert_end),
+    )
+    np.testing.assert_allclose(
+        trajectory.grippers[insert_end + 1 : hold_end + 1],
+        np.repeat([[-0.0475, 0.0]], hold_end - insert_end, axis=0),
+    )
+    np.testing.assert_allclose(
+        trajectory.right_poses[hold_end + 1 : release_end + 1],
+        np.repeat(supported_hold[None], release_end - hold_end, axis=0),
+    )
+    assert trajectory.grippers[hold_end, 1] == pytest.approx(0.0)
+    assert trajectory.grippers[release_end, 1] == pytest.approx(-0.0475)
 
 
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():

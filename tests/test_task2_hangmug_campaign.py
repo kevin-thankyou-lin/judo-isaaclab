@@ -642,7 +642,7 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
         campaign._repair_strategy(4)
 
     candidate.write_text(json.dumps({"branch_support_offset_m": [0.0101, 0, 0]}))
-    with pytest.raises(ValueError, match="support offset"):
+    with pytest.raises(ValueError, match="supported-hold offset"):
         campaign._repair_strategy(4)
 
 

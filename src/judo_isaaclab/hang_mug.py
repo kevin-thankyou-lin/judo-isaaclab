@@ -917,6 +917,7 @@ class HangMugSkillProgram:
         right_insert: Any,
         right_rest: Any,
         *,
+        right_supported_hold: Any | None = None,
         support_steps: int,
         release_steps: int,
         return_steps: int,
@@ -926,11 +927,13 @@ class HangMugSkillProgram:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
             raise ValueError("release/return phase steps must be positive")
+        if right_supported_hold is None:
+            right_supported_hold = right_insert
         self._append(
             "supported_release_hold",
             "release_support",
             support_steps,
-            right_pose=right_insert,
+            right_pose=right_supported_hold,
         )
         self._append(
             "right_release",

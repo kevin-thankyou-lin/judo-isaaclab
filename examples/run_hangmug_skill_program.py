@@ -112,7 +112,7 @@ def _parser() -> argparse.Namespace:
         type=float,
         nargs=3,
         default=(0.0, 0.0, 0.0),
-        help="Bounded world-frame support-pose translation applied before insertion.",
+        help="Bounded world-frame translation applied during closed supported hold.",
     )
     parser.add_argument(
         "--stable-support-steps",
@@ -2589,7 +2589,7 @@ def _build_skill(
     final_mug_pose = _branch_support_seated_pose(
         final_mug_pose, args.branch_support_seat_down_m
     )
-    final_mug_pose = _branch_support_offset_pose(
+    supported_hold_mug_pose = _branch_support_offset_pose(
         final_mug_pose, args.branch_support_offset_m
     )
     target_branch_world = compose_pose(target_tree.root_pose, target_branch.frame)
@@ -2626,6 +2626,7 @@ def _build_skill(
     right_transport = held(transport_mug_pose, right_contact)
     right_approach = held(approach_mug_pose, right_contact)
     right_insert = held(final_mug.root_pose, right_contact)
+    right_supported_hold = held(supported_hold_mug_pose, right_contact)
     right_branch_orient = None
     if args.branch_orient_steps:
         right_branch_orient = right_transport.copy()
@@ -2686,6 +2687,7 @@ def _build_skill(
         program.release_and_return_to_rest(
             right_insert,
             right_start,
+            right_supported_hold=right_supported_hold,
             support_steps=40,
             release_steps=40,
             return_steps=args.post_release_return_to_rest_steps,
@@ -2712,7 +2714,7 @@ def _build_skill(
         )
     return (
         program.build(),
-        final_mug_pose,
+        supported_hold_mug_pose,
         target_handover_mug.root_pose,
         right_contact,
         source_branch,

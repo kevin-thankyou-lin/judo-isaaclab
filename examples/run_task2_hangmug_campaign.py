@@ -485,7 +485,7 @@ def _repair_strategy(index: int) -> dict:
             or not np.isfinite(support_offset).all()
             or np.linalg.norm(support_offset) > 0.01
         ):
-            raise ValueError("branch support offset must be within 1 cm")
+            raise ValueError("branch supported-hold offset must be within 1 cm")
         strategy["branch_support_offset_m"] = support_offset.tolist()
     if "stable_support_steps" in value:
         steps = value["stable_support_steps"]
