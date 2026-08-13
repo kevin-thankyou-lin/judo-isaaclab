@@ -364,6 +364,10 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
+            "pre_release_margin_protection_enabled",
+            "pre_release_margin_protection_active",
+            "protected_pad_fraction_margin",
+            "acceptance_pad_fraction_margin",
             "requested_translation_m",
             "executed_translation_m",
             "retained_transverse_translation_world_m",
@@ -632,17 +636,37 @@ def handle_local_mpc_step(
         if contact_recenter_use_handle_tangent and surface_tangent_axis_valid
         else contact_fraction_axis_world
     )
+    pre_release_margin_protection_enabled = bool(
+        contact_fraction_recenter
+        and contact_recenter_use_handle_tangent
+        and depth_guarded_transverse_intercept
+        and not next_depth_guard_released
+        and physical_contact_observed
+    )
+    protected_pad_fraction_margin = config.minimum_pad_fraction_margin
+    if pre_release_margin_protection_enabled:
+        # A full transverse command can consume pad-edge margin before its
+        # effect is visible on the next observation.  Maintain one maximum
+        # command of measured pad-fraction reserve while the contact-normal
+        # depth guard is unreleased.  This is a control reserve only: the
+        # unchanged acceptance margin remains authoritative.
+        protected_pad_fraction_margin = min(
+            0.5,
+            config.minimum_pad_fraction_margin
+            + config.maximum_translation_step_m
+            / active_pad_fraction_axis_extent_m,
+        )
     contact_fraction_delta = 0.0
     if np.any(contacting) and np.all(np.isfinite(fractions[contacting])):
         fraction_corrections = []
         for fraction in fractions[contacting]:
-            if fraction < config.minimum_pad_fraction_margin:
+            if fraction < protected_pad_fraction_margin:
                 fraction_corrections.append(
-                    config.minimum_pad_fraction_margin - float(fraction)
+                    protected_pad_fraction_margin - float(fraction)
                 )
-            elif fraction > 1.0 - config.minimum_pad_fraction_margin:
+            elif fraction > 1.0 - protected_pad_fraction_margin:
                 fraction_corrections.append(
-                    1.0 - config.minimum_pad_fraction_margin - float(fraction)
+                    1.0 - protected_pad_fraction_margin - float(fraction)
                 )
         if fraction_corrections:
             signs = np.sign(fraction_corrections)
@@ -652,6 +676,11 @@ def handle_local_mpc_step(
                 )
     requested_recenter_translation_m = float(
         contact_fraction_delta * active_pad_fraction_axis_extent_m
+    )
+    pre_release_margin_protection_active = bool(
+        pre_release_margin_protection_enabled
+        and contact_fraction_delta != 0.0
+        and active_margin_ok
     )
     remaining_recenter_m = max(
         0.0,
@@ -667,7 +696,7 @@ def handle_local_mpc_step(
     contact_recenter_active = bool(
         contact_fraction_recenter
         and physical_contact_observed
-        and not active_margin_ok
+        and (not active_margin_ok or pre_release_margin_protection_active)
         and contact_fraction_delta != 0.0
         and remaining_recenter_m > 0.0
         and pot_motion_ok
@@ -1000,6 +1029,16 @@ def handle_local_mpc_step(
                 active_pad_fraction_axis_extent_m
             ),
             "contact_fraction_delta": contact_fraction_delta,
+            "pre_release_margin_protection_enabled": (
+                pre_release_margin_protection_enabled
+            ),
+            "pre_release_margin_protection_active": (
+                pre_release_margin_protection_active
+            ),
+            "protected_pad_fraction_margin": protected_pad_fraction_margin,
+            "acceptance_pad_fraction_margin": (
+                config.minimum_pad_fraction_margin
+            ),
             "requested_translation_m": requested_recenter_translation_m,
             "executed_translation_m": (
                 reported_recenter_translation_m
