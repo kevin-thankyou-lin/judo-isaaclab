@@ -1289,6 +1289,15 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "existing 0.35 rad correction bound."
         ),
     )
+    parser.add_argument(
+        "--target-left-quality-handle-normal-loaded-pad-pivot",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that applies the handle-normal refinement about "
+            "the expected loaded left pad, preserving its collision-screened "
+            "path through the force-free preorientation."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -3428,6 +3437,14 @@ def main(argv: list[str] | None = None) -> None:
             "left handle-normal jaw refinement requires force-free peer-axis "
             "preorientation and the left handle-normal depth guard"
         )
+    if args.target_left_quality_handle_normal_loaded_pad_pivot and not (
+        args.target_left_quality_handle_normal_jaw_refinement
+        and args.target_left_quality_peer_axis_preorientation
+    ):
+        raise ValueError(
+            "left loaded-pad pivot requires handle-normal jaw refinement and "
+            "force-free peer-axis preorientation"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (
             args.target_handle_local_mpc_acquisition
@@ -4683,6 +4700,39 @@ def main(argv: list[str] | None = None) -> None:
             quality_peer_axis_receipt["receiving_alignment"] = (
                 peer_axis_alignment
             )
+            loaded_pad_pivot_local = None
+            if args.target_left_quality_handle_normal_loaded_pad_pivot:
+                loaded_pad_pivot_local = np.asarray(
+                    frame_receipt["pad_centers_wrist_local"][1],
+                    dtype=np.float64,
+                )
+                peer_aligned_world = compose_pose(
+                    target_geometry.root_pose,
+                    local_mpc_left_contact_prior,
+                )
+                peer_aligned_pregrasp = trajectory.left_poses[
+                    pregrasp_complete_step
+                ].copy()
+                peer_aligned_pregrasp[3:] = peer_aligned_world[3:]
+                trajectory, peer_preorientation_receipt = (
+                    apply_contact_frame_preorientation(
+                        trajectory,
+                        left_reset_pose,
+                        peer_aligned_pregrasp,
+                        alignment_complete_step=(
+                            args.target_left_contact_frame_preorientation_complete_step
+                        ),
+                        prior_first_force_step=(
+                            args.target_left_contact_frame_prior_first_force_step
+                        ),
+                        maximum_orientation_step_rad=args.max_rotation_step,
+                        maximum_position_step_m=args.max_position_step,
+                        hold_through_grasp=True,
+                    )
+                )
+                source_contact_frame_correction["trajectory_correction"][
+                    "quality_peer_axis_preorientation"
+                ] = peer_preorientation_receipt
             if args.target_left_quality_handle_normal_jaw_refinement:
                 handle_normal_target_left_local = rotate_marker_vector(
                     diagnostic_target_contact_frames_local["left"][3:],
@@ -4707,6 +4757,7 @@ def main(argv: list[str] | None = None) -> None:
                     local_mpc_left_pad_axis_prior_local,
                     maximum_correction_rad=0.35,
                     clip_excess_correction=True,
+                    preserve_point_local=loaded_pad_pivot_local,
                 )
                 local_mpc_left_jaw_axis_prior_local = np.asarray(
                     handle_normal_refinement["applied_jaw_axis_local"],
@@ -4736,11 +4787,17 @@ def main(argv: list[str] | None = None) -> None:
                             args.target_left_contact_frame_prior_first_force_step
                         ),
                         maximum_orientation_step_rad=args.max_rotation_step,
+                        maximum_position_step_m=args.max_position_step,
                         hold_through_grasp=True,
+                        preserve_left_local_point=loaded_pad_pivot_local,
                     )
                 )
                 source_contact_frame_correction["trajectory_correction"][
-                    "quality_peer_axis_preorientation"
+                    (
+                        "handle_normal_loaded_pad_pivot_preorientation"
+                        if loaded_pad_pivot_local is not None
+                        else "quality_peer_axis_preorientation"
+                    )
                 ] = peer_preorientation_receipt
         local_mpc_left_pad_fraction_axis_extent_m = 0.0
         local_mpc_right_pad_fraction_axis_extent_m = 0.0

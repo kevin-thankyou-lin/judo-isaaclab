@@ -292,6 +292,39 @@ def test_contact_frame_preorientation_changes_only_early_left_orientations():
     assert held_receipt["hold_through_grasp"] is True
     assert held_receipt["orientation_hold_end_step"] == grasp
 
+    loaded_pad_local = np.asarray([0.02, -0.01, -0.10])
+    pivot_target = peer_aligned.copy()
+    pivot_target[3:] = [np.cos(0.4), 0.0, 0.0, np.sin(0.4)]
+    pivoted, pivot_receipt = apply_contact_frame_preorientation(
+        held,
+        start,
+        pivot_target,
+        alignment_complete_step=10,
+        prior_first_force_step=25,
+        maximum_orientation_step_rad=0.2,
+        maximum_position_step_m=0.1,
+        hold_through_grasp=True,
+        preserve_left_local_point=loaded_pad_local,
+    )
+    from judo_isaaclab.put_marker import quaternion_rotate
+
+    for index in range(grasp + 1):
+        before = held.left_poses[index, :3] + quaternion_rotate(
+            held.left_poses[index, 3:], loaded_pad_local
+        )
+        after = pivoted.left_poses[index, :3] + quaternion_rotate(
+            pivoted.left_poses[index, 3:], loaded_pad_local
+        )
+        assert after == pytest.approx(before)
+    assert not np.array_equal(pivoted.left_poses[:, :3], held.left_poses[:, :3])
+    assert pivot_receipt["preserved_left_local_point"] == pytest.approx(
+        loaded_pad_local
+    )
+    assert pivot_receipt["maximum_preserved_point_residual_m"] < 1.0e-12
+    assert pivot_receipt["maximum_position_step_m"] <= 0.1
+    assert pivoted.right_poses == pytest.approx(held.right_poses)
+    assert pivoted.grippers == pytest.approx(held.grippers)
+
 
 def test_contact_frame_preorientation_rejects_short_force_free_lead():
     start = _pose()
@@ -1748,6 +1781,26 @@ def test_peer_jaw_axis_alignment_transfers_only_one_bounded_direction():
         1.0
     )
     assert np.linalg.norm(clipped_pad) == pytest.approx(1.0)
+
+    loaded_pad_local = np.asarray([0.02, -0.01, -0.10])
+    pivoted, _, pivot_receipt = align_object_local_gripper_prior_to_jaw_axis(
+        pose,
+        current_jaw,
+        -transferred,
+        current_pad,
+        clip_excess_correction=True,
+        preserve_point_local=loaded_pad_local,
+    )
+    anchor_before = pose[:3] + quaternion_rotate(pose[3:], loaded_pad_local)
+    anchor_after = pivoted[:3] + quaternion_rotate(
+        pivoted[3:], loaded_pad_local
+    )
+    assert anchor_after == pytest.approx(anchor_before)
+    assert not pivot_receipt["position_unchanged"]
+    assert pivot_receipt["preserved_point_local"] == pytest.approx(
+        loaded_pad_local
+    )
+    assert pivot_receipt["preserved_point_residual_m"] < 1.0e-12
 
 
 def test_transport_contact_reanchor_uses_contact_feedback_horizon():

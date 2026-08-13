@@ -470,6 +470,7 @@ def source_contact_frame_grasp_pose(
         ),
         "predicted_pad_centers_world": centers.tolist(),
         "predicted_pad_axes_world": axes.tolist(),
+        "pad_centers_wrist_local": pad_centers_local.tolist(),
         "predicted_contact_pad_fractions": predicted_fractions.tolist(),
         "jaw_separation_m": jaw_separation,
         "signed_jaw_centering_m": signed_centering,
@@ -761,7 +762,9 @@ def apply_contact_frame_preorientation(
     prior_first_force_step: int,
     minimum_force_free_lead_steps: int = ROBUST_BIMANUAL_LATCH_STEPS,
     maximum_orientation_step_rad: float = 0.16,
+    maximum_position_step_m: float = 0.025,
     hold_through_grasp: bool = False,
+    preserve_left_local_point: Any | None = None,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Finish the source-mapped wrist orientation before the contact sweep.
 
@@ -791,6 +794,18 @@ def apply_contact_frame_preorientation(
         or maximum_orientation_step_rad <= 0.0
     ):
         raise ValueError("maximum orientation step must be finite and positive")
+    preserved_point = None
+    if preserve_left_local_point is not None:
+        if (
+            not np.isfinite(maximum_position_step_m)
+            or maximum_position_step_m <= 0.0
+        ):
+            raise ValueError("maximum position step must be finite and positive")
+        preserved_point = np.asarray(
+            preserve_left_local_point, dtype=np.float64
+        )
+        if preserved_point.shape != (3,) or not np.all(np.isfinite(preserved_point)):
+            raise ValueError("preserved left local point must be one finite point")
 
     steps = trajectory.waypoint_steps
     pregrasp_end = steps.get("left_pregrasp", steps.get("bimanual_pregrasp"))
@@ -815,6 +830,23 @@ def apply_contact_frame_preorientation(
     orientation_hold_end = grasp_anchor if hold_through_grasp else pregrasp_end
     left[complete + 1 : orientation_hold_end + 1, 3:] = desired_pregrasp[3:]
 
+    preservation_residuals = np.zeros(orientation_hold_end + 1, dtype=np.float64)
+    if preserved_point is not None:
+        for index in range(orientation_hold_end + 1):
+            original_point = original[index, :3] + quaternion_rotate(
+                original[index, 3:], preserved_point
+            )
+            rotated_point = left[index, :3] + quaternion_rotate(
+                left[index, 3:], preserved_point
+            )
+            left[index, :3] += original_point - rotated_point
+            preserved_after = left[index, :3] + quaternion_rotate(
+                left[index, 3:], preserved_point
+            )
+            preservation_residuals[index] = np.linalg.norm(
+                preserved_after - original_point
+            )
+
     previous_quaternions = np.concatenate(
         (start[None, 3:], left[:grasp_anchor, 3:]), axis=0
     )
@@ -825,6 +857,17 @@ def apply_contact_frame_preorientation(
     maximum_observed = float(np.max(orientation_steps))
     if maximum_observed > maximum_orientation_step_rad + 1.0e-12:
         raise ValueError("contact-frame preorientation exceeds orientation step bound")
+    maximum_observed_position_step = None
+    if preserved_point is not None:
+        previous_positions = np.concatenate(
+            (start[None, :3], left[:grasp_anchor, :3]), axis=0
+        )
+        position_steps = np.linalg.norm(
+            left[: grasp_anchor + 1, :3] - previous_positions, axis=1
+        )
+        maximum_observed_position_step = float(np.max(position_steps))
+        if maximum_observed_position_step > maximum_position_step_m + 1.0e-12:
+            raise ValueError("contact-frame preorientation exceeds position step bound")
 
     prior_quaternion = original[first_force, 3:]
     correction = quaternion_multiply(
@@ -862,8 +905,18 @@ def apply_contact_frame_preorientation(
             ),
             "maximum_orientation_step_rad": maximum_observed,
             "orientation_step_bound_rad": float(maximum_orientation_step_rad),
+            "maximum_position_step_m": maximum_observed_position_step,
+            "position_step_bound_m": (
+                None if preserved_point is None else float(maximum_position_step_m)
+            ),
             "left_translations_unchanged": bool(
                 np.array_equal(left[:, :3], original[:, :3])
+            ),
+            "preserved_left_local_point": (
+                None if preserved_point is None else preserved_point.tolist()
+            ),
+            "maximum_preserved_point_residual_m": float(
+                np.max(preservation_residuals)
             ),
             "left_pregrasp_pose_unchanged": bool(
                 np.allclose(left[pregrasp_end], desired_pregrasp, atol=1.0e-12)
@@ -1623,6 +1676,7 @@ def align_object_local_gripper_prior_to_jaw_axis(
     *,
     maximum_correction_rad: float = 0.35,
     clip_excess_correction: bool = False,
+    preserve_point_local: Any | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """Apply the smallest bounded rotation that aligns a receiving jaw axis.
 
@@ -1669,6 +1723,21 @@ def align_object_local_gripper_prior_to_jaw_axis(
     result = pose.copy()
     result[3:] = quaternion_multiply(delta, pose[3:])
     result[3:] /= np.linalg.norm(result[3:])
+    preserved_point = None
+    preservation_translation = np.zeros(3, dtype=np.float64)
+    preserved_point_residual = 0.0
+    if preserve_point_local is not None:
+        preserved_point = np.asarray(preserve_point_local, dtype=np.float64)
+        if preserved_point.shape != (3,) or not np.all(np.isfinite(preserved_point)):
+            raise ValueError("preserved point must be one finite point")
+        anchor_before = pose[:3] + quaternion_rotate(pose[3:], preserved_point)
+        anchor_after_rotation = result[:3] + quaternion_rotate(
+            result[3:], preserved_point
+        )
+        preservation_translation = anchor_before - anchor_after_rotation
+        result[:3] += preservation_translation
+        anchor_after = result[:3] + quaternion_rotate(result[3:], preserved_point)
+        preserved_point_residual = float(np.linalg.norm(anchor_after - anchor_before))
     rotated_jaw = quaternion_rotate(delta, current)
     rotated_pad = quaternion_rotate(delta, pad)
     receipt = {
@@ -1687,6 +1756,11 @@ def align_object_local_gripper_prior_to_jaw_axis(
         "target_reached": bool(angle >= requested_angle - 1.0e-12),
         "maximum_correction_rad": float(maximum_correction_rad),
         "position_unchanged": bool(np.array_equal(result[:3], pose[:3])),
+        "preserved_point_local": (
+            None if preserved_point is None else preserved_point.tolist()
+        ),
+        "preservation_translation_local_m": preservation_translation.tolist(),
+        "preserved_point_residual_m": preserved_point_residual,
     }
     return result, rotated_pad, receipt
 
