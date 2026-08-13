@@ -506,6 +506,7 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "post_release_return_to_rest_steps": 120,
         "post_release_return_uniform_interpolation": True,
         "post_release_return_orientation_delay_rows": 1,
+        "post_release_return_local_y_clearance_rad": 0.02,
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -526,6 +527,9 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert command[
         command.index("--post-release-return-orientation-delay-rows") + 1
     ] == "1"
+    assert command[
+        command.index("--post-release-return-local-y-clearance-rad") + 1
+    ] == "0.02"
     assert "--branch-orient-steps" not in command
 
     candidate.write_text(json.dumps({
@@ -541,6 +545,12 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "post_release_return_orientation_delay_rows": 1,
     }))
     with pytest.raises(ValueError, match="requires uniform interpolation"):
+        campaign._repair_strategy(2)
+
+    candidate.write_text(json.dumps({
+        "post_release_return_local_y_clearance_rad": 0.02,
+    }))
+    with pytest.raises(ValueError, match="requires direct choreography"):
         campaign._repair_strategy(2)
 
 

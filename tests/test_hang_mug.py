@@ -25,6 +25,7 @@ from judo_isaaclab.put_marker import (
     compose_pose,
     interpolate_poses,
     inverse_pose,
+    quaternion_multiply,
     quaternion_rotate,
 )
 from run_hangmug_skill_program import (
@@ -1558,6 +1559,42 @@ def test_uniform_return_can_delay_only_orientation_one_row_through_reanchor():
     )
     np.testing.assert_allclose(expected[0, 3:], adjusted.right_poses[release_end, 3:])
     np.testing.assert_allclose(expected[-1], trajectory.right_poses[return_end])
+
+    cleared = reanchor_branch_transport_contact(
+        trajectory,
+        _pose(0.05, -0.02, 0.03),
+        _pose(0.35, -0.25, 0.82),
+        _pose(0.425, -0.26, 0.865),
+        completed_waypoint="carrying_rest_observer",
+        uniform_post_release_return=True,
+        post_release_return_orientation_delay_rows=1,
+        post_release_return_local_y_clearance_rad=0.02,
+    )
+    virtual_start = cleared.right_poses[release_end].copy()
+    virtual_start[3:] = quaternion_multiply(
+        virtual_start[3:],
+        np.asarray([np.cos(0.01), 0.0, np.sin(0.01), 0.0]),
+    )
+    expected_clear = interpolate_poses(
+        virtual_start,
+        trajectory.right_poses[return_end],
+        5,
+        uniform=True,
+        orientation_delay_rows=1,
+    )
+    np.testing.assert_allclose(
+        cleared.right_poses[release_end + 1 : return_end + 1], expected_clear
+    )
+    np.testing.assert_array_equal(expected_clear[:, :3], expected[:, :3])
+    with pytest.raises(ValueError, match="within 0.16 rad"):
+        reanchor_branch_transport_contact(
+            trajectory,
+            _pose(0.05, -0.02, 0.03),
+            _pose(0.35, -0.25, 0.82),
+            _pose(0.425, -0.26, 0.865),
+            completed_waypoint="carrying_rest_observer",
+            post_release_return_local_y_clearance_rad=0.161,
+        )
 
 
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():

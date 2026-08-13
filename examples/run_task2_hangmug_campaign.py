@@ -48,6 +48,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_release_return_to_rest_steps",
     "post_release_return_uniform_interpolation",
     "post_release_return_orientation_delay_rows",
+    "post_release_return_local_y_clearance_rad",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -195,6 +196,11 @@ def _repair_command(
             "--post-release-return-orientation-delay-rows",
             str(strategy["post_release_return_orientation_delay_rows"]),
         ])
+    if "post_release_return_local_y_clearance_rad" in strategy:
+        arguments.extend([
+            "--post-release-return-local-y-clearance-rad",
+            str(strategy["post_release_return_local_y_clearance_rad"]),
+        ])
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
@@ -323,6 +329,7 @@ def _repair_strategy(index: int) -> dict:
         "post_release_return_to_rest_steps",
         "post_release_return_uniform_interpolation",
         "post_release_return_orientation_delay_rows",
+        "post_release_return_local_y_clearance_rad",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -453,6 +460,22 @@ def _repair_strategy(index: int) -> dict:
                 "post-release return orientation delay requires a longer direct return"
             )
         strategy["post_release_return_orientation_delay_rows"] = delay
+    if "post_release_return_local_y_clearance_rad" in value:
+        clearance = value["post_release_return_local_y_clearance_rad"]
+        if (
+            isinstance(clearance, bool)
+            or not isinstance(clearance, (int, float))
+            or not np.isfinite(clearance)
+            or abs(clearance) > 0.16
+        ):
+            raise ValueError(
+                "post-release return local-Y clearance must be within 0.16 rad"
+            )
+        if not direct_steps[1]:
+            raise ValueError(
+                "post-release return local-Y clearance requires direct choreography"
+            )
+        strategy["post_release_return_local_y_clearance_rad"] = float(clearance)
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]
         if (

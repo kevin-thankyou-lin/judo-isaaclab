@@ -15,6 +15,7 @@ from .put_marker import (
     interpolate_poses,
     inverse_pose,
     pose_from_matrix,
+    quaternion_multiply,
     quaternion_rotate,
     transfer_pose,
 )
@@ -522,6 +523,7 @@ def reanchor_branch_transport_contact(
     completed_waypoint: str = "left_release",
     uniform_post_release_return: bool = False,
     post_release_return_orientation_delay_rows: int = 0,
+    post_release_return_local_y_clearance_rad: float = 0.0,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -570,8 +572,21 @@ def reanchor_branch_transport_contact(
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
         return_start = release_end + 1
+        return_start_pose = right[release_end].copy()
+        clearance = float(post_release_return_local_y_clearance_rad)
+        if not np.isfinite(clearance) or abs(clearance) > 0.16:
+            raise ValueError(
+                "post-release return local-Y clearance must be within 0.16 rad"
+            )
+        if clearance:
+            half = 0.5 * clearance
+            return_start_pose[3:] = quaternion_multiply(
+                return_start_pose[3:],
+                np.asarray([np.cos(half), 0.0, np.sin(half), 0.0]),
+            )
+            return_start_pose[3:] /= np.linalg.norm(return_start_pose[3:])
         right[return_start : direct_return + 1] = interpolate_poses(
-            right[release_end],
+            return_start_pose,
             trajectory.right_poses[direct_return],
             direct_return - release_end,
             uniform=uniform_post_release_return,
