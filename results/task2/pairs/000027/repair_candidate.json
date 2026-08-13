@@ -5,5 +5,6 @@
   "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.08,
   "handover_orient_steps": 30,
-  "handover_straddle_local_x_m": 0.026228200287817013
+  "handover_seat_local_z_m": 0.018739788666255294,
+  "handover_straddle_local_x_m": 0.01477867399612837
 }
