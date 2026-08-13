@@ -658,6 +658,96 @@ def _preserve_quality_wave_contact_reports_across_arm_rebuild(scene) -> None:
     _activate_quality_wave_contact_reports(scene)
 
 
+def _usd_rigid_body_names(usd_path: str, articulation_root: str) -> tuple[str, ...]:
+    """Read the reusable arm link topology before the physics scene exists."""
+    from pxr import Usd, UsdPhysics
+
+    stage = Usd.Stage.Open(str(usd_path))
+    if stage is None:
+        raise RuntimeError(f"could not open articulation USD: {usd_path}")
+    root = stage.GetPrimAtPath(str(articulation_root))
+    if not root.IsValid():
+        raise RuntimeError(
+            f"articulation root {articulation_root} is absent from {usd_path}"
+        )
+    names = tuple(
+        prim.GetName()
+        for prim in Usd.PrimRange(root)
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI)
+    )
+    if not names or len(names) != len(set(names)):
+        raise RuntimeError("articulation USD has missing or duplicate rigid-body names")
+    return names
+
+
+def _install_quality_wave_contact_sensors(config) -> dict[str, tuple[str, ...]]:
+    """Declare per-link filtered sensors before IsaacLab creates the scene."""
+    from isaaclab.sensors import ContactSensorCfg
+
+    scene = config.scene
+    _activate_quality_wave_contact_reports(scene)
+    articulation_root = str(scene.right_arm.articulation_root_prim_path)
+    right_names = _usd_rigid_body_names(
+        scene.right_arm.spawn.usd_path, articulation_root
+    )
+    left_names = _usd_rigid_body_names(
+        scene.left_arm.spawn.usd_path,
+        str(scene.left_arm.articulation_root_prim_path),
+    )
+    env_root = "{ENV_REGEX_NS}"
+    right_paths = tuple(
+        f"{env_root}/RightArm{articulation_root}/{name}" for name in right_names
+    )
+    left_root = str(scene.left_arm.articulation_root_prim_path)
+    left_paths = tuple(
+        f"{env_root}/LeftArm{left_root}/{name}" for name in left_names
+    )
+    object_links = getattr(config, "_contact_body_links", {})
+
+    def object_path(name: str) -> str:
+        if name not in object_links:
+            raise RuntimeError(f"quality-wave sensor cannot resolve {name} body")
+        suffix = f"/{object_links[name]}" if object_links[name] else ""
+        return f"{env_root}/{name}{suffix}"
+
+    tree_path = object_path("mug_tree")
+    mug_path = object_path("mug")
+    update_period = float(config.sim.dt * config.decimation)
+    sensor_names = {"environment": [], "mug": [], "left_tree": []}
+
+    def add(group: str, index: int, prim_path: str, filters: tuple[str, ...]):
+        name = f"quality_wave_{group}_{index:02d}"
+        setattr(
+            scene,
+            name,
+            ContactSensorCfg(
+                prim_path=prim_path,
+                update_period=update_period,
+                history_length=1,
+                track_contact_points=False,
+                max_contact_data_count_per_prim=64,
+                track_pose=False,
+                filter_prim_paths_expr=list(filters),
+            ),
+        )
+        sensor_names[group].append(name)
+
+    for index, path in enumerate(right_paths):
+        add("environment", index, path, (tree_path, *left_paths))
+        add("mug", index, path, (mug_path,))
+    for index, path in enumerate(left_paths):
+        add("left_tree", index, path, (tree_path,))
+    frozen_names = {name: tuple(values) for name, values in sensor_names.items()}
+    config._quality_wave_contact_sensor_names = frozen_names
+    config._quality_wave_contact_body_paths = {
+        "right_body_paths": right_paths,
+        "left_body_paths": left_paths,
+        "tree_body_path": tree_path,
+        "mug_body_path": mug_path,
+    }
+    return frozen_names
+
+
 def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
@@ -696,6 +786,18 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
         )
 
     config_module.HangMugOnTreeManagerEnvCfg.__init__ = offline_init
+    config_type = config_module.HangMugOnTreeManagerEnvCfg
+    assets_marker = "_cpgen_quality_wave_asset_sensor_wrapper"
+    if not getattr(config_type, assets_marker, False):
+        original_assets = config_type.configure_assets_instance_paths
+
+        def configure_assets_with_wave_sensors(instance, *args, **kwargs):
+            result = original_assets(instance, *args, **kwargs)
+            _install_quality_wave_contact_sensors(instance)
+            return result
+
+        config_type.configure_assets_instance_paths = configure_assets_with_wave_sensors
+        setattr(config_type, assets_marker, True)
     return {
         "grasp_assistance": "datagen-supported grasp assist selected",
         "grasp_assistance_selection": mechanism,
@@ -964,55 +1066,21 @@ def _asset_root_usd(asset_directory: str) -> str:
 
 
 def _quality_wave_contact_views(env, target_assets) -> dict[str, object]:
-    """Create fail-closed live link-contact views for quality-wave motion."""
-    from dc_study.utils.assets import find_contact_body_link
-
-    right_names = tuple(env.scene["right_arm"].body_names)
-    left_names = tuple(env.scene["left_arm"].body_names)
-    if not right_names or not left_names:
-        raise RuntimeError("direct collision guard could not resolve arm bodies")
-    env_root = "/World/envs/env_0"
-    right_paths = [f"{env_root}/RightArm/arm/{name}" for name in right_names]
-    left_paths = [f"{env_root}/LeftArm/arm/{name}" for name in left_names]
-
-    def object_path(name: str) -> str:
-        body = find_contact_body_link(_asset_root_usd(target_assets[name]))
-        suffix = f"/{body}" if body else ""
-        return f"{env_root}/{name}{suffix}"
-
-    tree_path = object_path("mug_tree")
-    mug_path = object_path("mug")
-    physics_view = env.scene["right_arm"]._physics_sim_view
-    # IsaacLab/PhysX filtered contacts support one sensor body to many filter
-    # bodies, not a many-sensor to many-filter matrix.  Create one initialized
-    # view per link and aggregate their maxima at read time.
-    def per_link_views(sensor_paths, filter_paths, maximum_contacts):
-        return tuple(
-            physics_view.create_rigid_contact_view(
-                sensor_path,
-                filter_patterns=list(filter_paths),
-                max_contact_data_count=maximum_contacts,
-            )
-            for sensor_path in sensor_paths
-        )
-
-    environment = per_link_views(right_paths, (tree_path, *left_paths), 512)
-    mug = per_link_views(right_paths, (mug_path,), 128)
-    left_tree = per_link_views(left_paths, (tree_path,), 128)
-    if any(
-        view.sensor_count != 1 or view.filter_count == 0
-        for group in (environment, mug, left_tree)
-        for view in group
-    ):
-        raise RuntimeError("quality-wave contact views resolved incomplete arms")
+    """Resolve the predeclared IsaacLab sensors; never create late PhysX views."""
+    del target_assets
+    names = getattr(env.cfg, "_quality_wave_contact_sensor_names", None)
+    paths = getattr(env.cfg, "_quality_wave_contact_body_paths", None)
+    if not names or not paths:
+        raise RuntimeError("quality-wave contact sensors were not predeclared")
+    resolved = {
+        group: tuple(env.scene[name] for name in names[group])
+        for group in ("environment", "mug", "left_tree")
+    }
+    if any(not values for values in resolved.values()):
+        raise RuntimeError("quality-wave contact sensor group is empty")
     return {
-        "environment": environment,
-        "mug": mug,
-        "left_tree": left_tree,
-        "right_body_paths": right_paths,
-        "left_body_paths": left_paths,
-        "tree_body_path": tree_path,
-        "mug_body_path": mug_path,
+        **resolved,
+        **paths,
     }
 
 
@@ -1026,7 +1094,12 @@ def _contact_view_max_force(view, physics_dt: float) -> float:
             (_contact_view_max_force(item, physics_dt) for item in view),
             default=0.0,
         )
-    values = view.get_contact_force_matrix(dt=physics_dt)
+    if hasattr(view, "data"):
+        values = view.data.force_matrix_w
+        if values is None:
+            raise RuntimeError("predeclared contact sensor has no filtered force matrix")
+    else:
+        values = view.get_contact_force_matrix(dt=physics_dt)
     if hasattr(values, "detach"):
         values = values.detach().cpu().numpy()
     array = np.asarray(values, dtype=np.float64)

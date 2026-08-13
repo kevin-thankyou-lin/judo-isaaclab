@@ -33,6 +33,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _install_grasp_assist_config,
+    _install_quality_wave_contact_sensors,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
     _handover_target_with_local_straddle,
@@ -104,62 +105,90 @@ def test_quality_wave_contact_reports_survive_gear_arm_rebuild():
     assert scene.mug_tree.spawn.activate_contact_sensors is True
 
 
-def test_quality_wave_contact_views_use_supported_one_sensor_to_many_filters(
-    monkeypatch,
-):
-    class View:
-        sensor_count = 1
-        filter_count = 1
-
-    class Physics:
-        def __init__(self):
-            self.calls = []
-
-        def create_rigid_contact_view(
-            self, sensor_path, *, filter_patterns, max_contact_data_count
-        ):
-            self.calls.append(
-                (sensor_path, filter_patterns, max_contact_data_count)
-            )
-            return View()
-
-    physics = Physics()
-    arm = lambda names: SimpleNamespace(
-        body_names=names, _physics_sim_view=physics
-    )
+def test_quality_wave_contact_views_resolve_only_predeclared_scene_sensors():
+    sensors = {
+        "right_environment": object(),
+        "right_mug": object(),
+        "left_tree": object(),
+    }
+    names = {
+        "environment": ("right_environment",),
+        "mug": ("right_mug",),
+        "left_tree": ("left_tree",),
+    }
+    paths = {
+        "right_body_paths": ("right",),
+        "left_body_paths": ("left",),
+        "tree_body_path": "tree",
+        "mug_body_path": "mug",
+    }
     env = SimpleNamespace(
-        scene={
-            "right_arm": arm(("right_link", "right_finger")),
-            "left_arm": arm(("left_link", "left_finger")),
-        }
-    )
-    assets_module = ModuleType("dc_study.utils.assets")
-    assets_module.find_contact_body_link = lambda _path: "body"
-    utils_module = ModuleType("dc_study.utils")
-    dc_study_module = ModuleType("dc_study")
-    monkeypatch.setitem(sys.modules, "dc_study", dc_study_module)
-    monkeypatch.setitem(sys.modules, "dc_study.utils", utils_module)
-    monkeypatch.setitem(sys.modules, "dc_study.utils.assets", assets_module)
-    monkeypatch.setattr(
-        "run_hangmug_skill_program._asset_root_usd", lambda path: path
+        cfg=SimpleNamespace(
+            _quality_wave_contact_sensor_names=names,
+            _quality_wave_contact_body_paths=paths,
+        ),
+        scene=sensors,
     )
 
     views = _quality_wave_contact_views(
         env, {"mug": "mug.usd", "mug_tree": "tree.usd"}
     )
 
-    assert len(views["environment"]) == 2
-    assert len(views["mug"]) == 2
-    assert len(views["left_tree"]) == 2
-    assert all(isinstance(sensor_path, str) for sensor_path, _, _ in physics.calls)
-    assert all(
-        isinstance(filters, list) and filters
-        for _, filters, _ in physics.calls
+    assert views["environment"] == (sensors["right_environment"],)
+    assert views["mug"] == (sensors["right_mug"],)
+    assert views["left_tree"] == (sensors["left_tree"],)
+    assert views["right_body_paths"] == ("right",)
+
+
+def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
+    class ContactSensorCfg:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    isaaclab = ModuleType("isaaclab")
+    sensors_module = ModuleType("isaaclab.sensors")
+    sensors_module.ContactSensorCfg = ContactSensorCfg
+    monkeypatch.setitem(sys.modules, "isaaclab", isaaclab)
+    monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors_module)
+    monkeypatch.setattr(
+        "run_hangmug_skill_program._usd_rigid_body_names",
+        lambda _path, _root: ("link", "finger"),
     )
-    assert not any(
-        isinstance(sensor_path, list) or any(isinstance(item, list) for item in filters)
-        for sensor_path, filters, _ in physics.calls
+
+    def spawn(path=None):
+        return SimpleNamespace(
+            activate_contact_sensors=False,
+            usd_path=path,
+        )
+
+    scene = SimpleNamespace(
+        left_arm=SimpleNamespace(
+            spawn=spawn("yam.usd"), articulation_root_prim_path="/arm"
+        ),
+        right_arm=SimpleNamespace(
+            spawn=spawn("yam.usd"), articulation_root_prim_path="/arm"
+        ),
+        mug_tree=SimpleNamespace(spawn=spawn()),
     )
+    config = SimpleNamespace(
+        scene=scene,
+        sim=SimpleNamespace(dt=1.0 / 120.0),
+        decimation=4,
+        _contact_body_links={"mug": "cup", "mug_tree": "tree"},
+    )
+
+    names = _install_quality_wave_contact_sensors(config)
+
+    assert {name: len(values) for name, values in names.items()} == {
+        "environment": 2,
+        "mug": 2,
+        "left_tree": 2,
+    }
+    sensor = getattr(scene, names["environment"][0])
+    assert sensor.prim_path.endswith("/RightArm/arm/link")
+    assert sensor.filter_prim_paths_expr[0].endswith("/mug_tree/tree")
+    assert all(isinstance(path, str) for path in sensor.filter_prim_paths_expr)
+    assert config._quality_wave_contact_sensor_names == names
 
 
 def test_branch_approach_height_can_preserve_middle_branch_axis():
