@@ -201,6 +201,42 @@ def test_worker_gate_matches_runner_token_not_prompt_text(tmp_path, monkeypatch)
     assert campaign._worker_pids() == []
 
 
+def test_worker_gate_is_lane_scoped_when_lane_id_is_explicit(tmp_path, monkeypatch):
+    processes = []
+    for pid, lane in (("123", "node1-gpu3"), ("456", "node1-gpu5")):
+        process = tmp_path / pid
+        process.mkdir()
+        (process / "comm").write_text("python\n")
+        (process / "cmdline").write_bytes(
+            b"python\0examples/run_hangmug_skill_program.py\0"
+        )
+        (process / "environ").write_bytes(
+            f"CPGEN_LANE_ID={lane}\0CUDA_VISIBLE_DEVICES=3\0".encode()
+        )
+        processes.append(process)
+    monkeypatch.setattr(campaign.Path, "glob", lambda _self, _pattern: processes)
+
+    monkeypatch.delenv("CPGEN_LANE_ID", raising=False)
+    assert campaign._worker_pids() == [123, 456]
+    monkeypatch.setenv("CPGEN_LANE_ID", "node1-gpu3")
+    assert campaign._worker_pids() == [123]
+
+
+def test_lane_worker_gate_fails_closed_when_candidate_environment_is_unreadable(
+    tmp_path, monkeypatch
+):
+    process = tmp_path / "123"
+    process.mkdir()
+    (process / "comm").write_text("python\n")
+    (process / "cmdline").write_bytes(
+        b"python\0examples/run_hangmug_skill_program.py\0"
+    )
+    monkeypatch.setattr(campaign.Path, "glob", lambda _self, _pattern: [process])
+    monkeypatch.setenv("CPGEN_LANE_ID", "node1-gpu3")
+
+    assert campaign._worker_pids() == [123]
+
+
 def test_pick_failure_repair_cannot_use_exact_pick_prefix(tmp_path, monkeypatch):
     objects = tmp_path / "objects"
     for kind, name in (
