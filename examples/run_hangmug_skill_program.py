@@ -1560,6 +1560,7 @@ def main() -> None:
             image_downsample_factor=1,
             enable_gripper_grasp_clamp=False,
             enable_grasp_ray_viz=False,
+            disable_env_recording=True,
             check_gripper_release_for_hang=True,
         )
         physics_device = _physics_device_receipt(

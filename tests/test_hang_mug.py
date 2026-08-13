@@ -55,6 +55,13 @@ from run_hangmug_skill_program import (
 )
 
 
+def test_privileged_hangmug_runner_disables_the_unused_environment_recorder():
+    source = (Path(__file__).parents[1] / "examples/run_hangmug_skill_program.py").read_text()
+    constructor = source.index("env = create_task_environment(")
+    end = source.index("physics_device = _physics_device_receipt(", constructor)
+    assert "disable_env_recording=True" in source[constructor:end]
+
+
 def test_branch_approach_height_can_preserve_middle_branch_axis():
     final = _pose(0.5, -0.2, 0.9)
     branch = _pose()
