@@ -393,6 +393,155 @@ def _translate_source_corridor_endpoints(
     return pregrasp, grasp
 
 
+def _measured_loaded_pad_interior_preseat(
+    result_path,
+    trace_path,
+    controller_step: int,
+    trace_step: int,
+    *,
+    lane_id: str,
+    loaded_pad_index: int,
+    physical_contact_threshold_n: float,
+    minimum_pad_fraction_margin: float,
+    maximum_pre_latch_motion_m: float,
+    maximum_translation_m: float,
+) -> dict[str, object]:
+    """Invert one measured outside-surface pad offset before first contact."""
+
+    result_source = Path(result_path).resolve()
+    trace_source = Path(trace_path).resolve()
+    if not result_source.is_file() or not trace_source.is_file():
+        raise FileNotFoundError("loaded-pad preseat result and trace must exist")
+    if loaded_pad_index not in (0, 1):
+        raise ValueError("loaded-pad preseat index must be 0 or 1")
+    with result_source.open(encoding="utf-8") as stream:
+        result = json.load(stream)
+    receipts = result.get("protocol", {}).get("handle_local_mpc", {}).get(
+        "frame_receipts", []
+    )
+    matches = [
+        entry
+        for entry in receipts
+        if entry.get("program_step") == controller_step
+        and entry.get("active_arm") == "left"
+    ]
+    if len(matches) != 1:
+        raise ValueError("loaded-pad preseat controller receipt must be unique")
+    receipt = matches[0].get("receipt", {})
+    observed = receipt.get("observed_frames", {})
+    centers = np.asarray(observed.get("active_pad_centers"), dtype=np.float64)
+    handle = np.asarray(observed.get("active_handle_contact"), dtype=np.float64)
+    jaw_axis = np.asarray(observed.get("jaw_axis"), dtype=np.float64)
+    closure = receipt.get("closure", {})
+    with np.load(trace_source, allow_pickle=False) as trace:
+        required = {
+            "pot_poses",
+            "left_finger_forces_n",
+            "left_pad_fractions",
+            "left_pad_centers_world",
+            "partial_trace",
+        }
+        if not required.issubset(trace.files):
+            raise ValueError("loaded-pad preseat trace lacks physical telemetry")
+        if bool(np.asarray(trace["partial_trace"]).reshape(())):
+            raise ValueError("loaded-pad preseat trace must be complete")
+        if not 0 <= trace_step < len(trace["pot_poses"]):
+            raise ValueError("loaded-pad preseat trace step is out of range")
+        pot = np.asarray(trace["pot_poses"], dtype=np.float64)
+        forces = np.asarray(
+            trace["left_finger_forces_n"][trace_step], dtype=np.float64
+        )
+        fractions = np.asarray(
+            trace["left_pad_fractions"][trace_step], dtype=np.float64
+        )
+        trace_centers = np.asarray(
+            trace["left_pad_centers_world"][trace_step], dtype=np.float64
+        )
+    limits = np.asarray(
+        [
+            physical_contact_threshold_n,
+            minimum_pad_fraction_margin,
+            maximum_pre_latch_motion_m,
+            maximum_translation_m,
+        ],
+        dtype=np.float64,
+    )
+    if (
+        centers.shape != (2, 3)
+        or handle.shape != (7,)
+        or jaw_axis.shape != (3,)
+        or forces.shape != (2,)
+        or fractions.shape != (2,)
+        or trace_centers.shape != (2, 3)
+        or not np.all(np.isfinite(limits))
+        or physical_contact_threshold_n <= 0.0
+        or not 0.0 <= minimum_pad_fraction_margin < 0.5
+        or maximum_pre_latch_motion_m <= 0.0
+        or maximum_translation_m <= 0.0
+    ):
+        raise ValueError("loaded-pad preseat evidence or limits are invalid")
+    jaw_norm = float(np.linalg.norm(jaw_axis))
+    if jaw_norm <= 1.0e-9:
+        raise ValueError("loaded-pad preseat jaw axis is degenerate")
+    jaw_axis /= jaw_norm
+    if not np.allclose(centers, trace_centers, atol=1.0e-7, rtol=0.0):
+        raise ValueError("loaded-pad preseat receipt does not match the trace")
+    contacting = forces >= physical_contact_threshold_n
+    fraction = float(fractions[loaded_pad_index])
+    displacement = float(np.linalg.norm(pot[trace_step, :3] - pot[0, :3]))
+    if (
+        np.count_nonzero(contacting) != 1
+        or not contacting[loaded_pad_index]
+        or not np.isfinite(fraction)
+        or not minimum_pad_fraction_margin
+        <= fraction
+        <= 1.0 - minimum_pad_fraction_margin
+        or displacement > maximum_pre_latch_motion_m + 1.0e-12
+        or closure.get("transverse_aligned_two_pad_triggered") is not True
+        or closure.get("loaded_pad_pivot_index") != loaded_pad_index
+    ):
+        raise ValueError(
+            "loaded-pad preseat requires the force-backed broad one-pad closure trigger"
+        )
+    signed_surface_offset_m = float(
+        np.dot(handle[:3] - centers[loaded_pad_index], jaw_axis)
+    )
+    if signed_surface_offset_m <= 0.0:
+        raise ValueError("loaded pad is not on the measured outside surface side")
+    translation = 2.0 * signed_surface_offset_m * jaw_axis
+    translation_norm = float(np.linalg.norm(translation))
+    if translation_norm > maximum_translation_m + 1.0e-12:
+        raise ValueError("loaded-pad interior preseat exceeds its geometry bound")
+    return {
+        "enabled": True,
+        "classification": "measured_loaded_pad_surface_side_inversion_preseat",
+        "lane_id": lane_id,
+        "result": {
+            "path": str(result_source),
+            "sha256": _sha256(result_source),
+            "controller_step": int(controller_step),
+        },
+        "trace": {
+            "path": str(trace_source),
+            "sha256": _sha256(trace_source),
+            "sample_step": int(trace_step),
+        },
+        "loaded_pad_index": int(loaded_pad_index),
+        "loaded_pad_force_n": float(forces[loaded_pad_index]),
+        "loaded_pad_fraction": fraction,
+        "jaw_axis_world": jaw_axis.tolist(),
+        "signed_handle_surface_beyond_loaded_pad_m": signed_surface_offset_m,
+        "translation_world_m": translation.tolist(),
+        "translation_norm_m": translation_norm,
+        "maximum_translation_m": float(maximum_translation_m),
+        "measured_pre_latch_pot_motion_m": displacement,
+        "pregrasp_translation_applied": False,
+        "grasp_translation_applied": True,
+        "collision_clear_pregrasp_preserved": True,
+        "orientation_unchanged": True,
+    }
+
+
 def _pivot_source_corridor_grasp_endpoint(
     desired_pregrasp, desired_grasp, preliminary_relative_balance_m: float
 ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
@@ -1315,6 +1464,24 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "as a measured-tracking-compensated pivot about the loaded left "
             "pad 1, retaining the bounded wrist step while scaling the jaw step."
         ),
+    )
+    parser.add_argument(
+        "--target-left-quality-loaded-pad-interior-preseat-result",
+        help="Pair-owned failed target result measuring the outside loaded pad.",
+    )
+    parser.add_argument(
+        "--target-left-quality-loaded-pad-interior-preseat-trace",
+        help="Complete pair trace aligned to the loaded-pad result receipt.",
+    )
+    parser.add_argument(
+        "--target-left-quality-loaded-pad-interior-preseat-controller-step",
+        type=int,
+        help="Controller receipt step containing the one-pad closure trigger.",
+    )
+    parser.add_argument(
+        "--target-left-quality-loaded-pad-interior-preseat-trace-step",
+        type=int,
+        help="Trace observation step aligned to the controller receipt.",
     )
     return parser.parse_args(argv)
 
@@ -3482,6 +3649,31 @@ def main(argv: list[str] | None = None) -> None:
             "left loaded-pad pivot closure requires transverse-aligned closure "
             "and the measured loaded-pad preorientation pivot"
         )
+    loaded_pad_interior_preseat_values = (
+        args.target_left_quality_loaded_pad_interior_preseat_result,
+        args.target_left_quality_loaded_pad_interior_preseat_trace,
+        args.target_left_quality_loaded_pad_interior_preseat_controller_step,
+        args.target_left_quality_loaded_pad_interior_preseat_trace_step,
+    )
+    loaded_pad_interior_preseat_requested = any(
+        value is not None for value in loaded_pad_interior_preseat_values
+    )
+    if loaded_pad_interior_preseat_requested and not all(
+        value is not None for value in loaded_pad_interior_preseat_values
+    ):
+        raise ValueError(
+            "loaded-pad interior preseat requires result, trace, controller step, "
+            "and trace step"
+        )
+    if loaded_pad_interior_preseat_requested and not (
+        quality_left_first_local_mpc
+        and args.target_left_precontact_pad_balance_preserve_pregrasp
+        and args.target_left_quality_loaded_pad_pivot_closure
+    ):
+        raise ValueError(
+            "loaded-pad interior preseat requires strict quality left-first MPC, "
+            "a preserved collision-clear pregrasp, and loaded-pad pivot closure"
+        )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (
             args.target_handle_local_mpc_acquisition
@@ -3772,6 +3964,7 @@ def main(argv: list[str] | None = None) -> None:
         target_left_grasp_orientation_override_local_wxyz = None
         static_precontact_jaw_translation = None
         precontact_pad_balance = None
+        loaded_pad_interior_preseat = None
         local_mpc_left_pad_balance_translation_local = None
         source_contact_frame_correction = None
         diagnostic_target_left_contact_frame = None
@@ -4445,6 +4638,45 @@ def main(argv: list[str] | None = None) -> None:
                         ),
                         target_contact_normal_world=target_contact_normal_world,
                     )
+                if loaded_pad_interior_preseat_requested:
+                    from judo_isaaclab.putpot_local_mpc import HandleLocalMpcConfig
+
+                    loaded_pad_interior_preseat = (
+                        _measured_loaded_pad_interior_preseat(
+                            args.target_left_quality_loaded_pad_interior_preseat_result,
+                            args.target_left_quality_loaded_pad_interior_preseat_trace,
+                            int(
+                                args.target_left_quality_loaded_pad_interior_preseat_controller_step
+                            ),
+                            int(
+                                args.target_left_quality_loaded_pad_interior_preseat_trace_step
+                            ),
+                            lane_id=os.environ["CPGEN_LANE_ID"],
+                            loaded_pad_index=1,
+                            physical_contact_threshold_n=float(
+                                HandleLocalMpcConfig().physical_contact_threshold_n
+                            ),
+                            minimum_pad_fraction_margin=float(
+                                quality_config.grasp[
+                                    "minimum_pad_fraction_margin"
+                                ]
+                            ),
+                            maximum_pre_latch_motion_m=float(
+                                quality_config.grasp[
+                                    "maximum_pre_latch_object_motion_m"
+                                ]
+                            ),
+                            maximum_translation_m=args.collision_clearance_m,
+                        )
+                    )
+                    desired_pregrasp, desired_grasp = (
+                        _translate_source_corridor_endpoints(
+                            desired_pregrasp,
+                            desired_grasp,
+                            loaded_pad_interior_preseat,
+                            translate_pregrasp=False,
+                        )
+                    )
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
                         _translate_source_corridor_endpoints(
@@ -4475,6 +4707,10 @@ def main(argv: list[str] | None = None) -> None:
                 if precontact_pad_balance is not None:
                     trajectory_receipt["precontact_pad_balance"] = (
                         precontact_pad_balance
+                    )
+                if loaded_pad_interior_preseat is not None:
+                    trajectory_receipt["loaded_pad_interior_preseat"] = (
+                        loaded_pad_interior_preseat
                     )
                 if executable_pad_pivot is not None:
                     trajectory_receipt["executable_pad_balance_pivot"] = (
@@ -7867,6 +8103,7 @@ def main(argv: list[str] | None = None) -> None:
                     static_precontact_jaw_translation
                 ),
                 "precontact_pad_balance": precontact_pad_balance,
+                "loaded_pad_interior_preseat": loaded_pad_interior_preseat,
                 "source_contact_frame_correction": (
                     source_contact_frame_correction
                 ),

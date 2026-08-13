@@ -13,6 +13,7 @@ from run_putpot_skill_program import (
     _parser,
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
+    _measured_loaded_pad_interior_preseat,
     _offset_object_contact_frame,
     _pivot_source_corridor_from_measured_contacts,
     _pivot_source_corridor_grasp_endpoint,
@@ -91,6 +92,29 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         required + ["--target-left-quality-loaded-pad-pivot-closure"]
     )
     assert parsed.target_left_quality_loaded_pad_pivot_closure is True
+    parsed = _parser(
+        required
+        + [
+            "--target-left-quality-loaded-pad-interior-preseat-result",
+            "result.json",
+            "--target-left-quality-loaded-pad-interior-preseat-trace",
+            "trace.npz",
+            "--target-left-quality-loaded-pad-interior-preseat-controller-step",
+            "146",
+            "--target-left-quality-loaded-pad-interior-preseat-trace-step",
+            "145",
+        ]
+    )
+    assert (
+        parsed.target_left_quality_loaded_pad_interior_preseat_result
+        == "result.json"
+    )
+    assert parsed.target_left_quality_loaded_pad_interior_preseat_trace == "trace.npz"
+    assert (
+        parsed.target_left_quality_loaded_pad_interior_preseat_controller_step
+        == 146
+    )
+    assert parsed.target_left_quality_loaded_pad_interior_preseat_trace_step == 145
     parsed = _parser(
         required + ["--target-left-quality-interior-single-pad-closure"]
     )
@@ -357,6 +381,83 @@ def test_collision_clear_peer_pregrasp_moves_only_outward_position():
     assert receipt["translation_norm_m"] == pytest.approx(0.025)
     assert receipt["orientation_unchanged"]
     assert receipt["grasp_endpoint_unchanged"]
+
+
+def test_measured_loaded_pad_preseat_inverts_outside_surface_offset(tmp_path):
+    trace = tmp_path / "trace.npz"
+    centers = np.asarray(
+        [[-0.05, 0.0, 0.0], [0.05, 0.0, 0.0]], dtype=np.float64
+    )
+    np.savez_compressed(
+        trace,
+        pot_poses=np.asarray(
+            [
+                [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+                [0.7, 0.1, 0.8, 1.0, 0.0, 0.0, 0.0],
+            ]
+        ),
+        left_finger_forces_n=[[0.0, 0.0], [0.0, 0.8]],
+        left_pad_fractions=[[np.nan, np.nan], [np.nan, 0.2]],
+        left_pad_centers_world=np.repeat(centers[None], 2, axis=0),
+        partial_trace=np.asarray(False),
+    )
+    result = tmp_path / "result.json"
+    result.write_text(
+        json.dumps(
+            {
+                "protocol": {
+                    "handle_local_mpc": {
+                        "frame_receipts": [
+                            {
+                                "program_step": 2,
+                                "active_arm": "left",
+                                "receipt": {
+                                    "observed_frames": {
+                                        "active_pad_centers": centers.tolist(),
+                                        "active_handle_contact": [
+                                            0.06,
+                                            0.0,
+                                            0.0,
+                                            1.0,
+                                            0.0,
+                                            0.0,
+                                            0.0,
+                                        ],
+                                        "jaw_axis": [1.0, 0.0, 0.0],
+                                    },
+                                    "closure": {
+                                        "transverse_aligned_two_pad_triggered": True,
+                                        "loaded_pad_pivot_index": 1,
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+    )
+
+    receipt = _measured_loaded_pad_interior_preseat(
+        result,
+        trace,
+        2,
+        1,
+        lane_id="pair15",
+        loaded_pad_index=1,
+        physical_contact_threshold_n=0.1,
+        minimum_pad_fraction_margin=0.15,
+        maximum_pre_latch_motion_m=0.003,
+        maximum_translation_m=0.025,
+    )
+
+    assert receipt["signed_handle_surface_beyond_loaded_pad_m"] == pytest.approx(
+        0.01
+    )
+    assert receipt["translation_world_m"] == pytest.approx([0.02, 0.0, 0.0])
+    assert receipt["translation_norm_m"] == pytest.approx(0.02)
+    assert receipt["collision_clear_pregrasp_preserved"]
+    assert not receipt["pregrasp_translation_applied"]
 
 
 def test_critic_owned_precontact_pad_balance_maximizes_edge_margin(tmp_path):
