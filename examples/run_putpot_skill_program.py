@@ -392,6 +392,18 @@ def _offset_object_contact_frame(
     return contact
 
 
+def _pad_balance_mpc_reference_active(
+    active_arm, object_local_translation, depth_guard_released
+):
+    """Gate the deeper left reference behind collision-clear alignment."""
+
+    return bool(
+        active_arm == "left"
+        and object_local_translation is not None
+        and depth_guard_released
+    )
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -3703,6 +3715,9 @@ def main(argv: list[str] | None = None) -> None:
                             "mpc_contact_reference_translation_local_m"
                         ] = local_mpc_left_pad_balance_translation_local.tolist()
                         precontact_pad_balance["mpc_contact_reference_applied"] = True
+                        precontact_pad_balance[
+                            "mpc_contact_reference_release_gate"
+                        ] = "after_depth_guard_released"
                     else:
                         precontact_pad_balance["mpc_contact_reference_applied"] = False
                 if quality_combined_centering:
@@ -4534,10 +4549,10 @@ def main(argv: list[str] | None = None) -> None:
                                 samples[-1]["pot_pose"],
                                 diagnostic_target_contact_frames_local[active_arm],
                             )
-                            if (
-                                active_arm == "left"
-                                and local_mpc_left_pad_balance_translation_local
-                                is not None
+                            if _pad_balance_mpc_reference_active(
+                                active_arm,
+                                local_mpc_left_pad_balance_translation_local,
+                                local_mpc_left_depth_guard_released,
                             ):
                                 observed_handle = _offset_object_contact_frame(
                                     samples[-1]["pot_pose"],

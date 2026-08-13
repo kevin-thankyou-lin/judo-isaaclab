@@ -13,6 +13,7 @@ from run_putpot_skill_program import (
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
     _offset_object_contact_frame,
+    _pad_balance_mpc_reference_active,
     _quality_left_first_local_mpc_enabled,
     _quality_source_contact_requires_sequential_corridor,
     _quality_static_centering_contract_missing,
@@ -337,6 +338,14 @@ def test_object_local_pad_depth_offset_moves_live_mpc_contact_reference():
 
     assert shifted[:3] == pytest.approx([0.6, 0.21, 0.9])
     assert shifted[3:] == pytest.approx(contact[3:])
+
+
+def test_pad_balance_mpc_reference_waits_for_depth_guard_release():
+    translation = np.asarray([0.01, 0.0, 0.0])
+
+    assert not _pad_balance_mpc_reference_active("left", translation, False)
+    assert _pad_balance_mpc_reference_active("left", translation, True)
+    assert not _pad_balance_mpc_reference_active("right", translation, True)
 
 
 def _runner_args(tmp_path):
