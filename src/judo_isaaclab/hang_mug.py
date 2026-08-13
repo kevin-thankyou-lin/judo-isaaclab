@@ -353,7 +353,16 @@ def reanchor_right_grasp_from_observed_mug(
     observed_mug_pose: Any,
     observed_right_pose: Any,
 ) -> SkillTrajectory:
-    """Recompute the close path from the mug observed at handover pregrasp."""
+    """Recompute the close path without discontinuing the commanded wrist pose.
+
+    The observed mug determines the corrected physical contact target.  The
+    interpolation must nevertheless begin at the last *commanded* wrist pose,
+    not the lagging observed wrist pose.  With an integrated position
+    controller, resetting the desired pose to the observation makes the IK
+    delta vanish for one row and snaps the joint target back to the measured
+    joints.  That creates a visible jerk even though the Cartesian reanchor is
+    physically correct.
+    """
 
     required = ("handover_pregrasp", "right_grasp", "left_release")
     missing = [name for name in required if name not in trajectory.waypoint_steps]
@@ -367,22 +376,24 @@ def reanchor_right_grasp_from_observed_mug(
     left_release_end = steps["left_release"]
     lift_end = steps.get("handover_receiver_lift", left_release_end)
     nominal_contact = _pose(nominal_right_contact, "nominal_right_contact")
+    _pose(observed_right_pose, "observed_right_pose")
     corrected_grasp = compose_pose(observed_mug_pose, nominal_contact)
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    commanded_right_pose = right[start - 1].copy()
     if "handover_orient_clear" in steps:
         orient_end = steps["handover_orient_clear"]
         corrected_clear = transfer_pose(
             right[orient_end], right[grasp_end], corrected_grasp
         )
         right[start : orient_end + 1] = interpolate_poses(
-            observed_right_pose, corrected_clear, orient_end - start + 1
+            commanded_right_pose, corrected_clear, orient_end - start + 1
         )
         right[orient_end + 1 : approach_end + 1] = interpolate_poses(
             corrected_clear, corrected_grasp, approach_end - orient_end
         )
     else:
         right[start : approach_end + 1] = interpolate_poses(
-            observed_right_pose, corrected_grasp, approach_end - start + 1
+            commanded_right_pose, corrected_grasp, approach_end - start + 1
         )
     right[approach_end + 1 : grasp_end + 1] = corrected_grasp
     corrected_lift = transfer_pose(

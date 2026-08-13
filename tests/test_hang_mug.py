@@ -1908,6 +1908,15 @@ def test_handover_pregrasp_reanchors_close_to_observed_mug():
     assert adjusted.right_poses[start - 1] == pytest.approx(
         trajectory.right_poses[start - 1]
     )
+    # Feedback changes the downstream contact target without resetting the
+    # first command to the lagging observed wrist pose.  The latter caused a
+    # visible one-row IK/joint-target jerk in every accepted replay.
+    assert adjusted.right_poses[start] != pytest.approx(observed_right)
+    assert np.linalg.norm(
+        adjusted.right_poses[start, :3] - adjusted.right_poses[start - 1, :3]
+    ) < np.linalg.norm(
+        corrected[:3] - adjusted.right_poses[start - 1, :3]
+    )
     assert adjusted.right_poses[grasp_end] == pytest.approx(corrected)
     assert adjusted.right_poses[grasp_end + 1 : release_end + 1] == pytest.approx(
         np.repeat(corrected[None], release_end - grasp_end, axis=0)
