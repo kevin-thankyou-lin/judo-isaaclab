@@ -314,21 +314,47 @@ def object_path_collision_reports(
     paths = np.asarray(object_paths, dtype=np.float64)
     if paths.ndim == 2:
         paths = paths[None, ...]
-    manager = trimesh.collision.CollisionManager()
-    manager.add_object("tree", tree_mesh, transform=_pose_matrix(tree_pose))
-    manager.add_object("object_body", object_mesh)
+    try:
+        manager = trimesh.collision.CollisionManager()
+    except ValueError:
+        manager = None
+    if manager is not None:
+        manager.add_object("tree", tree_mesh, transform=_pose_matrix(tree_pose))
+        manager.add_object("object_body", object_mesh)
+    else:
+        clearance_reports = object_path_clearance_reports(
+            paths,
+            tree_pose=tree_pose,
+            object_mesh=object_mesh,
+            tree_mesh=tree_mesh,
+            required_clearance_m=1.0e-4,
+            sample_stride=sample_stride,
+            maximum_vertices=3000,
+        )
     reports = []
     for candidate_index, object_poses in enumerate(paths):
         sampled_steps = list(range(0, len(object_poses), sample_stride))
         if sampled_steps[-1] != len(object_poses) - 1:
             sampled_steps.append(len(object_poses) - 1)
-        collision_steps = []
-        for step in sampled_steps:
-            manager.set_transform(
-                "object_body", _pose_matrix(object_poses[step])
-            )
-            if manager.in_collision_internal():
-                collision_steps.append(step)
+        if manager is None:
+            clearances = clearance_reports[candidate_index][
+                "sampled_clearance_m"
+            ]
+            collision_steps = [
+                step
+                for step, clearance in zip(sampled_steps, clearances, strict=True)
+                if clearance < 1.0e-4
+            ]
+            method = "symmetric sampled surface clearance fallback"
+        else:
+            collision_steps = []
+            for step in sampled_steps:
+                manager.set_transform(
+                    "object_body", _pose_matrix(object_poses[step])
+                )
+                if manager.in_collision_internal():
+                    collision_steps.append(step)
+            method = "python-fcl exact mesh intersection"
         reports.append(
             {
                 "candidate_index": candidate_index,
@@ -341,10 +367,63 @@ def object_path_collision_reports(
                 "valid": not collision_steps,
                 "semantic_surface": "object_body",
                 "allowed_tree_contact": False,
-                "method": "python-fcl exact mesh intersection",
+                "method": method,
             }
         )
     return reports
+
+
+def sphere_path_collision_report(
+    points: np.ndarray,
+    *,
+    radius_m: float,
+    obstacles: dict[str, tuple[object, np.ndarray]],
+    sample_stride: int = 1,
+):
+    """Screen every sampled point as an exact sphere against named meshes.
+
+    This is useful for small hardware origins not represented by the task
+    object meshes, such as a wrist-camera center.  It is deliberately a proxy
+    receipt: articulated link collisions still need a live simulator contact
+    guard.
+    """
+    from scipy.spatial import cKDTree
+
+    values = np.asarray(points, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != 3 or not np.isfinite(values).all():
+        raise ValueError("sphere path points must have shape (steps, 3)")
+    radius = float(radius_m)
+    if not np.isfinite(radius) or radius <= 0.0:
+        raise ValueError("sphere radius must be positive")
+    if not obstacles:
+        raise ValueError("sphere collision screen requires at least one obstacle")
+    if sample_stride <= 0:
+        raise ValueError("sample stride must be positive")
+    queries = {}
+    for name, (mesh, pose) in obstacles.items():
+        world = mesh.copy()
+        world.apply_transform(_pose_matrix(pose))
+        queries[str(name)] = cKDTree(_sample_surface_points(world, 3000))
+    sampled_steps = list(range(0, len(values), sample_stride))
+    if sampled_steps[-1] != len(values) - 1:
+        sampled_steps.append(len(values) - 1)
+    collisions = {}
+    for step in sampled_steps:
+        hazards = sorted(
+            name
+            for name, query in queries.items()
+            if float(query.query(values[step], k=1, workers=1)[0]) <= radius
+        )
+        if hazards:
+            collisions[int(step)] = hazards
+    return {
+        "method": "sampled surface KD-tree sphere clearance",
+        "proxy_radius_m": radius,
+        "sampled_steps": sampled_steps,
+        "collision_steps": sorted(collisions),
+        "collided_obstacles_by_step": collisions,
+        "valid": not collisions,
+    }
 
 
 def select_robot_feasible_object_path(
