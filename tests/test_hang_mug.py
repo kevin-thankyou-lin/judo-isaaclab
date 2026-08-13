@@ -32,6 +32,7 @@ from run_hangmug_skill_program import (
     _bounded_handover_offset,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
+    _extend_pick_contact_along_approach,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
     _handover_boundary_receipt,
@@ -914,6 +915,19 @@ def test_handover_translation_offset_is_bounded_and_finite():
         _bounded_handover_offset([0.0, np.nan, 0.0])
     with pytest.raises(ValueError, match="exceeds 4 cm"):
         _bounded_handover_offset([0.041, 0.0, 0.0])
+
+
+def test_pick_contact_extension_follows_only_demonstrated_approach_axis():
+    pregrasp = _pose(0.4, 0.1, 0.9)
+    grasp = _pose(0.4, 0.08, 0.88)
+    extended = _extend_pick_contact_along_approach(pregrasp, grasp, 0.003)
+    direction = (grasp[:3] - pregrasp[:3]) / np.linalg.norm(
+        grasp[:3] - pregrasp[:3]
+    )
+    np.testing.assert_allclose(extended[:3], grasp[:3] + 0.003 * direction)
+    np.testing.assert_allclose(extended[3:], grasp[3:], atol=0.0)
+    with pytest.raises(ValueError, match=r"\[0, 0.01\]"):
+        _extend_pick_contact_along_approach(pregrasp, grasp, 0.011)
 
 
 def test_handover_local_pitch_rotates_only_receiver_orientation():

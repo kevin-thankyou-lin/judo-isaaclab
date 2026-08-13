@@ -337,6 +337,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "left_branch_point_steps": 35,
         "require_broad_pad_contact": True,
         "pick_lift_margin_m": 0.01,
+        "pick_contact_extension_m": 0.003,
         "handover_handle_frame_transfer": True,
         "handover_target_local_pitch_rad": 0.7853981633974483,
         "handover_orient_clearance_m": 0.08,
@@ -364,6 +365,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--left-branch-point-steps") + 1] == "35"
     assert "--require-broad-pad-contact" in command
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
+    assert float(command[command.index("--pick-contact-extension-m") + 1]) == 0.003
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
@@ -405,6 +407,9 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"pick_lift_margin_m": 0.031}))
     with pytest.raises(ValueError, match="pick lift margin"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"pick_contact_extension_m": 0.011}))
+    with pytest.raises(ValueError, match="pick contact extension"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"stable_support_steps": 241}))
     with pytest.raises(ValueError, match="stable support steps"):

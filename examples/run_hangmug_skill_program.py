@@ -85,6 +85,15 @@ def _parser() -> argparse.Namespace:
         help="Bounded extra clearance above the unchanged 5 cm Pick threshold.",
     )
     parser.add_argument(
+        "--pick-contact-extension-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded extension from the transferred open pregrasp through the "
+            "transferred contact pose along that demonstrated approach axis."
+        ),
+    )
+    parser.add_argument(
         "--branch-support-fraction",
         type=float,
         default=0.5,
@@ -958,6 +967,33 @@ def _bounded_pick_lift_margin(value: float) -> float:
     if not np.isfinite(margin) or not 0.0 <= margin <= 0.03:
         raise ValueError("pick lift margin must be finite and in [0, 0.03] m")
     return margin
+
+
+def _extend_pick_contact_along_approach(
+    pregrasp, grasp, extension_m: float
+) -> np.ndarray:
+    """Move only the pick contact deeper along its demonstrated approach axis."""
+    pregrasp_pose = np.asarray(pregrasp, dtype=np.float64)
+    grasp_pose = np.asarray(grasp, dtype=np.float64)
+    if (
+        pregrasp_pose.shape != (7,)
+        or grasp_pose.shape != (7,)
+        or not np.isfinite(pregrasp_pose).all()
+        or not np.isfinite(grasp_pose).all()
+    ):
+        raise ValueError("pick pregrasp and grasp must contain seven finite values")
+    extension = float(extension_m)
+    if not np.isfinite(extension) or not 0.0 <= extension <= 0.01:
+        raise ValueError("pick contact extension must be finite and in [0, 0.01] m")
+    result = grasp_pose.copy()
+    if extension == 0.0:
+        return result
+    approach = grasp_pose[:3] - pregrasp_pose[:3]
+    distance = float(np.linalg.norm(approach))
+    if distance <= 1.0e-6:
+        raise ValueError("pick contact extension requires a nonzero approach axis")
+    result[:3] += extension * approach / distance
+    return result
 
 
 def _branch_support_seated_pose(value, seat_down_m: float) -> np.ndarray:
@@ -2253,7 +2289,12 @@ def _build_skill(
             local_position_scale=target_parts.body_size / source_parts.body_size,
         )
 
-    left_grasp = transfer_mug_frame("left_grasp", "left")
+    left_pregrasp = transfer_mug_frame("left_pregrasp", "left")
+    left_grasp = _extend_pick_contact_along_approach(
+        left_pregrasp,
+        transfer_mug_frame("left_grasp", "left"),
+        args.pick_contact_extension_m,
+    )
     left_contact = compose_pose(inverse_pose(target_geometry.root_pose), left_grasp)
     source_dual = frames["dual_grasp"]
     source_dual_body = compose_pose(
@@ -2386,7 +2427,7 @@ def _build_skill(
 
     program = HangMugSkillProgram(left_start, right_start)
     program.semantic_left_grasp(
-        transfer_mug_frame("left_pregrasp", "left"),
+        left_pregrasp,
         left_grasp,
         left_lift,
         approach_steps=100,
@@ -2550,6 +2591,11 @@ def _frame(env, sample):
 def main() -> None:
     args = _parser()
     _require_proven_control_defaults(args)
+    _extend_pick_contact_along_approach(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        np.asarray([0.01, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.pick_contact_extension_m,
+    )
     if args.handover_confirm_steps < 0:
         raise ValueError("--handover-confirm-steps must be nonnegative")
     if not 0 <= args.branch_orient_steps <= 90:
@@ -3629,6 +3675,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["pick_contact_extension_m"] = float(
+            args.pick_contact_extension_m
         )
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
