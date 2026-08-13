@@ -1991,7 +1991,7 @@ def _direct_phase_contract_receipt(
         "right_gripper_never_reclosed": never_reclosed,
         "post_release_return_command_open": open_return,
         "post_release_return_physically_released": return_released,
-        "left_observer_held": observer_error <= 0.03,
+        "left_observer_held": bool(observer_error <= 0.03),
         "return_endpoint_is_demonstrated_rest_pose": bool(
             np.allclose(rest_after, rest_before, atol=1.0e-9, rtol=0.0)
         ),
