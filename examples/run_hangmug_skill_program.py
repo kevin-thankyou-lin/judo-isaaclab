@@ -1453,6 +1453,54 @@ def _handover_wave_live_row(
     }
 
 
+def _handover_contact_boundary_receipt(
+    nominal_right_contact: object,
+    sample: dict[str, object],
+    live_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    """Serialize the physical handover boundary before a fail-closed reanchor."""
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    nominal = np.asarray(nominal_right_contact, dtype=np.float64)
+    mug = np.asarray(sample["mug_pose"], dtype=np.float64)
+    observed_right = np.asarray(sample["right_eef_pose"], dtype=np.float64)
+    desired_right = compose_pose(mug, nominal)
+    translation = observed_right[:3] - desired_right[:3]
+    rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
+    rotation_error_rad = float(
+        2.0 * np.arccos(np.clip(abs(rotation_error[3]), 0.0, 1.0))
+    )
+    return {
+        "checked_after_step": int(sample["step"]),
+        "nominal_right_contact_mug_frame": nominal.tolist(),
+        "observed_mug_pose": mug.tolist(),
+        "observed_right_eef_pose": observed_right.tolist(),
+        "desired_right_eef_pose_from_live_mug": desired_right.tolist(),
+        "translation_residual_m": translation.tolist(),
+        "translation_residual_norm_m": float(np.linalg.norm(translation)),
+        "rotation_residual_rad": rotation_error_rad,
+        "left_grasp": bool(sample["left_grasp"]),
+        "right_grasp": bool(sample["right_grasp"]),
+        "grasp_assist_engaged": {
+            side: bool(sample["grasp_assist_engaged"].get(side, False))
+            for side in ("left", "right")
+        },
+        "left_finger_forces_n": [
+            float(value) for value in sample["left_finger_forces_n"]
+        ],
+        "left_pad_fractions": [
+            float(value) for value in sample["left_pad_fractions"]
+        ],
+        "right_finger_forces_n": [
+            float(value) for value in sample["right_finger_forces_n"]
+        ],
+        "right_pad_fractions": [
+            float(value) for value in sample["right_pad_fractions"]
+        ],
+        "handover_live_rows": list(live_rows),
+    }
+
+
 def _sample_has_force_backed_pad_contact(
     sample: dict[str, object], side: str
 ) -> bool:
@@ -2823,6 +2871,7 @@ def main() -> None:
         if path and os.path.isfile(path):
             os.unlink(path)
     # Validate cheap dataset/asset provenance before the expensive app launch.
+    failure_diagnostics = None
     source_receipt = _source_dataset_receipt(
         args.source_dataset, args.episode, args.expected_source_sha256
     )
@@ -3092,6 +3141,16 @@ def main() -> None:
                     "handover_contact_acquire" in trajectory.waypoint_steps
                     and semantic_step == trajectory.waypoint_steps["right_grasp"] + 1
                 ):
+                    failure_diagnostics = _handover_contact_boundary_receipt(
+                        nominal_right_contact,
+                        samples[-1],
+                        handover_wave_live_rows,
+                    )
+                    print(
+                        "HANGMUG_HANDOVER_CONTACT_BOUNDARY="
+                        + json.dumps(failure_diagnostics, sort_keys=True),
+                        flush=True,
+                    )
                     entry = _handover_contact_acquire_guard_receipt(
                         samples[-1], phase="entry"
                     )
@@ -3818,6 +3877,7 @@ def main() -> None:
                 {
                     "status": "failed",
                     "error": f"{type(error).__name__}: {error}",
+                    "failure_diagnostics": failure_diagnostics,
                     "provenance": {
                         "source_dataset": source_receipt,
                         "target_state_template": os.path.abspath(target_state_template),

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
@@ -42,6 +43,61 @@ def test_evidence_runner_disables_unused_environment_hdf5_recorder():
     source = runner.read_text()
 
     assert "disable_env_recorders=True" in source
+
+
+def test_handover_audit_uses_force_backed_giver_contact_at_atomic_swap():
+    names = np.asarray(
+        [
+            "handover_pregrasp",
+            "right_grasp_settle",
+            "right_grasp",
+            "right_grasp",
+        ]
+    )
+    actions = np.zeros((len(names), 14), dtype=np.float64)
+    actions[:, 13] = [-0.0475, -0.0475, -0.02, 0.0]
+    trace = {
+        "semantic_waypoints": names,
+        "actions": actions,
+        "left_grasp": np.ones(len(names), dtype=bool),
+        "left_assist_engaged": np.asarray([True, True, True, False]),
+        "right_grasp": np.asarray([False, False, False, True]),
+        "right_assist_engaged": np.asarray([False, False, False, True]),
+        "left_finger_forces_n": np.full((len(names), 2), 2.0),
+        "left_pad_fractions": np.full((len(names), 2), 0.5),
+        "right_finger_forces_n": np.asarray(
+            [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [2.0, 2.0]]
+        ),
+        "right_pad_fractions": np.asarray(
+            [[np.nan, np.nan], [np.nan, np.nan], [np.nan, np.nan], [0.5, 0.5]]
+        ),
+    }
+    result = {
+        "handover_wave_contract": {
+            "passed": True,
+            "first_broad_right_contact_trace_row": 3,
+            "plan_screens": {
+                "clear_pregrasp": {"passed": True},
+                "open_approach": {"passed": True},
+            },
+            "live_physx_contact_guard": {
+                "passed": True,
+                "expected_rows": len(names),
+                "observed_rows": len(names),
+                "first_right_mug_contact": {"waypoint": "right_grasp_settle"},
+            },
+        }
+    }
+
+    audit = campaign._handover_wave_audit(result, trace)
+
+    assert audit["passed"] is True
+    assert audit["checks"][
+        "broad_force_backed_contact_reached_while_giver_held"
+    ] is True
+    trace["left_finger_forces_n"][-1] = [0.0, 0.0]
+    with pytest.raises(RuntimeError, match="handover wave audit failed"):
+        campaign._handover_wave_audit(result, trace)
 
 
 def test_guarded_workload_imports_lane_judo_package_before_shared_install(

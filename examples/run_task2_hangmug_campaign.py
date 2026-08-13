@@ -917,6 +917,8 @@ def _handover_wave_audit(result: dict, trace) -> dict:
         "left_assist_engaged",
         "right_grasp",
         "right_assist_engaged",
+        "left_finger_forces_n",
+        "left_pad_fractions",
         "right_finger_forces_n",
         "right_pad_fractions",
     )
@@ -936,12 +938,19 @@ def _handover_wave_audit(result: dict, trace) -> dict:
     )
     secure_rows = np.flatnonzero(secure)
     first_secure = None if not len(secure_rows) else int(secure_rows[0])
+    left_forces = np.asarray(trace["left_finger_forces_n"], dtype=np.float64)
+    left_fractions = np.asarray(trace["left_pad_fractions"], dtype=np.float64)
+    left_force_backed = (
+        np.asarray(trace["left_grasp"], dtype=bool)
+        & np.isfinite(left_forces).all(axis=1)
+        & np.isfinite(left_fractions).all(axis=1)
+        & (left_forces > 0.0).all(axis=1)
+        & (left_fractions >= 0.15).all(axis=1)
+        & (left_fractions <= 0.85).all(axis=1)
+    )
     giver_held = bool(
         first_secure is not None
-        and np.asarray(trace["left_grasp"], dtype=bool)[
-            handover_rows[handover_rows <= first_secure]
-        ].all()
-        and np.asarray(trace["left_assist_engaged"], dtype=bool)[
+        and left_force_backed[
             handover_rows[handover_rows <= first_secure]
         ].all()
     )

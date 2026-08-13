@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -31,6 +32,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
+    _handover_contact_boundary_receipt,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _direct_segment_live_row,
@@ -206,6 +208,42 @@ def test_contact_force_receipt_attributes_only_nonzero_body_forces():
     )
 
     assert receipt == {"colliding_link": 5.0}
+
+
+def test_handover_contact_boundary_receipt_is_json_serializable():
+    sample = {
+        "step": np.int64(12),
+        "mug_pose": [0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
+        "right_eef_pose": [0.11, 0.18, 0.33, 1.0, 0.0, 0.0, 0.0],
+        "left_grasp": np.bool_(True),
+        "right_grasp": np.bool_(True),
+        "grasp_assist_engaged": {
+            "left": np.bool_(False),
+            "right": np.bool_(True),
+        },
+        "left_finger_forces_n": np.asarray([2.0, 3.0]),
+        "left_pad_fractions": np.asarray([0.4, 0.6]),
+        "right_finger_forces_n": np.asarray([4.0, 5.0]),
+        "right_pad_fractions": np.asarray([0.3, 0.7]),
+    }
+    live_rows = [
+        {
+            "waypoint": "right_grasp",
+            "mug_contact_force_by_right_body_n": {"right_finger": 5.0},
+            "passed": True,
+        }
+    ]
+
+    receipt = _handover_contact_boundary_receipt(
+        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        sample,
+        live_rows,
+    )
+
+    json.dumps(receipt, sort_keys=True)
+    assert receipt["translation_residual_m"] == pytest.approx([0.01, -0.02, 0.03])
+    assert receipt["grasp_assist_engaged"] == {"left": False, "right": True}
+    assert receipt["handover_live_rows"] == live_rows
 
 
 def test_direct_segment_live_row_attributes_environment_and_mug_by_body():
