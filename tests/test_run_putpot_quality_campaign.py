@@ -61,6 +61,17 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     )
     assert parsed.target_left_measured_contact_pivot_trace == "trace.npz"
     assert parsed.target_left_measured_contact_pivot_step == 136
+    parsed = _parser(
+        required
+        + [
+            "--target-left-measured-contact-pivot-pregrasp-radial-clearance-m",
+            "0.05",
+        ]
+    )
+    assert (
+        parsed.target_left_measured_contact_pivot_pregrasp_radial_clearance_m
+        == pytest.approx(0.05)
+    )
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
@@ -136,6 +147,32 @@ def test_measured_contact_pivot_holds_strong_contact_and_deepens_weak_pad(tmp_pa
     assert receipt["predicted_strong_contact_pivot_drift_m"] < 1.0e-12
     assert receipt["rotation_rad"] == pytest.approx(0.2759809, abs=1.0e-5)
     assert receipt["rotation_rad"] < receipt["maximum_rotation_rad"]
+
+    cleared_pregrasp, cleared_grasp, cleared_receipt = (
+        _pivot_source_corridor_from_measured_contacts(
+            pregrasp,
+            grasp,
+            trace,
+            0,
+            lane_id=lane_id,
+            minimum_force_n=1.0,
+            pregrasp_radial_clearance_m=0.05,
+            target_contact_normal_world=[3.0, 4.0, 0.0],
+        )
+    )
+    np.testing.assert_allclose(
+        cleared_pregrasp[:3], pregrasp[:3] + [0.03, 0.04, 0.0]
+    )
+    np.testing.assert_array_equal(cleared_pregrasp[3:], cleared_grasp[3:])
+    np.testing.assert_array_equal(cleared_grasp, routed_grasp)
+    assert cleared_receipt["pregrasp_radial_clearance_m"] == pytest.approx(0.05)
+    assert cleared_receipt["maximum_pregrasp_radial_clearance_m"] == pytest.approx(
+        0.05
+    )
+    assert cleared_receipt["pregrasp_radial_clearance_world_m"] == pytest.approx(
+        [0.03, 0.04, 0.0]
+    )
+    assert not cleared_receipt["pregrasp_position_unchanged"]
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():

@@ -419,6 +419,9 @@ def _pivot_source_corridor_from_measured_contacts(
     minimum_force_n: float,
     target_fraction: float = 0.25,
     maximum_rotation_rad: float = 0.35,
+    pregrasp_radial_clearance_m: float = 0.0,
+    target_contact_normal_world=None,
+    maximum_pregrasp_radial_clearance_m: float = 0.05,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
     """Pivot about the measured interior contact to deepen the weak pad.
 
@@ -453,6 +456,25 @@ def _pivot_source_corridor_from_measured_contacts(
         0.0 < maximum_rotation_rad <= 0.35
     ):
         raise ValueError("measured contact pivot rotation bound is invalid")
+    if (
+        not np.isfinite(pregrasp_radial_clearance_m)
+        or not np.isfinite(maximum_pregrasp_radial_clearance_m)
+        or pregrasp_radial_clearance_m < 0.0
+        or maximum_pregrasp_radial_clearance_m <= 0.0
+        or pregrasp_radial_clearance_m > maximum_pregrasp_radial_clearance_m
+    ):
+        raise ValueError("measured pivot pregrasp radial clearance is invalid")
+    contact_normal = None
+    if pregrasp_radial_clearance_m > 0.0:
+        contact_normal = np.asarray(
+            target_contact_normal_world, dtype=np.float64
+        )
+        if contact_normal.shape != (3,) or not np.all(np.isfinite(contact_normal)):
+            raise ValueError("target contact normal must be a finite three-vector")
+        contact_normal_norm = float(np.linalg.norm(contact_normal))
+        if contact_normal_norm <= 1.0e-9:
+            raise ValueError("target contact normal must be nonzero")
+        contact_normal /= contact_normal_norm
 
     with np.load(path, allow_pickle=False) as trace:
         if bool(np.asarray(trace["partial_trace"]).item()):
@@ -567,6 +589,10 @@ def _pivot_source_corridor_from_measured_contacts(
     result[3:] /= np.linalg.norm(result[3:])
     oriented_pregrasp = pregrasp.copy()
     oriented_pregrasp[3:] = result[3:]
+    if contact_normal is not None:
+        oriented_pregrasp[:3] += (
+            float(pregrasp_radial_clearance_m) * contact_normal
+        )
     transformed_pivot_world = result[:3] + quaternion_rotate(
         result[3:], pivot_local
     )
@@ -598,6 +624,15 @@ def _pivot_source_corridor_from_measured_contacts(
         "pregrasp_position_unchanged": bool(
             np.array_equal(oriented_pregrasp[:3], pregrasp[:3])
         ),
+        "pregrasp_radial_clearance_m": float(pregrasp_radial_clearance_m),
+        "maximum_pregrasp_radial_clearance_m": float(
+            maximum_pregrasp_radial_clearance_m
+        ),
+        "pregrasp_radial_clearance_world_m": (
+            np.zeros(3, dtype=np.float64)
+            if contact_normal is None
+            else float(pregrasp_radial_clearance_m) * contact_normal
+        ).tolist(),
         "pregrasp_orientation_changed": bool(
             not np.array_equal(oriented_pregrasp[3:], pregrasp[3:])
         ),
@@ -1112,6 +1147,14 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-left-measured-contact-pivot-step",
         type=int,
         help="Sample step in the measured-contact pivot trace.",
+    )
+    parser.add_argument(
+        "--target-left-measured-contact-pivot-pregrasp-radial-clearance-m",
+        type=float,
+        help=(
+            "Pair-owned opt-in radial stand-off for the open measured-pivot "
+            "pregrasp. The measured grasp endpoint and controller are unchanged."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -3164,6 +3207,26 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError(
                 "measured contact pivot is exclusive with a geometry balance override"
             )
+    measured_pivot_pregrasp_clearance = (
+        args.target_left_measured_contact_pivot_pregrasp_radial_clearance_m
+    )
+    if measured_pivot_pregrasp_clearance is not None:
+        if not measured_contact_pivot_requested:
+            raise ValueError(
+                "measured pivot pregrasp clearance requires a measured contact pivot"
+            )
+        if not (preorientation_requested and radial_waypoint_requested):
+            raise ValueError(
+                "measured pivot pregrasp clearance requires collision-clear "
+                "preorientation and a radial waypoint"
+            )
+        if (
+            not np.isfinite(measured_pivot_pregrasp_clearance)
+            or not 0.0 < measured_pivot_pregrasp_clearance <= 0.05
+        ):
+            raise ValueError(
+                "measured pivot pregrasp clearance must be in (0, 0.05] m"
+            )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -4101,6 +4164,10 @@ def main(argv: list[str] | None = None) -> None:
                     else:
                         precontact_pad_balance["mpc_contact_reference_applied"] = False
                 if measured_contact_pivot_requested:
+                    target_contact_normal_world = rotate_marker_vector(
+                        target_contact_world[3:],
+                        np.asarray([0.0, 0.0, 1.0], dtype=np.float64),
+                    )
                     (
                         desired_pregrasp,
                         desired_grasp,
@@ -4114,6 +4181,10 @@ def main(argv: list[str] | None = None) -> None:
                         minimum_force_n=float(
                             quality_config.grasp["minimum_force_n"]
                         ),
+                        pregrasp_radial_clearance_m=float(
+                            measured_pivot_pregrasp_clearance or 0.0
+                        ),
+                        target_contact_normal_world=target_contact_normal_world,
                     )
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
