@@ -34,6 +34,7 @@ from run_hangmug_skill_program import (
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _extend_pick_contact_along_approach,
+    _return_contact_clearance_receipt,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
     _handover_boundary_receipt,
@@ -87,6 +88,51 @@ def test_contact_group_force_attribution_is_body_aligned_and_sparse():
         _contact_group_body_forces(
             (ContactView(1.0),), ("right/link_1", "right/link_2"), 1.0 / 30.0
         )
+
+
+def _return_clearance_row(environment_force, mug_force, prior_rows):
+    receipt = _return_contact_clearance_receipt(
+        environment_force, mug_force, prior_rows
+    )
+    return {
+        "waypoint": "post_release_return",
+        "maximum_environment_contact_force_n": environment_force,
+        "maximum_mug_contact_force_n": mug_force,
+        "return_contact_clearance": receipt,
+        "passed": receipt["passed"],
+    }
+
+
+def test_post_release_contact_must_clear_monotonically_within_eight_rows():
+    rows = []
+    for environment_force in (5.3, 4.7, 4.0, 3.2, 2.1, 1.0, 0.2, 0.0):
+        row = _return_clearance_row(environment_force, 0.0, rows)
+        rows.append(row)
+    assert all(row["passed"] for row in rows)
+    assert rows[0]["return_contact_clearance"]["grace_allowed"]
+    assert rows[-1]["return_contact_clearance"]["contact_free"]
+
+
+def test_post_release_contact_rejects_excessive_or_increasing_force():
+    excessive = _return_clearance_row(6.01, 0.0, [])
+    assert not excessive["passed"]
+    first = _return_clearance_row(3.0, 0.0, [])
+    increased = _return_clearance_row(3.26, 0.0, [first])
+    assert first["passed"]
+    assert not increased["passed"]
+
+
+def test_post_release_contact_cannot_persist_or_reappear():
+    rows = []
+    for _ in range(8):
+        row = _return_clearance_row(1.0, 0.0, rows)
+        rows.append(row)
+    assert all(row["passed"] for row in rows[:-1])
+    assert not rows[-1]["passed"]
+
+    cleared = [_return_clearance_row(0.0, 0.0, [])]
+    reappeared = _return_clearance_row(0.1, 0.0, cleared)
+    assert not reappeared["passed"]
 
 
 def test_quality_wave_contact_reports_cover_both_arms_and_tree():
