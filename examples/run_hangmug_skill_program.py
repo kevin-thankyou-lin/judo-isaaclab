@@ -24,6 +24,9 @@ PROVEN_CONTROL_DEFAULTS = {
     "max_position_step": 0.025,
     "max_rotation_step": 0.16,
 }
+RIGHT_WRIST_CAMERA_OPTICAL_FORWARD_IN_LINK6 = np.asarray(
+    [0.00114977848, -0.434658749, 0.900594498], dtype=np.float64
+)
 
 
 def _parser() -> argparse.Namespace:
@@ -137,6 +140,15 @@ def _parser() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Bounded local-Y rotation of the fixed receiving waypoint.",
+    )
+    parser.add_argument(
+        "--handover-target-camera-clockwise-roll-rad",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded clockwise roll about the away-pointing right-wrist "
+            "camera optical-forward axis."
+        ),
     )
     parser.add_argument(
         "--handover-straddle-local-x-m",
@@ -1011,6 +1023,30 @@ def _handover_target_with_local_pitch(pose, angle_rad: float) -> np.ndarray:
     result[3:] = quaternion_multiply(
         result[3:], np.asarray([np.cos(half), 0.0, np.sin(half), 0.0])
     )
+    result[3:] /= np.linalg.norm(result[3:])
+    return result
+
+
+def _handover_target_with_camera_clockwise_roll(
+    pose, angle_rad: float
+) -> np.ndarray:
+    """Roll in place clockwise in the rendered right-wrist camera frame."""
+    from judo_isaaclab.put_marker import _pose, quaternion_multiply
+
+    angle = float(angle_rad)
+    if not np.isfinite(angle) or not 0.0 <= angle <= np.pi / 4.0:
+        raise ValueError(
+            "handover target camera clockwise roll must be finite and in "
+            "[0, 45] degrees"
+        )
+    result = _pose(pose, "handover target").copy()
+    axis = RIGHT_WRIST_CAMERA_OPTICAL_FORWARD_IN_LINK6
+    axis = axis / np.linalg.norm(axis)
+    half = 0.5 * angle
+    local_rotation = np.concatenate(
+        (np.asarray([np.cos(half)]), axis * np.sin(half))
+    )
+    result[3:] = quaternion_multiply(result[3:], local_rotation)
     result[3:] /= np.linalg.norm(result[3:])
     return result
 
@@ -2297,6 +2333,9 @@ def _build_skill(
     right_grasp = _handover_target_with_local_pitch(
         right_grasp, args.handover_target_local_pitch_rad
     )
+    right_grasp = _handover_target_with_camera_clockwise_roll(
+        right_grasp, args.handover_target_camera_clockwise_roll_rad
+    )
     right_grasp = _handover_target_with_local_straddle(
         right_grasp, args.handover_straddle_local_x_m
     )
@@ -2562,6 +2601,10 @@ def main() -> None:
     _handover_target_with_local_pitch(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
         args.handover_target_local_pitch_rad,
+    )
+    _handover_target_with_camera_clockwise_roll(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.handover_target_camera_clockwise_roll_rad,
     )
     _handover_target_with_local_straddle(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -3630,6 +3673,9 @@ def main() -> None:
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
         )
+        result["protocol"]["parameters"][
+            "handover_target_camera_clockwise_roll_rad"
+        ] = float(args.handover_target_camera_clockwise_roll_rad)
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
         )
