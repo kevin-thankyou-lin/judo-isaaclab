@@ -49,6 +49,7 @@ from run_hangmug_skill_program import (
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
+    _release_left_assist_after_secure_receiver,
     _requires_observed_handover_reanchor,
     _require_reusable_pick_boundary,
     _source_pick_prefix_steps,
@@ -852,6 +853,43 @@ def test_authored_boundaries_release_both_grasp_assists():
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
     assert right.calls[-1] == ([True], [True])
+
+
+def test_left_assist_releases_only_after_sampled_secure_receiver():
+    import torch
+
+    class Assist:
+        def __init__(self):
+            self.calls = []
+
+        def update(self, *, engage, disable):
+            self.calls.append((engage.tolist(), disable.tolist()))
+
+    left = Assist()
+    env = SimpleNamespace(
+        robot=SimpleNamespace(
+            is_grasping=lambda: (torch.tensor([True]), torch.tensor([True]))
+        ),
+        grasp_assists={"left": left},
+    )
+    sample = {
+        "right_grasp": True,
+        "right_finger_forces_n": [4.0, 3.0],
+        "right_pad_fractions": [0.35, 0.65],
+        "grasp_assist_engaged": {"left": True, "right": True},
+    }
+
+    assert _release_left_assist_after_secure_receiver(
+        env, sample, "right_grasp"
+    ) is True
+    assert left.calls == [([True], [True])]
+
+    left.calls.clear()
+    sample["right_pad_fractions"] = [0.1, 0.65]
+    assert _release_left_assist_after_secure_receiver(
+        env, sample, "right_grasp"
+    ) is False
+    assert left.calls == []
 
 
 def test_replay_acceptance_omits_only_skill_driven_right_assist_check():

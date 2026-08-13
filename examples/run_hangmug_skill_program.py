@@ -883,6 +883,31 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
         )
 
 
+def _release_left_assist_after_secure_receiver(env, sample, waypoint: str) -> bool:
+    """Drop the giver assist only after a sampled broad receiver grasp.
+
+    The quality-wave handover keeps the legacy task-manager overlap release
+    disabled.  This post-sample transition preserves the evidence row on which
+    both the giver and receiver are securely supported, then releases the giver
+    before its authored retreat begins.
+    """
+    if waypoint not in {"right_grasp", "handover_contact_acquire"}:
+        return False
+    if not _sample_has_broad_contact(sample, "right"):
+        return False
+    left_assist = env.grasp_assists.get("left")
+    if left_assist is None or not sample["grasp_assist_engaged"].get("left", False):
+        return False
+    import torch
+
+    left_grasping, _ = env.robot.is_grasping()
+    left_assist.update(
+        engage=left_grasping,
+        disable=torch.ones_like(left_grasping, dtype=torch.bool),
+    )
+    return True
+
+
 def _schema_aware_success_acceptance(
     checks: dict[str, bool], *, coded_skill: bool
 ) -> dict[str, bool]:
@@ -2710,6 +2735,12 @@ def main() -> None:
         grasp_assistance = _validate_datagen_grasp_assists(
             env, override["grasp_assistance_config"]
         )
+        defer_left_assist_to_secure_receiver = bool(
+            args.direct_rest_to_preinsert_steps
+        )
+        env._defer_left_assist_release_to_secure_receiver = (
+            defer_left_assist_to_secure_receiver
+        )
         configured_gains_start = env.robot.spec.controller_gains()
         configured_gains_start_sha256 = sha256_json(configured_gains_start)
         if (
@@ -2831,6 +2862,7 @@ def main() -> None:
             "open_approach": None,
         }
         handover_wave_live_rows = []
+        left_assist_secure_receiver_release_step = None
         direct_plan_screens = {"outbound": None, "return": None}
         direct_live_rows = []
         if args.render:
@@ -3070,6 +3102,14 @@ def main() -> None:
             samples.append(sample)
             actions.append(action[0].detach().cpu().numpy()); mug_poses.append(sample["mug_pose"]); left_eef.append(sample["left_eef_pose"]); right_eef.append(sample["right_eef_pose"])
             trace_stages.append(stage); trace_waypoints.append(waypoint)
+            if (
+                defer_left_assist_to_secure_receiver
+                and left_assist_secure_receiver_release_step is None
+                and _release_left_assist_after_secure_receiver(
+                    env, sample, waypoint
+                )
+            ):
+                left_assist_secure_receiver_release_step = step
             if semantic_step is not None:
                 semantic_left_eef.append(sample["left_eef_pose"])
                 semantic_right_eef.append(sample["right_eef_pose"])
@@ -3535,6 +3575,14 @@ def main() -> None:
                 "broad_pad_contact": broad_pad_contact,
             },
             "handover_wave_contract": handover_wave_contract,
+            "handover_assist_lifecycle": {
+                "legacy_simultaneous_grasp_release_deferred": (
+                    defer_left_assist_to_secure_receiver
+                ),
+                "left_assist_released_after_secure_receiver_step": (
+                    left_assist_secure_receiver_release_step
+                ),
+            },
             "post_handover_setup": {
                 "right_start_configuration": right_start_configuration,
                 "left_branch_point_ordered_after_right_return": bool(
