@@ -39,6 +39,14 @@ KEYFRAMES = Path("results/task2/source/attempt_001_compact_replay/source_keyfram
 TIMING = Path("results/task2/pairs/000001/attempt_004_handover_confirm_hold/accepted_runtime_timing.json")
 RESULTS = Path("results/task2")
 MIDDLE_ROW_BRANCHES = frozenset({"branch_layer_2_a", "branch_layer_2_b"})
+BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
+    "branch_orient_steps",
+    "insert_clearance_m",
+    "branch_approach_height_m",
+    "branch_roll_offset_rad",
+    "branch_support_fraction",
+    "branch_support_seat_down_m",
+})
 LD_LIBRARY_PATH = ":".join(
     (
         "/home/linke/miniforge3/envs/yam_lab/lib",
@@ -230,9 +238,7 @@ def _repair_command(
                 str(strategy["handover_post_release_lift_steps"]),
             ])
     elif selection["actual_repair_boundary"] == "pick":
-        if set(strategy) - {
-            "branch_support_fraction", "branch_support_seat_down_m"
-        }:
+        if set(strategy) - BRANCH_SUFFIX_STRATEGY_FIELDS:
             raise ValueError("pair repair strategy is valid only from reset")
         arguments.append("--reuse-source-pick-prefix")
     else:
@@ -291,11 +297,7 @@ def _repair_strategy(index: int) -> dict:
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
-    late_support_fields = {
-        "branch_orient_steps", "insert_clearance_m", "branch_approach_height_m",
-        "branch_roll_offset_rad",
-        "branch_support_fraction", "branch_support_seat_down_m",
-    }
+    late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
     handover_fields = allowed - late_support_fields - {"pick_lift_margin_m"}
     strategy = {}
     if "handover_handle_frame_transfer" in value:

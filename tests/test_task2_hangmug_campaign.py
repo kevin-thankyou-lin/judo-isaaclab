@@ -372,6 +372,23 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
         campaign._repair_strategy(4)
 
 
+def test_branch_approach_height_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "_common_workload", lambda *_: ["--device", "cpu"])
+    monkeypatch.setattr(campaign, "_guarded", lambda _attempt, workload: workload)
+    selection = campaign._repair_selection("alignment", "handover")
+
+    command = campaign._repair_command(
+        8,
+        tmp_path / "attempt",
+        tmp_path / "classification/result.json",
+        selection,
+        {"branch_approach_height_m": 0.0},
+    )
+
+    assert "--reuse-source-pick-prefix" in command
+    assert command[command.index("--branch-approach-height-m") + 1] == "0.0"
+
+
 @pytest.mark.parametrize(
     "failed,last_completed",
     (
