@@ -1020,6 +1020,9 @@ def _manifest(
         "immutable": True,
         "purpose": f"same-index Task2 HangMug {method}",
         "judo_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
+        "gear_head": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=GEAR_REPO, text=True
+        ).strip(),
         "pair_index": index,
         "source_dataset": str(SOURCE),
         "source_sha256": SOURCE_SHA256,
@@ -1042,6 +1045,7 @@ def _manifest(
         "guard_sha256": _sha256(GUARD),
         "ledger_predecessor_sha256": ledger_sha256,
         "method": method,
+        "internal_hdf5_recorder_enabled": False,
         "launch_command": command,
     }
     if classification is not None:
