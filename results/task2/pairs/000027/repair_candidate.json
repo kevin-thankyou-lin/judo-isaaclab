@@ -7,7 +7,12 @@
   "handover_orient_local_y_clearance_m": 0.1075,
   "handover_orient_steps": 60,
   "handover_reanchor_after_orient_clear": true,
-  "handover_seat_local_z_m": 0.031989788666255294,
-  "handover_straddle_local_x_m": 0.04202867399612837,
-  "handover_target_camera_clockwise_roll_rad": 0.7504915783575618
+  "handover_seat_local_z_m": 0.035739788666255295,
+  "handover_straddle_local_x_m": 0.04552867399612837,
+  "handover_target_camera_clockwise_roll_rad": 0.7853981633974483,
+  "handover_target_offset_m": [
+    4.256063367552219e-05,
+    -0.0006327261203169026,
+    -0.00040043257750819734
+  ]
 }
