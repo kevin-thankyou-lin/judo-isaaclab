@@ -521,6 +521,7 @@ def reanchor_branch_transport_contact(
     *,
     completed_waypoint: str = "left_release",
     post_release_return_rotation_hold_steps: int = 0,
+    post_release_return_brake_rotation_vector: Any | None = None,
 ) -> SkillTrajectory:
     """Reanchor future transport to the currently observed right contact."""
 
@@ -574,6 +575,7 @@ def reanchor_branch_transport_contact(
             trajectory.right_poses[direct_return],
             direct_return - release_end,
             rotation_hold_steps=post_release_return_rotation_hold_steps,
+            brake_rotation_vector=post_release_return_brake_rotation_vector,
         )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
@@ -590,6 +592,7 @@ def _interpolate_open_return(
     steps: int,
     *,
     rotation_hold_steps: int = 0,
+    brake_rotation_vector: Any | None = None,
 ) -> np.ndarray:
     """Interpolate one straight return, optionally holding its clear orientation."""
 
@@ -601,6 +604,8 @@ def _interpolate_open_return(
         or (rotation_hold_steps and clearance_rows + rotation_hold_steps >= steps)
     ):
         raise ValueError("rotation hold must leave rows to reach the rest endpoint")
+    if brake_rotation_vector is not None and not rotation_hold_steps:
+        raise ValueError("rotation brake vector requires a rotation hold")
     result = interpolate_poses(start, target, steps)
     if not rotation_hold_steps:
         return result
@@ -609,6 +614,25 @@ def _interpolate_open_return(
     # into the tree on the next row.  Use the next preceding orientation as a
     # bounded brake target while unchanged straight translation continues.
     clear_pose = result[clearance_rows - 3].copy()
+    if brake_rotation_vector is not None:
+        vector = np.asarray(brake_rotation_vector, dtype=np.float64)
+        angle = float(np.linalg.norm(vector))
+        if (
+            vector.shape != (3,)
+            or not np.isfinite(vector).all()
+            or angle > 0.16
+        ):
+            raise ValueError(
+                "rotation brake vector must be three finite values within 0.16 rad"
+            )
+        if angle:
+            local_quaternion = np.concatenate(
+                ([np.cos(angle / 2.0)], np.sin(angle / 2.0) * vector / angle)
+            )
+        else:
+            local_quaternion = np.asarray([1.0, 0.0, 0.0, 0.0])
+        local_pose = np.concatenate((np.zeros(3), local_quaternion))
+        clear_pose[3:] = compose_pose(start, local_pose)[3:]
     result[clearance_rows : clearance_rows + rotation_hold_steps, 3:] = (
         clear_pose[3:]
     )
@@ -623,6 +647,8 @@ def _interpolate_open_return(
 def hold_post_release_return_rotation_after_clearance(
     trajectory: SkillTrajectory,
     rotation_hold_steps: int,
+    *,
+    brake_rotation_vector: Any | None = None,
 ) -> SkillTrajectory:
     """Brake row-seven wrist momentum within the existing open return phase."""
 
@@ -638,6 +664,7 @@ def hold_post_release_return_rotation_after_clearance(
         right[return_end],
         return_end - release_end,
         rotation_hold_steps=rotation_hold_steps,
+        brake_rotation_vector=brake_rotation_vector,
     )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),

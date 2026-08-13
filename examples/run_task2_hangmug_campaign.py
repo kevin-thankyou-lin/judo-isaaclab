@@ -47,6 +47,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "direct_rest_to_preinsert_steps",
     "post_release_return_to_rest_steps",
     "post_release_return_rotation_hold_steps",
+    "post_release_return_brake_rotation_vector",
     "branch_orient_steps",
     "insert_clearance_m",
     "branch_approach_height_m",
@@ -214,6 +215,16 @@ def _repair_command(
     ):
         if field in strategy:
             arguments.extend([option, str(strategy[field])])
+    if "post_release_return_brake_rotation_vector" in strategy:
+        arguments.extend([
+            "--post-release-return-brake-rotation-vector",
+            *(
+                f"{float(value):.12f}"
+                for value in strategy[
+                    "post_release_return_brake_rotation_vector"
+                ]
+            ),
+        ])
     if selection["actual_repair_boundary"] == "reset":
         arguments.extend([
             "--handover-contact-settle-steps",
@@ -321,6 +332,7 @@ def _repair_strategy(index: int) -> dict:
         "direct_rest_to_preinsert_steps",
         "post_release_return_to_rest_steps",
         "post_release_return_rotation_hold_steps",
+        "post_release_return_brake_rotation_vector",
         "branch_orient_steps",
         "insert_clearance_m",
         "branch_approach_height_m",
@@ -442,6 +454,26 @@ def _repair_strategy(index: int) -> dict:
     if rotation_hold_steps:
         strategy["post_release_return_rotation_hold_steps"] = (
             rotation_hold_steps
+        )
+    brake_rotation_vector = value.get(
+        "post_release_return_brake_rotation_vector"
+    )
+    if brake_rotation_vector is not None:
+        brake_rotation_vector = np.asarray(
+            brake_rotation_vector, dtype=np.float64
+        )
+        if (
+            brake_rotation_vector.shape != (3,)
+            or not np.isfinite(brake_rotation_vector).all()
+            or np.linalg.norm(brake_rotation_vector) > 0.16
+            or not rotation_hold_steps
+        ):
+            raise ValueError(
+                "post-release return brake rotation vector requires hold rows "
+                "and must be three finite values within 0.16 rad"
+            )
+        strategy["post_release_return_brake_rotation_vector"] = (
+            brake_rotation_vector.tolist()
         )
     if "branch_orient_steps" in value:
         branch_orient_steps = value["branch_orient_steps"]

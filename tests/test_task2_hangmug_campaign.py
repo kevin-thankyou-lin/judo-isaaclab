@@ -512,6 +512,7 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
         "direct_rest_to_preinsert_steps": 170,
         "post_release_return_to_rest_steps": 120,
         "post_release_return_rotation_hold_steps": 8,
+        "post_release_return_brake_rotation_vector": [0.011, -0.0055, -0.0268],
     }))
     monkeypatch.setattr(campaign, "RESULTS", results)
     strategy = campaign._repair_strategy(2)
@@ -531,6 +532,12 @@ def test_direct_choreography_candidate_pins_both_single_segment_counts(
     assert command[
         command.index("--post-release-return-rotation-hold-steps") + 1
     ] == "8"
+    brake_cursor = command.index(
+        "--post-release-return-brake-rotation-vector"
+    )
+    assert command[brake_cursor + 1 : brake_cursor + 4] == [
+        "0.011000000000", "-0.005500000000", "-0.026800000000"
+    ]
     assert "--branch-orient-steps" not in command
 
     candidate.write_text(json.dumps({

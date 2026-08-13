@@ -1449,6 +1449,10 @@ def test_open_return_rotation_hold_preserves_clear_prefix_translation_and_endpoi
     )
     original = program.build()
     held = hold_post_release_return_rotation_after_clearance(original, 8)
+    brake_vector = np.asarray([0.011, -0.0055, -0.0268])
+    compensated = hold_post_release_return_rotation_after_clearance(
+        original, 8, brake_rotation_vector=brake_vector
+    )
     release_end = original.waypoint_steps["right_release"]
     return_end = original.waypoint_steps["post_release_return"]
     segment = held.right_poses[release_end + 1 : return_end + 1]
@@ -1462,6 +1466,22 @@ def test_open_return_rotation_hold_preserves_clear_prefix_translation_and_endpoi
         segment[8:16, 3:],
         np.repeat(original_segment[5, None, 3:], 8, axis=0),
     )
+    brake_angle = np.linalg.norm(brake_vector)
+    local_brake = np.concatenate((
+        np.zeros(3),
+        [np.cos(brake_angle / 2.0)],
+        np.sin(brake_angle / 2.0) * brake_vector / brake_angle,
+    ))
+    expected_brake = compose_pose(release, local_brake)[3:]
+    np.testing.assert_allclose(
+        compensated.right_poses[release_end + 9 : release_end + 17, 3:],
+        np.repeat(expected_brake[None], 8, axis=0),
+    )
+    np.testing.assert_allclose(
+        compensated.right_poses[release_end + 1 : return_end + 1, :3],
+        original_segment[:, :3],
+    )
+    np.testing.assert_allclose(compensated.right_poses[return_end], right_start)
     np.testing.assert_allclose(segment[-1], right_start)
     np.testing.assert_array_equal(held.grippers, original.grippers)
     assert held.stage_names == original.stage_names
@@ -1542,6 +1562,7 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
         observed_right,
         completed_waypoint="carrying_rest_observer",
         post_release_return_rotation_hold_steps=2,
+        post_release_return_brake_rotation_vector=[0.011, -0.0055, -0.0268],
     )
     release_end = trajectory.waypoint_steps["right_release"]
     return_end = trajectory.waypoint_steps["post_release_return"]
@@ -1549,9 +1570,16 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     ordinary_return = adjusted.right_poses[release_end + 1 : return_end + 1]
     np.testing.assert_allclose(delayed_return[:, :3], ordinary_return[:, :3])
     np.testing.assert_allclose(delayed_return[:8, 3:], ordinary_return[:8, 3:])
+    vector = np.asarray([0.011, -0.0055, -0.0268])
+    angle = np.linalg.norm(vector)
+    local_brake = np.concatenate((
+        np.zeros(3), [np.cos(angle / 2.0)], np.sin(angle / 2.0) * vector / angle,
+    ))
+    expected_brake = compose_pose(
+        delayed.right_poses[release_end], local_brake
+    )[3:]
     np.testing.assert_allclose(
-        delayed_return[8:10, 3:],
-        np.repeat(ordinary_return[5, None, 3:], 2, axis=0),
+        delayed_return[8:10, 3:], np.repeat(expected_brake[None], 2, axis=0)
     )
     np.testing.assert_allclose(
         delayed_return[-1], trajectory.right_poses[return_end]
