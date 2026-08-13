@@ -1351,7 +1351,7 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     program.release_and_return_to_rest(
         insert, right_start, support_steps=2, release_steps=3,
-        return_steps=5, settle_steps=2,
+        return_steps=5, settle_steps=2, return_motion_steps=3,
     )
     trajectory = program.build()
 
@@ -1368,6 +1368,11 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
     return_start = trajectory.waypoint_steps["right_release"] + 1
     np.testing.assert_allclose(trajectory.grippers[return_start:, 1], -0.0475)
+    return_rows = trajectory.right_poses[return_start : return_end + 1]
+    np.testing.assert_allclose(
+        return_rows[2:], np.broadcast_to(right_start, return_rows[2:].shape)
+    )
+    assert not np.allclose(return_rows[1], right_start)
 
     names = []
     previous = 0
@@ -1441,7 +1446,7 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     program.release_and_return_to_rest(
         insert, right_start, support_steps=2, release_steps=3,
-        return_steps=5, settle_steps=2,
+        return_steps=5, settle_steps=2, return_motion_steps=3,
     )
     trajectory = program.build()
     planned_contact = _pose(0.05, -0.02, 0.03)
@@ -1474,6 +1479,14 @@ def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     )
     assert residuals.max() <= 1.0e-12
     assert np.all(np.diff(fractions) >= -1.0e-12)
+    return_start = trajectory.waypoint_steps["right_release"] + 1
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    adjusted_return = adjusted.right_poses[return_start : return_end + 1]
+    np.testing.assert_allclose(
+        adjusted_return[2:],
+        np.broadcast_to(right_start, adjusted_return[2:].shape),
+    )
+    assert not np.allclose(adjusted_return[1], right_start)
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():

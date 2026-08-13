@@ -568,11 +568,18 @@ def reanchor_branch_transport_contact(
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
         return_start = release_end + 1
-        right[return_start : direct_return + 1] = interpolate_poses(
-            right[release_end],
-            trajectory.right_poses[direct_return],
-            direct_return - release_end,
+        authored_return = trajectory.right_poses[return_start : direct_return + 1]
+        return_endpoint = trajectory.right_poses[direct_return]
+        endpoint_rows = np.flatnonzero(
+            np.all(np.abs(authored_return - return_endpoint) <= 1.0e-12, axis=1)
         )
+        motion_rows = int(endpoint_rows[0] + 1)
+        right[return_start : return_start + motion_rows] = interpolate_poses(
+            right[release_end],
+            return_endpoint,
+            motion_rows,
+        )
+        right[return_start + motion_rows : direct_return + 1] = return_endpoint
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
@@ -921,11 +928,17 @@ class HangMugSkillProgram:
         release_steps: int,
         return_steps: int,
         settle_steps: int,
+        return_motion_steps: int | None = None,
         opened: float = -0.0475,
     ) -> None:
         """Release once on support, then retreat open directly to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
             raise ValueError("release/return phase steps must be positive")
+        motion_steps = (
+            return_steps if return_motion_steps is None else return_motion_steps
+        )
+        if not 0 < motion_steps <= return_steps:
+            raise ValueError("return motion steps must be in (0, return_steps]")
         self._append(
             "supported_release_hold",
             "release_support",
@@ -941,9 +954,16 @@ class HangMugSkillProgram:
         self._append(
             "post_release_return",
             "post_release_return",
-            return_steps,
+            motion_steps,
             right_pose=right_rest,
         )
+        if motion_steps < return_steps:
+            self._append(
+                "post_release_return",
+                "post_release_return",
+                return_steps - motion_steps,
+                right_pose=right_rest,
+            )
         self._append(
             "stable_support",
             "stable_settle",
