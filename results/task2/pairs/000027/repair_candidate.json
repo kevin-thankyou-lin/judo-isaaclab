@@ -7,7 +7,7 @@
   "handover_orient_local_y_clearance_m": 0.1075,
   "handover_orient_steps": 60,
   "handover_reanchor_after_orient_clear": true,
-  "handover_seat_local_z_m": 0.017489788666255293,
-  "handover_straddle_local_x_m": 0.03102867399612837,
-  "handover_target_camera_clockwise_roll_rad": 0.6719517620178169
+  "handover_seat_local_z_m": 0.031989788666255294,
+  "handover_straddle_local_x_m": 0.04202867399612837,
+  "handover_target_camera_clockwise_roll_rad": 0.7504915783575618
 }
