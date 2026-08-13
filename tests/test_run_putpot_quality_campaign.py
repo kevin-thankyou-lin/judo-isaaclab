@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
 from run_putpot_skill_program import (
+    _apply_right_collision_clear_preorientation,
     _parser,
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
@@ -86,6 +87,17 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
         required + ["--target-right-quality-postclosure-force-settle"]
     )
     assert parsed.target_right_quality_postclosure_force_settle is True
+    parsed = _parser(
+        required
+        + [
+            "--target-right-quality-precontact-pivot-trace",
+            "trace.npz",
+            "--target-right-quality-precontact-pivot-step",
+            "317",
+        ]
+    )
+    assert parsed.target_right_quality_precontact_pivot_trace == "trace.npz"
+    assert parsed.target_right_quality_precontact_pivot_step == 317
     parsed = _parser(
         required
         + ["--target-left-quality-pre-peer-motion-budgeted-closure"]
@@ -264,6 +276,81 @@ def test_measured_contact_pivot_holds_strong_contact_and_deepens_weak_pad(tmp_pa
         [0.03, 0.04, 0.0]
     )
     assert not cleared_receipt["pregrasp_position_unchanged"]
+
+
+def test_measured_contact_pivot_accepts_right_pair_evidence(tmp_path):
+    lane_id = "putpot-quality-v1-n2-gpu7-pair000015"
+    trace = tmp_path / "lanes" / lane_id / "attempts" / "attempt-000062" / "trace.npz"
+    trace.parent.mkdir(parents=True)
+    wrist = np.asarray([0.71658, -0.14346, 0.92318, 1.0, 0.0, 0.0, 0.0])
+    np.savez(
+        trace,
+        partial_trace=np.asarray(False),
+        right_eef_poses=wrist[None, :],
+        right_finger_forces_n=np.asarray([[5.16423, 4.40560]]),
+        right_pad_fractions=np.asarray([[-0.0135493, 0.2179537]]),
+        right_pad_centers_world=np.asarray(
+            [[[0.75681418, -0.05532027, 0.89254224],
+              [0.78465658, -0.08674072, 0.87222230]]]
+        ),
+        right_pad_axes_world=np.asarray(
+            [[[-0.54078770, -0.70778477, 0.45452100],
+              [-0.49053645, -0.76724416, 0.41317207]]]
+        ),
+    )
+    pregrasp = np.asarray([0.70, -0.16, 0.95, 1.0, 0.0, 0.0, 0.0])
+    grasp = np.asarray([0.715, -0.154, 0.923, 1.0, 0.0, 0.0, 0.0])
+    _, corrected, receipt = _pivot_source_corridor_from_measured_contacts(
+        pregrasp,
+        grasp,
+        trace,
+        0,
+        lane_id=lane_id,
+        minimum_force_n=1.0,
+        arm="right",
+        target_fraction=0.20,
+    )
+    assert receipt["arm"] == "right"
+    assert receipt["weak_finger_index"] == 0
+    assert receipt["strong_finger_index"] == 1
+    assert receipt["predicted_weak_pad_fraction"] == pytest.approx(0.20)
+    assert receipt["rotation_rad"] < 0.35
+    assert not np.array_equal(corrected, grasp)
+
+
+def test_right_preorientation_finishes_at_collision_clear_pregrasp():
+    poses = np.asarray(
+        [[0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0]] * 8,
+        dtype=np.float64,
+    )
+    from judo_isaaclab.put_marker import SkillTrajectory
+
+    trajectory = SkillTrajectory(
+        left_poses=poses.copy(),
+        right_poses=poses.copy(),
+        grippers=np.zeros((8, 2), dtype=np.float64),
+        stage_names=("hold",) * 8,
+        waypoint_steps={"bimanual_pregrasp": 4, "right_handle_grasp": 6},
+    )
+    desired = poses[0].copy()
+    angle = 0.30
+    desired[3:] = [np.cos(angle / 2.0), 0.0, 0.0, np.sin(angle / 2.0)]
+    corrected, receipt = _apply_right_collision_clear_preorientation(
+        trajectory,
+        poses[0],
+        desired,
+        maximum_orientation_step_rad=0.16,
+    )
+    np.testing.assert_array_equal(corrected.right_poses[:, :3], poses[:, :3])
+    np.testing.assert_allclose(
+        corrected.right_poses[4:7, 3:],
+        np.repeat(desired[None, 3:], 3, axis=0),
+    )
+    np.testing.assert_array_equal(corrected.left_poses, trajectory.left_poses)
+    np.testing.assert_array_equal(corrected.grippers, trajectory.grippers)
+    assert receipt["pregrasp_orientation_matches_grasp"]
+    assert receipt["final_approach_rotation_rad"] == 0.0
+    assert receipt["maximum_orientation_step_rad"] <= 0.16
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():

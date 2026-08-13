@@ -593,6 +593,7 @@ def _pivot_source_corridor_from_measured_contacts(
     *,
     lane_id: str,
     minimum_force_n: float,
+    arm: str = "left",
     target_fraction: float = 0.25,
     maximum_rotation_rad: float = 0.35,
     pregrasp_radial_clearance_m: float = 0.0,
@@ -652,26 +653,28 @@ def _pivot_source_corridor_from_measured_contacts(
             raise ValueError("target contact normal must be nonzero")
         contact_normal /= contact_normal_norm
 
+    if arm not in ("left", "right"):
+        raise ValueError("measured contact pivot arm must be left or right")
     with np.load(path, allow_pickle=False) as trace:
         if bool(np.asarray(trace["partial_trace"]).item()):
             raise ValueError("measured contact pivot requires a complete trace")
-        steps = int(trace["left_eef_poses"].shape[0])
+        steps = int(trace[f"{arm}_eef_poses"].shape[0])
         if not 0 <= int(sample_step) < steps:
             raise ValueError("measured contact pivot sample is outside the trace")
         observed_wrist = np.asarray(
-            trace["left_eef_poses"][sample_step], dtype=np.float64
+            trace[f"{arm}_eef_poses"][sample_step], dtype=np.float64
         )
         forces = np.asarray(
-            trace["left_finger_forces_n"][sample_step], dtype=np.float64
+            trace[f"{arm}_finger_forces_n"][sample_step], dtype=np.float64
         )
         fractions = np.asarray(
-            trace["left_pad_fractions"][sample_step], dtype=np.float64
+            trace[f"{arm}_pad_fractions"][sample_step], dtype=np.float64
         )
         centers = np.asarray(
-            trace["left_pad_centers_world"][sample_step], dtype=np.float64
+            trace[f"{arm}_pad_centers_world"][sample_step], dtype=np.float64
         )
         axes = np.asarray(
-            trace["left_pad_axes_world"][sample_step], dtype=np.float64
+            trace[f"{arm}_pad_axes_world"][sample_step], dtype=np.float64
         )
     if (
         observed_wrist.shape != (7,)
@@ -778,6 +781,7 @@ def _pivot_source_corridor_from_measured_contacts(
     return oriented_pregrasp, result, {
         "enabled": True,
         "mechanism": "measured_dual_contact_strong_pad_pivot",
+        "arm": arm,
         "trace": {
             "path": str(path),
             "sample_step": int(sample_step),
@@ -820,6 +824,83 @@ def _pivot_source_corridor_from_measured_contacts(
             not np.array_equal(result[3:], grasp[3:])
         ),
     }
+
+
+def _apply_right_collision_clear_preorientation(
+    trajectory,
+    right_start_pose,
+    desired_right_grasp_pose,
+    *,
+    maximum_orientation_step_rad: float,
+):
+    """Orient the right wrist at its collision-clear pregrasp and hold it."""
+
+    from judo_isaaclab.put_marker import SkillTrajectory, interpolate_poses
+
+    start = np.asarray(right_start_pose, dtype=np.float64)
+    desired = np.asarray(desired_right_grasp_pose, dtype=np.float64)
+    if start.shape != (7,) or desired.shape != (7,):
+        raise ValueError("right preorientation requires two poses")
+    if not np.all(np.isfinite(np.concatenate((start, desired)))):
+        raise ValueError("right preorientation poses must be finite")
+    if not np.isfinite(maximum_orientation_step_rad) or (
+        maximum_orientation_step_rad <= 0.0
+    ):
+        raise ValueError("right preorientation rotation bound must be positive")
+    pregrasp_end = trajectory.waypoint_steps.get("bimanual_pregrasp")
+    grasp_end = trajectory.waypoint_steps.get("right_handle_grasp")
+    if (
+        pregrasp_end is None
+        or grasp_end is None
+        or not 0 < pregrasp_end < grasp_end < trajectory.steps
+    ):
+        raise ValueError("right preorientation is outside the acquisition corridor")
+    right = trajectory.right_poses.copy()
+    ramp = interpolate_poses(
+        start,
+        np.concatenate((start[:3], desired[3:])),
+        pregrasp_end + 1,
+    )[:, 3:]
+    right[: pregrasp_end + 1, 3:] = ramp
+    right[pregrasp_end + 1 : grasp_end + 1, 3:] = desired[3:]
+    previous = np.concatenate((start[None, 3:], right[:grasp_end, 3:]), axis=0)
+    dots = np.abs(np.sum(right[: grasp_end + 1, 3:] * previous, axis=1))
+    rotation_steps = 2.0 * np.arccos(np.clip(dots, -1.0, 1.0))
+    maximum_observed = float(np.max(rotation_steps))
+    if maximum_observed > maximum_orientation_step_rad + 1.0e-12:
+        raise ValueError("right collision-clear preorientation exceeds step bound")
+    return (
+        SkillTrajectory(
+            left_poses=trajectory.left_poses.copy(),
+            right_poses=right,
+            grippers=trajectory.grippers.copy(),
+            stage_names=trajectory.stage_names,
+            waypoint_steps=dict(trajectory.waypoint_steps),
+        ),
+        {
+            "enabled": True,
+            "mechanism": "right_collision_clear_measured_pivot_preorientation",
+            "completion_step": int(pregrasp_end),
+            "hold_through_step": int(grasp_end),
+            "maximum_orientation_step_rad": maximum_observed,
+            "position_trajectory_unchanged": bool(
+                np.array_equal(right[:, :3], trajectory.right_poses[:, :3])
+            ),
+            "left_trajectory_unchanged": True,
+            "grippers_unchanged": bool(
+                np.array_equal(trajectory.grippers, trajectory.grippers)
+            ),
+            "pregrasp_orientation_matches_grasp": bool(
+                np.allclose(
+                    right[pregrasp_end, 3:],
+                    desired[3:],
+                    atol=1.0e-12,
+                    rtol=0.0,
+                )
+            ),
+            "final_approach_rotation_rad": 0.0,
+        },
+    )
 
 
 def _offset_object_contact_frame(
@@ -1465,6 +1546,19 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "refreshes the passed left latch only inside the unchanged pre-peer "
             "object-motion allowance."
         ),
+    )
+    parser.add_argument(
+        "--target-right-quality-precontact-pivot-trace",
+        help=(
+            "Pair-lane complete failed trace containing one dual-force right "
+            "sample used to orient the collision-clear pregrasp and mapped "
+            "right grasp before contact."
+        ),
+    )
+    parser.add_argument(
+        "--target-right-quality-precontact-pivot-step",
+        type=int,
+        help="Sample step in the measured right precontact-pivot trace.",
     )
     parser.add_argument(
         "--target-left-quality-pre-peer-motion-budgeted-closure",
@@ -3639,6 +3733,23 @@ def main(argv: list[str] | None = None) -> None:
             "preseat and the passed left latch's bounded pivot and motion-budget "
             "machinery"
         )
+    right_precontact_pivot_requested = bool(
+        args.target_right_quality_precontact_pivot_trace
+    )
+    if right_precontact_pivot_requested != (
+        args.target_right_quality_precontact_pivot_step is not None
+    ):
+        raise ValueError(
+            "right precontact pivot requires both a pair-local trace and step"
+        )
+    if right_precontact_pivot_requested and not (
+        args.target_right_quality_postclosure_force_settle
+        and args.target_collision_clear_right_pregrasp
+    ):
+        raise ValueError(
+            "right precontact pivot requires the collision-clear right pregrasp "
+            "and post-closure quality safeguards"
+        )
     if args.target_left_quality_pre_peer_motion_budgeted_closure and not (
         quality_left_first_local_mpc
         and args.target_left_bounded_closure_commit
@@ -4129,6 +4240,8 @@ def main(argv: list[str] | None = None) -> None:
         local_mpc_right_jaw_axis_prior_local = None
         local_mpc_right_pad_axis_prior_local = None
         local_mpc_right_frame_receipt = None
+        right_precontact_pivot = None
+        right_preorientation_receipt = None
         quality_peer_axis_target_left_local = None
         quality_peer_axis_receipt = None
         if trajectory is not None:
@@ -4275,6 +4388,7 @@ def main(argv: list[str] | None = None) -> None:
             from judo_isaaclab.put_marker import (
                 compose_pose as compose_marker_pose,
                 inverse_pose as inverse_marker_pose,
+                quaternion_multiply as multiply_marker_quaternions,
                 quaternion_rotate as rotate_marker_vector,
                 transfer_pose as transfer_marker_pose,
             )
@@ -4654,6 +4768,79 @@ def main(argv: list[str] | None = None) -> None:
                         dtype=np.float64,
                     ),
                 )
+                if right_precontact_pivot_requested:
+                    uncorrected_right_prior_local = (
+                        local_mpc_right_contact_prior_local.copy()
+                    )
+                    (
+                        _,
+                        desired_right_source_contact_wrist,
+                        right_precontact_pivot,
+                    ) = _pivot_source_corridor_from_measured_contacts(
+                        trajectory.right_poses[
+                            trajectory.waypoint_steps["bimanual_pregrasp"]
+                        ],
+                        desired_right_source_contact_wrist,
+                        args.target_right_quality_precontact_pivot_trace,
+                        int(args.target_right_quality_precontact_pivot_step),
+                        lane_id=os.environ["CPGEN_LANE_ID"],
+                        minimum_force_n=float(
+                            quality_config.grasp["minimum_force_n"]
+                        ),
+                        arm="right",
+                        target_fraction=0.20,
+                    )
+                    local_mpc_right_contact_prior_local = compose_marker_pose(
+                        calibration_pot_inverse,
+                        desired_right_source_contact_wrist,
+                    )
+                    right_prior_rotation_delta_local = (
+                        multiply_marker_quaternions(
+                            local_mpc_right_contact_prior_local[3:],
+                            uncorrected_right_prior_local[3:]
+                            * np.asarray([1.0, -1.0, -1.0, -1.0]),
+                        )
+                    )
+                    right_prior_rotation_delta_local /= np.linalg.norm(
+                        right_prior_rotation_delta_local
+                    )
+                    local_mpc_right_jaw_axis_prior_local = rotate_marker_vector(
+                        right_prior_rotation_delta_local,
+                        local_mpc_right_jaw_axis_prior_local,
+                    )
+                    local_mpc_right_pad_axis_prior_local = rotate_marker_vector(
+                        right_prior_rotation_delta_local,
+                        local_mpc_right_pad_axis_prior_local,
+                    )
+                    right_predicted_fractions = np.asarray(
+                        right_precontact_pivot["pad_fractions_before"],
+                        dtype=np.float64,
+                    )
+                    right_predicted_fractions[
+                        int(right_precontact_pivot["weak_finger_index"])
+                    ] = float(
+                        right_precontact_pivot["predicted_weak_pad_fraction"]
+                    )
+                    trajectory, right_preorientation_receipt = (
+                        _apply_right_collision_clear_preorientation(
+                            trajectory,
+                            right_reset_pose,
+                            desired_right_source_contact_wrist,
+                            maximum_orientation_step_rad=args.max_rotation_step,
+                        )
+                    )
+                    right_precontact_pivot["predicted_pad_fractions"] = (
+                        right_predicted_fractions.tolist()
+                    )
+                    right_precontact_pivot["corrected_target_wrist_pose"] = (
+                        desired_right_source_contact_wrist.tolist()
+                    )
+                    right_precontact_pivot["collision_clear_preorientation"] = (
+                        right_preorientation_receipt
+                    )
+                    local_mpc_right_frame_receipt[
+                        "measured_precontact_pivot"
+                    ] = right_precontact_pivot
             predicted_fractions = np.asarray(
                 frame_receipt["predicted_contact_pad_fractions"],
                 dtype=np.float64,
@@ -8294,6 +8481,7 @@ def main(argv: list[str] | None = None) -> None:
                     "right_postclosure_force_settle": bool(
                         args.target_right_quality_postclosure_force_settle
                     ),
+                    "right_measured_precontact_pivot": right_precontact_pivot,
                     "right_uses_dual_force_pad_margin_pivot": bool(
                         args.target_right_quality_postclosure_force_settle
                     ),
