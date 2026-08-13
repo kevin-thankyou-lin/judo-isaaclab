@@ -397,6 +397,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "loaded_pad_pivot_index",
             "loaded_pad_pivot_translation_world_m",
             "loaded_pad_pivot_translation_norm_m",
+            "loaded_pad_pivot_jaw_scale",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -949,18 +950,22 @@ def handle_local_mpc_step(
         and not dual_force_backed
     )
     loaded_pad_pivot_translation = np.zeros(3, dtype=np.float64)
+    loaded_pad_pivot_jaw_scale = 1.0
     if loaded_pad_pivot_closure_active:
-        # The two fingers move symmetrically about the wrist as the jaw closes.
-        # Pair 15 then measured that the Cartesian controller realizes only
-        # 0.821 mm of a 2 mm half-stroke command while the loaded finger moves
-        # 1.664 mm.  Use the full jaw increment (still bounded by the existing
-        # 4 mm Cartesian limit) so the realized wrist motion closes about the
-        # loaded pad while the peer pad traverses the stroke.
+        # Pair 15 measured that a 4 mm Cartesian pivot command realizes only
+        # 1.557 mm along the live jaw axis.  A simultaneous 4 mm jaw command
+        # retracts the loaded finger 1.663 mm on the first frame and 2.769 mm
+        # on the next, immediately dropping its force.  Retain the bounded
+        # 4 mm wrist pivot but halve only this pair-opted closure increment so
+        # the realized motion preloads the loaded pad while the peer pad closes.
+        loaded_pad_pivot_jaw_scale = 0.5
+        unscaled_jaw_increment = jaw_increment
+        jaw_increment *= loaded_pad_pivot_jaw_scale
         pivot_sign = (
             1.0 if transverse_aligned_closure_pivot_pad_index == 1 else -1.0
         )
         loaded_pad_pivot_translation = (
-            pivot_sign * jaw_increment * jaw_axis
+            pivot_sign * unscaled_jaw_increment * jaw_axis
         )
         translation_increment = _clip_norm(
             loaded_pad_pivot_translation,
@@ -1198,6 +1203,7 @@ def handle_local_mpc_step(
             "loaded_pad_pivot_translation_norm_m": float(
                 np.linalg.norm(loaded_pad_pivot_translation)
             ),
+            "loaded_pad_pivot_jaw_scale": loaded_pad_pivot_jaw_scale,
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,
             "closed_command_reached": bool(

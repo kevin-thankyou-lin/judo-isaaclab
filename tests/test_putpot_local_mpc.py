@@ -510,10 +510,11 @@ def test_transverse_aligned_closure_can_pivot_about_loaded_pad_one():
         closure["loaded_pad_pivot_translation_world_m"], expected_translation
     )
     assert closure["loaded_pad_pivot_translation_norm_m"] == pytest.approx(0.004)
+    assert closure["loaded_pad_pivot_jaw_scale"] == pytest.approx(0.5)
     np.testing.assert_allclose(
         command.wrist_target_pose[:3], _pose()[:3] + expected_translation
     )
-    assert command.jaw_command == pytest.approx(-0.0435)
+    assert command.jaw_command == pytest.approx(-0.0455)
 
     with pytest.raises(ValueError, match="requires transverse-aligned"):
         handle_local_mpc_step(
