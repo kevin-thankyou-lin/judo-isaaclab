@@ -4769,6 +4769,9 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                 )
                 if right_precontact_pivot_requested:
+                    uncorrected_right_target_wrist = (
+                        desired_right_source_contact_wrist.copy()
+                    )
                     uncorrected_right_prior_local = (
                         local_mpc_right_contact_prior_local.copy()
                     )
@@ -4790,6 +4793,20 @@ def main(argv: list[str] | None = None) -> None:
                         arm="right",
                         target_fraction=0.20,
                     )
+                    right_target_translation_correction_m = float(
+                        np.linalg.norm(
+                            desired_right_source_contact_wrist[:3]
+                            - uncorrected_right_target_wrist[:3]
+                        )
+                    )
+                    if (
+                        right_target_translation_correction_m
+                        > float(args.collision_clearance_m) + 1.0e-12
+                    ):
+                        raise ValueError(
+                            "right measured precontact pivot position correction "
+                            "exceeds the collision-clearance bound"
+                        )
                     local_mpc_right_contact_prior_local = compose_marker_pose(
                         calibration_pot_inverse,
                         desired_right_source_contact_wrist,
@@ -4835,6 +4852,12 @@ def main(argv: list[str] | None = None) -> None:
                     right_precontact_pivot["corrected_target_wrist_pose"] = (
                         desired_right_source_contact_wrist.tolist()
                     )
+                    right_precontact_pivot[
+                        "target_translation_correction_m"
+                    ] = right_target_translation_correction_m
+                    right_precontact_pivot[
+                        "maximum_target_translation_correction_m"
+                    ] = float(args.collision_clearance_m)
                     right_precontact_pivot["collision_clear_preorientation"] = (
                         right_preorientation_receipt
                     )
