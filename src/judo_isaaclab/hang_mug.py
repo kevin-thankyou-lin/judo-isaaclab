@@ -62,6 +62,7 @@ def geometry_conditioned_hang_pose(
     branch_support_fraction: float = 0.5,
     branch_roll_offset_rad: float = 0.0,
     target_branch_rank: int | None = None,
+    target_branch_row: int | None = None,
 ) -> tuple[np.ndarray, Any, Any]:
     """Map a verified handle-on-branch relationship through measured parts."""
 
@@ -85,6 +86,20 @@ def geometry_conditioned_hang_pose(
     )
     source_branch = closest_branch(source_branches, source_handle_tree_local[:3])
     target_values = tuple(target_branches)
+    if target_branch_row is not None:
+        if target_branch_row != 2:
+            raise ValueError("only the second branch row is supported")
+        if len(target_values) < 3:
+            raise ValueError("cannot infer a second row from fewer than three branches")
+        ordered = sorted(target_values, key=lambda item: item.normalized_height)
+        gaps = np.diff([item.normalized_height for item in ordered])
+        if len(gaps) < 2:
+            raise ValueError("cannot infer three branch rows")
+        split_indices = sorted(np.argsort(gaps)[-2:] + 1)
+        rows = np.split(np.asarray(ordered, dtype=object), split_indices)
+        if len(rows) != 3 or any(len(row) == 0 for row in rows):
+            raise ValueError("cannot infer three nonempty branch rows")
+        target_values = tuple(rows[1].tolist())
     if target_branch_rank is None:
         target_branch = corresponding_branch(source_branch, target_values)
     else:
@@ -164,9 +179,7 @@ def geometry_conditioned_hang_pose(
     target_support_world = compose_pose(target_tree_pose, target_support_local)
     target_handle_world[:3] = target_support_world[:3]
     return (
-        compose_pose(
-            target_handle_world, inverse_pose(target_parts.handle_hole_frame)
-        ),
+        compose_pose(target_handle_world, inverse_pose(target_parts.handle_hole_frame)),
         source_branch,
         target_branch,
     )
@@ -193,8 +206,13 @@ def reanchor_physical_handover(
         "handover_pregrasp",
         "right_grasp",
         "left_release",
-        "tree_transport",
     )
+    branch_entry = (
+        "direct_preinsert"
+        if "direct_preinsert" in trajectory.waypoint_steps
+        else "tree_transport"
+    )
+    required = (*required, branch_entry)
     missing = [name for name in required if name not in trajectory.waypoint_steps]
     if missing:
         raise ValueError(f"handover trajectory is missing waypoints: {missing}")
@@ -207,7 +225,16 @@ def reanchor_physical_handover(
     release_end = steps["left_release"]
     lift_end = steps.get("handover_receiver_lift", release_end)
     hold_end = steps.get("handover_confirm", release_end)
-    transport_end = steps["tree_transport"]
+    simultaneous_setup_end = steps.get("carrying_rest_observer")
+    right_return_end = steps.get(
+        "right_return_start",
+        simultaneous_setup_end if simultaneous_setup_end is not None else hold_end,
+    )
+    left_point_end = steps.get(
+        "left_branch_point",
+        simultaneous_setup_end if simultaneous_setup_end is not None else right_return_end,
+    )
+    branch_entry_end = steps[branch_entry]
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     observed_left = _pose(observed_left_pose, "observed_left_pose")
@@ -219,6 +246,18 @@ def reanchor_physical_handover(
         observed_left, corrected_release, release_end - grasp_end
     )
     left[release_end + 1 : hold_end + 1] = corrected_release
+    if simultaneous_setup_end is not None and simultaneous_setup_end > hold_end:
+        left[hold_end + 1 : simultaneous_setup_end + 1] = interpolate_poses(
+            corrected_release,
+            trajectory.left_poses[simultaneous_setup_end],
+            simultaneous_setup_end - hold_end,
+        )
+    elif left_point_end > right_return_end:
+        left[right_return_end + 1 : left_point_end + 1] = interpolate_poses(
+            corrected_release,
+            trajectory.left_poses[left_point_end],
+            left_point_end - right_return_end,
+        )
     corrected_pregrasp = transfer_pose(
         right[pregrasp_end], nominal_mug_pose, observed_mug_pose
     )
@@ -252,10 +291,19 @@ def reanchor_physical_handover(
             corrected_grasp, corrected_lift_right, lift_end - release_end
         )
     right[lift_end + 1 : hold_end + 1] = corrected_lift_right
-    right[hold_end + 1 : transport_end + 1] = interpolate_poses(
-        corrected_lift_right,
-        trajectory.right_poses[transport_end],
-        transport_end - hold_end,
+    if right_return_end > hold_end:
+        right[hold_end + 1 : right_return_end + 1] = interpolate_poses(
+            corrected_lift_right,
+            trajectory.right_poses[right_return_end],
+            right_return_end - hold_end,
+        )
+    right[right_return_end + 1 : left_point_end + 1] = trajectory.right_poses[
+        right_return_end
+    ]
+    right[left_point_end + 1 : branch_entry_end + 1] = interpolate_poses(
+        trajectory.right_poses[left_point_end],
+        trajectory.right_poses[branch_entry_end],
+        branch_entry_end - left_point_end,
     )
     return SkillTrajectory(
         left_poses=left,
@@ -490,9 +538,23 @@ def reanchor_branch_transport_contact(
     )
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
     start = trajectory.waypoint_steps[completed_waypoint] + 1
-    for index in range(start, len(right)):
+    direct_return = trajectory.waypoint_steps.get("post_release_return")
+    reanchor_end = (
+        trajectory.waypoint_steps.get("right_release", len(right) - 1)
+        if direct_return is not None
+        else len(right) - 1
+    )
+    for index in range(start, reanchor_end + 1):
         intended_mug = compose_pose(right[index], inverse_pose(planned_contact))
         right[index] = compose_pose(intended_mug, observed_contact)
+    if direct_return is not None:
+        release_end = trajectory.waypoint_steps["right_release"]
+        return_start = release_end + 1
+        right[return_start : direct_return + 1] = interpolate_poses(
+            right[release_end],
+            trajectory.right_poses[direct_return],
+            direct_return - release_end,
+        )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
@@ -718,6 +780,91 @@ class HangMugSkillProgram:
             right_pose=right_insert,
         )
 
+    def direct_rest_to_branch_insert(
+        self,
+        right_preinsert: Any,
+        right_insert: Any,
+        *,
+        direct_steps: int,
+        insert_steps: int,
+        left_observer: Any | None = None,
+    ) -> None:
+        """Use one direct carrying-rest interpolation before insertion.
+
+        The collision screen is intentionally external to this Cartesian
+        program: it validates this exact interpolated segment without adding
+        another motion phase.  The open left observer remains fixed throughout
+        both waypoints.
+        """
+        if direct_steps <= 0:
+            raise ValueError("direct pre-insertion steps must be positive")
+        if insert_steps <= 0:
+            raise ValueError("insertion steps must be positive")
+        self._append(
+            "direct_preinsert",
+            "handle_to_branch_insertion",
+            direct_steps,
+            left_pose=left_observer,
+            right_pose=right_preinsert,
+        )
+        self._append(
+            "branch_insert",
+            "handle_to_branch_insertion",
+            insert_steps,
+            right_pose=right_insert,
+        )
+
+    def post_handover_branch_setup(
+        self,
+        right_start: Any,
+        left_observer: Any,
+        *,
+        right_return_steps: int,
+        left_point_steps: int,
+    ) -> None:
+        """Sequence the carrier reset and branch-pointing setup.
+
+        The right gripper remains closed around the mug while its wrist returns
+        to the demonstrated start pose.  Only after that motion completes does
+        the open left arm move to the target-branch observer pose.  Subsequent
+        transport and insertion therefore begin from an explicit, auditable
+        two-step setup instead of blending both arm motions together.
+        """
+        if right_return_steps <= 0:
+            raise ValueError("right_return_steps must be positive")
+        if left_point_steps <= 0:
+            raise ValueError("left_point_steps must be positive")
+        self._append(
+            "right_return_start",
+            "post_handover_branch_setup",
+            right_return_steps,
+            right_pose=right_start,
+        )
+        self._append(
+            "left_branch_point",
+            "post_handover_branch_setup",
+            left_point_steps,
+            left_pose=left_observer,
+        )
+
+    def post_handover_rest_and_observe(
+        self,
+        right_start: Any,
+        left_observer: Any,
+        *,
+        steps: int,
+    ) -> None:
+        """Return the closed carrier while the open giver observes the branch."""
+        if steps <= 0:
+            raise ValueError("simultaneous rest/observer steps must be positive")
+        self._append(
+            "carrying_rest_observer",
+            "post_handover_rest_observer",
+            steps,
+            right_pose=right_start,
+            left_pose=left_observer,
+        )
+
     def release_and_support(
         self,
         right_unload: Any,
@@ -745,6 +892,45 @@ class HangMugSkillProgram:
             "stable_settle",
             settle_steps,
             right_pose=right_settle,
+        )
+
+    def release_and_return_to_rest(
+        self,
+        right_insert: Any,
+        right_rest: Any,
+        *,
+        support_steps: int,
+        release_steps: int,
+        return_steps: int,
+        settle_steps: int,
+        opened: float = -0.0475,
+    ) -> None:
+        """Release once on support, then retreat open directly to rest."""
+        if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
+            raise ValueError("release/return phase steps must be positive")
+        self._append(
+            "supported_release_hold",
+            "release_support",
+            support_steps,
+            right_pose=right_insert,
+        )
+        self._append(
+            "right_release",
+            "release_support",
+            release_steps,
+            right_gripper=opened,
+        )
+        self._append(
+            "post_release_return",
+            "post_release_return",
+            return_steps,
+            right_pose=right_rest,
+        )
+        self._append(
+            "stable_support",
+            "stable_settle",
+            settle_steps,
+            right_pose=right_rest,
         )
 
     def build(self) -> SkillTrajectory:
