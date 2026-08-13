@@ -472,6 +472,10 @@ def _repair_strategy(index: int) -> dict:
 
 
 def _worker_pids() -> list[int]:
+    lane_id = os.environ.get("CPGEN_LANE_ID")
+    lane_binding = (
+        f"CPGEN_LANE_ID={lane_id}".encode() if lane_id is not None else None
+    )
     workers = []
     for process in Path("/proc").glob("[0-9]*"):
         try:
@@ -480,8 +484,19 @@ def _worker_pids() -> list[int]:
             comm = process.joinpath("comm").read_text().strip()
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
-        if comm in {"isaac-sim", "kit"} or "run_hangmug_skill_program.py" in names:
-            workers.append(int(process.name))
+        if not (
+            comm in {"isaac-sim", "kit"}
+            or "run_hangmug_skill_program.py" in names
+        ):
+            continue
+        if lane_binding is not None:
+            try:
+                environment = process.joinpath("environ").read_bytes().split(b"\0")
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            if lane_binding not in environment:
+                continue
+        workers.append(int(process.name))
     return sorted(workers)
 
 
