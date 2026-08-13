@@ -1,6 +1,7 @@
 {
   "branch_orient_steps": 60,
   "branch_roll_offset_rad": 0.26,
+  "branch_support_fraction": 0.75,
   "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.08,
   "handover_orient_steps": 30,
