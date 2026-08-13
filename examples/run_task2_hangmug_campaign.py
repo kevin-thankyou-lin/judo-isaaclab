@@ -55,6 +55,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "post_release_return_clearance_m",
     "post_release_return_clearance_axis_local",
     "post_release_return_clearance_rotation_rad",
+    "post_release_return_clearance_late_axis_local",
     "post_release_return_clearance_late_rotation_rad",
     "stable_support_steps",
 })
@@ -194,6 +195,11 @@ def _repair_command(
         arguments.extend([
             "--post-release-return-clearance-axis-local",
             *map(str, strategy["post_release_return_clearance_axis_local"]),
+        ])
+    if "post_release_return_clearance_late_axis_local" in strategy:
+        arguments.extend([
+            "--post-release-return-clearance-late-axis-local",
+            *map(str, strategy["post_release_return_clearance_late_axis_local"]),
         ])
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
@@ -366,6 +372,7 @@ def _repair_strategy(index: int) -> dict:
         "post_release_return_clearance_m",
         "post_release_return_clearance_axis_local",
         "post_release_return_clearance_rotation_rad",
+        "post_release_return_clearance_late_axis_local",
         "post_release_return_clearance_late_rotation_rad",
         "stable_support_steps",
     }
@@ -541,6 +548,9 @@ def _repair_strategy(index: int) -> dict:
     late_clearance_angle = value.get(
         "post_release_return_clearance_late_rotation_rad", 0.0
     )
+    late_clearance_axis = value.get(
+        "post_release_return_clearance_late_axis_local"
+    )
     if clearance_axis is not None:
         axis = np.asarray(clearance_axis, dtype=np.float64)
         if axis.shape != (3,) or not np.all(np.isfinite(axis)):
@@ -589,17 +599,42 @@ def _repair_strategy(index: int) -> dict:
             raise ValueError(
                 "post-release return late clearance rotation must be within 0.12 rad"
             )
-        if clearance_axis is None or not late_clearance_angle:
+        if (
+            clearance_axis is None
+            and late_clearance_axis is None
+        ) or not late_clearance_angle:
             raise ValueError(
                 "post-release return late clearance rotation requires an axis"
             )
-        if abs(float(clearance_angle) + float(late_clearance_angle)) > 0.12:
+        if abs(float(clearance_angle)) + abs(float(late_clearance_angle)) > 0.12:
             raise ValueError(
                 "post-release return combined clearance rotation must be within 0.12 rad"
             )
         strategy["post_release_return_clearance_late_rotation_rad"] = float(
             late_clearance_angle
         )
+    if late_clearance_axis is not None:
+        axis = np.asarray(late_clearance_axis, dtype=np.float64)
+        if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+            raise ValueError(
+                "post-release return late clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError(
+                "post-release return late clearance axis must be unit length"
+            )
+        if not direct_steps[0]:
+            raise ValueError(
+                "post-release return clearance requires direct choreography"
+            )
+        if not late_clearance_angle:
+            raise ValueError(
+                "post-release return late clearance axis requires a rotation"
+            )
+        strategy["post_release_return_clearance_late_axis_local"] = (
+            axis / norm
+        ).tolist()
     if "stable_support_steps" in value:
         steps = value["stable_support_steps"]
         if (

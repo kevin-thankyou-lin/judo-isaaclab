@@ -722,6 +722,11 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
             0.97861533, 0.16855211, 0.11790769,
         ],
         "post_release_return_clearance_rotation_rad": 0.05,
+        "post_release_return_clearance_late_axis_local": [
+            0.6820671046039029,
+            0.421661671391995,
+            -0.5974829702143464,
+        ],
         "post_release_return_clearance_late_rotation_rad": 0.01,
     }))
     strategy = campaign._repair_strategy(4)
@@ -747,6 +752,13 @@ def test_branch_support_candidate_is_allowed_from_exact_pick_prefix(tmp_path, mo
         ]
         == "0.01"
     )
+    late_axis_option = command.index(
+        "--post-release-return-clearance-late-axis-local"
+    )
+    assert command[late_axis_option + 1 : late_axis_option + 4] == [
+        str(value)
+        for value in strategy["post_release_return_clearance_late_axis_local"]
+    ]
 
 
 def test_branch_approach_height_is_allowed_from_exact_pick_prefix(tmp_path, monkeypatch):

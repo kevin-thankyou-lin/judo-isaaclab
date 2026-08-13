@@ -652,6 +652,7 @@ def apply_post_release_return_clearance(
     clearance_rows: int = 7,
     rotation_axis_local: Any | None = None,
     rotation_rad: float = 0.0,
+    late_rotation_axis_local: Any | None = None,
     late_rotation_rad: float = 0.0,
 ) -> SkillTrajectory:
     """Apply bounded open-return clearance without changing Cartesian endpoints.
@@ -680,12 +681,12 @@ def apply_post_release_return_clearance(
         raise ValueError(
             "post-release return late clearance rotation must be within 0.12 rad"
         )
-    if abs(angle + late_angle) > 0.12:
+    if abs(angle) + abs(late_angle) > 0.12:
         raise ValueError(
             "post-release return combined clearance rotation must be within 0.12 rad"
         )
     if rotation_axis_local is None:
-        if angle or late_angle:
+        if angle:
             raise ValueError("post-release return clearance rotation requires an axis")
         axis = None
     else:
@@ -697,9 +698,31 @@ def apply_post_release_return_clearance(
         norm = float(np.linalg.norm(axis))
         if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
             raise ValueError("post-release return clearance axis must be unit length")
-        if not angle and not late_angle:
+        if not angle:
             raise ValueError("post-release return clearance axis requires a rotation")
         axis = axis / norm
+    if late_rotation_axis_local is None:
+        if late_angle and axis is None:
+            raise ValueError(
+                "post-release return late clearance rotation requires an axis"
+            )
+        late_axis = axis
+    else:
+        late_axis = np.asarray(late_rotation_axis_local, dtype=np.float64)
+        if late_axis.shape != (3,) or not np.all(np.isfinite(late_axis)):
+            raise ValueError(
+                "post-release return late clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(late_axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError(
+                "post-release return late clearance axis must be unit length"
+            )
+        if not late_angle:
+            raise ValueError(
+                "post-release return late clearance axis requires a rotation"
+            )
+        late_axis = late_axis / norm
     if (
         "right_release" not in trajectory.waypoint_steps
         or "post_release_return" not in trajectory.waypoint_steps
@@ -727,7 +750,7 @@ def apply_post_release_return_clearance(
         ) * (clearance / distance)
         translation_fraction = np.maximum(base_fraction, early_fraction)
         direct[:, :3] = start[:3] + translation_fraction[:, None] * displacement
-    if axis is not None:
+    if axis is not None or late_axis is not None:
         row = np.arange(return_steps, dtype=np.float64) + 1.0
         ramp = np.minimum(row / clearance_rows, 1.0)
         decay = np.maximum(
@@ -735,17 +758,33 @@ def apply_post_release_return_clearance(
             0.0,
         )
         envelope = np.minimum(ramp, decay)
-        # A late boost leaves the already-screened first ``clearance_rows - 1``
-        # poses untouched, arrives on the final required-clearance row, and
-        # then shares the existing continuous decay to the rest endpoint.
-        late_ramp = np.clip(row - (clearance_rows - 1), 0.0, 1.0)
-        late_envelope = np.minimum(late_ramp, decay)
-        row_angles = angle * envelope + late_angle * late_envelope
-        for index, row_angle in enumerate(row_angles):
-            half_angle = 0.5 * row_angle
-            offset = np.concatenate(
-                ([np.cos(half_angle)], axis * np.sin(half_angle))
-            )
+        # A late boost leaves the already-screened first ``clearance_rows``
+        # poses untouched, arrives on the following required-clearance row,
+        # and then decays continuously to the demonstrated-rest endpoint.
+        late_ramp = np.clip(row - clearance_rows, 0.0, 1.0)
+        late_decay = np.maximum(
+            (return_steps - row) / (return_steps - clearance_rows - 1),
+            0.0,
+        )
+        late_envelope = np.minimum(late_ramp, late_decay)
+        for index, (fraction, late_fraction) in enumerate(
+            zip(envelope, late_envelope, strict=True)
+        ):
+            offset = np.asarray([1.0, 0.0, 0.0, 0.0])
+            if axis is not None:
+                half_angle = 0.5 * angle * fraction
+                offset = np.concatenate(
+                    ([np.cos(half_angle)], axis * np.sin(half_angle))
+                )
+            if late_axis is not None and late_fraction:
+                late_half_angle = 0.5 * late_angle * late_fraction
+                late_offset = np.concatenate(
+                    (
+                        [np.cos(late_half_angle)],
+                        late_axis * np.sin(late_half_angle),
+                    )
+                )
+                offset = quaternion_multiply(offset, late_offset)
             direct[index, 3:] = quaternion_multiply(direct[index, 3:], offset)
     right[release_end + 1 : return_end + 1] = direct
     return SkillTrajectory(

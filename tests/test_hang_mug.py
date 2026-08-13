@@ -1552,6 +1552,11 @@ def test_post_release_clearance_advances_only_straight_return_translation():
             0.10791454599224021,
         ],
         rotation_rad=0.05383065939918987,
+        late_rotation_axis_local=[
+            0.6820671046039029,
+            0.421661671391995,
+            -0.5974829702143464,
+        ],
         late_rotation_rad=0.011169340600810133,
     )
     base_only = apply_post_release_return_clearance(
@@ -1568,16 +1573,20 @@ def test_post_release_clearance_advances_only_straight_return_translation():
     np.testing.assert_allclose(
         late_boosted.right_poses[:, :3], baseline.right_poses[:, :3]
     )
+    late_peak = release_end + 8
     np.testing.assert_allclose(
-        late_boosted.right_poses[release_end + 1 : peak],
-        base_only.right_poses[release_end + 1 : peak],
+        late_boosted.right_poses[release_end + 1 : late_peak],
+        base_only.right_poses[release_end + 1 : late_peak],
     )
     late_peak_alignment = abs(
-        float(late_boosted.right_poses[peak, 3:] @ baseline.right_poses[peak, 3:])
+        float(
+            late_boosted.right_poses[late_peak, 3:]
+            @ base_only.right_poses[late_peak, 3:]
+        )
     )
     assert 2.0 * np.arccos(
         np.clip(late_peak_alignment, -1.0, 1.0)
-    ) == pytest.approx(0.065)
+    ) == pytest.approx(0.011169340600810133)
     np.testing.assert_allclose(late_boosted.right_poses[return_end], right_start)
     with pytest.raises(ValueError, match="unit length"):
         apply_post_release_return_clearance(

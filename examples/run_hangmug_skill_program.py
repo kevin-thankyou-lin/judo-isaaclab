@@ -130,6 +130,13 @@ def _parser() -> argparse.Namespace:
         help="Bounded open-return rotation about the supplied local wrist axis.",
     )
     parser.add_argument(
+        "--post-release-return-clearance-late-axis-local",
+        type=float,
+        nargs=3,
+        default=None,
+        help="Unit local wrist pivot axis for the final-row clearance boost.",
+    )
+    parser.add_argument(
         "--post-release-return-clearance-late-rotation-rad",
         type=float,
         default=0.0,
@@ -1092,7 +1099,7 @@ def _bounded_post_release_return_clearance(value: float) -> float:
 
 
 def _bounded_post_release_return_rotation(
-    axis_value, angle_value, late_angle_value=0.0
+    axis_value, angle_value, late_axis_value=None, late_angle_value=0.0
 ):
     angle = float(angle_value)
     late_angle = float(late_angle_value)
@@ -1104,27 +1111,51 @@ def _bounded_post_release_return_rotation(
         raise ValueError(
             "post-release return late clearance rotation must be within 0.12 rad"
         )
-    if abs(angle + late_angle) > 0.12:
+    if abs(angle) + abs(late_angle) > 0.12:
         raise ValueError(
             "post-release return combined clearance rotation must be within 0.12 rad"
         )
     if axis_value is None:
-        if angle or late_angle:
+        if angle:
             raise ValueError(
                 "post-release return clearance rotation requires an axis"
             )
-        return None, angle, late_angle
-    axis = np.asarray(axis_value, dtype=np.float64)
-    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
-        raise ValueError(
-            "post-release return clearance axis must contain three finite values"
-        )
-    norm = float(np.linalg.norm(axis))
-    if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
-        raise ValueError("post-release return clearance axis must be unit length")
-    if not angle and not late_angle:
-        raise ValueError("post-release return clearance axis requires a rotation")
-    return axis / norm, angle, late_angle
+        axis = None
+    else:
+        axis = np.asarray(axis_value, dtype=np.float64)
+        if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+            raise ValueError(
+                "post-release return clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError("post-release return clearance axis must be unit length")
+        if not angle:
+            raise ValueError("post-release return clearance axis requires a rotation")
+        axis = axis / norm
+    if late_axis_value is None:
+        if late_angle and axis is None:
+            raise ValueError(
+                "post-release return late clearance rotation requires an axis"
+            )
+        late_axis = axis
+    else:
+        late_axis = np.asarray(late_axis_value, dtype=np.float64)
+        if late_axis.shape != (3,) or not np.all(np.isfinite(late_axis)):
+            raise ValueError(
+                "post-release return late clearance axis must contain three finite values"
+            )
+        norm = float(np.linalg.norm(late_axis))
+        if not 1.0 - 1.0e-3 <= norm <= 1.0 + 1.0e-3:
+            raise ValueError(
+                "post-release return late clearance axis must be unit length"
+            )
+        if not late_angle:
+            raise ValueError(
+                "post-release return late clearance axis requires a rotation"
+            )
+        late_axis = late_axis / norm
+    return axis, angle, late_axis, late_angle
 
 
 def _bounded_left_release_retreat(value: float) -> float:
@@ -2937,10 +2968,16 @@ def _build_skill(
     if direct_contract:
         from judo_isaaclab.hang_mug import apply_post_release_return_clearance
 
-        clearance_axis, clearance_angle, late_clearance_angle = (
+        (
+            clearance_axis,
+            clearance_angle,
+            late_clearance_axis,
+            late_clearance_angle,
+        ) = (
             _bounded_post_release_return_rotation(
                 args.post_release_return_clearance_axis_local,
                 args.post_release_return_clearance_rotation_rad,
+                args.post_release_return_clearance_late_axis_local,
                 args.post_release_return_clearance_late_rotation_rad,
             )
         )
@@ -2951,6 +2988,7 @@ def _build_skill(
             ),
             rotation_axis_local=clearance_axis,
             rotation_rad=clearance_angle,
+            late_rotation_axis_local=late_clearance_axis,
             late_rotation_rad=late_clearance_angle,
         )
     return (
@@ -3136,6 +3174,7 @@ def main() -> None:
     _bounded_post_release_return_rotation(
         args.post_release_return_clearance_axis_local,
         args.post_release_return_clearance_rotation_rad,
+        args.post_release_return_clearance_late_axis_local,
         args.post_release_return_clearance_late_rotation_rad,
     )
     _bounded_left_release_retreat(args.left_release_retreat_m)
@@ -3172,6 +3211,7 @@ def main() -> None:
         args.post_release_return_clearance_m
         or args.post_release_return_clearance_axis_local is not None
         or args.post_release_return_clearance_rotation_rad
+        or args.post_release_return_clearance_late_axis_local is not None
         or args.post_release_return_clearance_late_rotation_rad
     ) and not direct_steps[0]:
         raise ValueError(
@@ -3709,10 +3749,16 @@ def main() -> None:
                         apply_post_release_return_clearance,
                     )
 
-                    clearance_axis, clearance_angle, late_clearance_angle = (
+                    (
+                        clearance_axis,
+                        clearance_angle,
+                        late_clearance_axis,
+                        late_clearance_angle,
+                    ) = (
                         _bounded_post_release_return_rotation(
                             args.post_release_return_clearance_axis_local,
                             args.post_release_return_clearance_rotation_rad,
+                            args.post_release_return_clearance_late_axis_local,
                             args.post_release_return_clearance_late_rotation_rad,
                         )
                     )
@@ -3723,6 +3769,7 @@ def main() -> None:
                         ),
                         rotation_axis_local=clearance_axis,
                         rotation_rad=clearance_angle,
+                        late_rotation_axis_local=late_clearance_axis,
                         late_rotation_rad=late_clearance_angle,
                     )
                 nominal_right_contact = compose_pose(
@@ -4250,6 +4297,15 @@ def main() -> None:
         result["protocol"]["parameters"][
             "post_release_return_clearance_rotation_rad"
         ] = float(args.post_release_return_clearance_rotation_rad)
+        result["protocol"]["parameters"][
+            "post_release_return_clearance_late_axis_local"
+        ] = (
+            None
+            if args.post_release_return_clearance_late_axis_local is None
+            else list(
+                map(float, args.post_release_return_clearance_late_axis_local)
+            )
+        )
         result["protocol"]["parameters"][
             "post_release_return_clearance_late_rotation_rad"
         ] = float(args.post_release_return_clearance_late_rotation_rad)
