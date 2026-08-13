@@ -1245,7 +1245,12 @@ def test_pair_15_committed_single_pad_closure_respects_remaining_motion_budget()
     assert np.linalg.norm(control["translation_world_m"]) == pytest.approx(
         remaining_m
     )
-    assert control["jaw_increment"] == pytest.approx(0.004)
+    assert closure["pre_peer_motion_unbudgeted_jaw_increment"] == pytest.approx(
+        0.004
+    )
+    assert control["jaw_increment"] == pytest.approx(
+        0.004 * closure["pre_peer_motion_control_scale"]
+    )
     assert handle_local_mpc_frame_receipt_complete(budgeted.frame_receipt)
 
     unopted_closure = legacy.frame_receipt["closure"]

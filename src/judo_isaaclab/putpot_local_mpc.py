@@ -428,6 +428,7 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "pre_peer_motion_control_scale",
             "pre_peer_motion_unbudgeted_translation_world_m",
             "pre_peer_motion_unbudgeted_rotation_axis_angle_world_rad",
+            "pre_peer_motion_unbudgeted_jaw_increment",
             "increment_active",
             "committed",
             "closed_command_reached",
@@ -1257,6 +1258,7 @@ def handle_local_mpc_step(
     )
     pre_peer_motion_unbudgeted_translation = translation_increment.copy()
     pre_peer_motion_unbudgeted_rotation = rotation_increment.copy()
+    pre_peer_motion_unbudgeted_jaw_increment = jaw_increment
     pre_peer_motion_control_scale = 1.0
     unbudgeted_translation_norm_m = float(
         np.linalg.norm(pre_peer_motion_unbudgeted_translation)
@@ -1270,15 +1272,17 @@ def handle_local_mpc_step(
         # The resulting observation reached dual force one frame too late,
         # after the pot had already moved 3.621 mm.  Conservatively treat the
         # remaining object-motion allowance as a prospective upper bound on
-        # the simultaneous wrist correction.  Scale translation and rotation
-        # together so the path direction is preserved; the existing bounded
-        # jaw stroke remains unchanged and the ordinary guard still fails
-        # closed on the next measured observation.
+        # the simultaneous closure actuation.  Attempt 56 proved that scaling
+        # only the wrist correction leaves the 4 mm jaw stroke free to move
+        # the pot another 0.996 mm.  Scale translation, rotation, and jaw
+        # together so the closure path is preserved, while the ordinary guard
+        # still fails closed on the next measured observation.
         pre_peer_motion_control_scale = float(
             pre_peer_motion_remaining_m / unbudgeted_translation_norm_m
         )
         translation_increment *= pre_peer_motion_control_scale
         rotation_increment *= pre_peer_motion_control_scale
+        jaw_increment *= pre_peer_motion_control_scale
     actual_recenter_translation_m = (
         max(
             0.0,
@@ -1584,6 +1588,9 @@ def handle_local_mpc_step(
             ),
             "pre_peer_motion_unbudgeted_rotation_axis_angle_world_rad": (
                 pre_peer_motion_unbudgeted_rotation.tolist()
+            ),
+            "pre_peer_motion_unbudgeted_jaw_increment": (
+                pre_peer_motion_unbudgeted_jaw_increment
             ),
             "increment_active": bool(jaw_increment != 0.0),
             "committed": next_closure_committed,
