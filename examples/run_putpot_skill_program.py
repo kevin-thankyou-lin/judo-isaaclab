@@ -409,6 +409,195 @@ def _pivot_source_corridor_grasp_endpoint(
     }
 
 
+def _pivot_source_corridor_from_measured_contacts(
+    desired_pregrasp,
+    desired_grasp,
+    trace_path,
+    sample_step: int,
+    *,
+    lane_id: str,
+    minimum_force_n: float,
+    target_fraction: float = 0.25,
+    maximum_rotation_rad: float = 0.35,
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    """Pivot about the measured interior contact to deepen the weak pad.
+
+    The correction is reconstructed from a complete pair-local trace.  It
+    holds the stronger pad's measured contact point fixed and rotates the weak
+    pad opposite its measured tip-to-base axis until the rigid-contact model
+    reaches the requested interior fraction.  Only the executable grasp is
+    changed; the collision-clear pregrasp remains byte-identical.
+    """
+
+    from judo_isaaclab.put_marker import (
+        inverse_pose,
+        quaternion_multiply,
+        quaternion_rotate,
+    )
+    from judo_isaaclab.put_pot import YAM_FINGER_PAD_AXIS_LENGTH_M
+
+    pregrasp = np.asarray(desired_pregrasp, dtype=np.float64).copy()
+    grasp = np.asarray(desired_grasp, dtype=np.float64).copy()
+    if pregrasp.shape != (7,) or grasp.shape != (7,):
+        raise ValueError("source corridor endpoints must be poses")
+    path = Path(trace_path).resolve()
+    if f"/lanes/{lane_id}/" not in str(path):
+        raise ValueError("measured contact pivot trace must be pair-lane local")
+    if not np.isfinite(minimum_force_n) or minimum_force_n <= 0.0:
+        raise ValueError("measured contact pivot force gate must be positive")
+    if not np.isfinite(target_fraction) or not 0.10 < target_fraction < 0.5:
+        raise ValueError("measured contact pivot target must be interior")
+    if not np.isfinite(maximum_rotation_rad) or not (
+        0.0 < maximum_rotation_rad <= 0.35
+    ):
+        raise ValueError("measured contact pivot rotation bound is invalid")
+
+    with np.load(path, allow_pickle=False) as trace:
+        if bool(np.asarray(trace["partial_trace"]).item()):
+            raise ValueError("measured contact pivot requires a complete trace")
+        steps = int(trace["left_eef_poses"].shape[0])
+        if not 0 <= int(sample_step) < steps:
+            raise ValueError("measured contact pivot sample is outside the trace")
+        observed_wrist = np.asarray(
+            trace["left_eef_poses"][sample_step], dtype=np.float64
+        )
+        forces = np.asarray(
+            trace["left_finger_forces_n"][sample_step], dtype=np.float64
+        )
+        fractions = np.asarray(
+            trace["left_pad_fractions"][sample_step], dtype=np.float64
+        )
+        centers = np.asarray(
+            trace["left_pad_centers_world"][sample_step], dtype=np.float64
+        )
+        axes = np.asarray(
+            trace["left_pad_axes_world"][sample_step], dtype=np.float64
+        )
+    if (
+        observed_wrist.shape != (7,)
+        or forces.shape != (2,)
+        or fractions.shape != (2,)
+        or centers.shape != (2, 3)
+        or axes.shape != (2, 3)
+        or not np.all(
+            np.isfinite(
+                np.concatenate(
+                    (observed_wrist, forces, fractions, centers.ravel(), axes.ravel())
+                )
+            )
+        )
+    ):
+        raise ValueError("measured contact pivot evidence is malformed")
+    if not np.all(forces >= minimum_force_n):
+        raise ValueError("measured contact pivot requires dual force backing")
+    axis_norms = np.linalg.norm(axes, axis=1)
+    if np.any(axis_norms <= 1.0e-9):
+        raise ValueError("measured contact pivot pad axes must be nonzero")
+    axes /= axis_norms[:, None]
+    weak = int(np.argmin(fractions))
+    strong = 1 - weak
+    if not (
+        fractions[weak] < 0.10
+        and 0.10 <= fractions[strong] <= 0.90
+        and fractions[weak] < target_fraction
+    ):
+        raise ValueError("measured contact pivot evidence lacks one weak pad")
+
+    extent = float(YAM_FINGER_PAD_AXIS_LENGTH_M)
+    contacts = centers + (fractions[:, None] - 0.5) * extent * axes
+    pivot_world = contacts[strong]
+    separation_world = contacts[weak] - pivot_world
+    desired_motion_world = -axes[weak]
+    rotation_axis_world = np.cross(separation_world, desired_motion_world)
+    rotation_axis_norm = float(np.linalg.norm(rotation_axis_world))
+    if rotation_axis_norm <= 1.0e-9:
+        raise ValueError("measured contact pivot geometry is degenerate")
+    rotation_axis_world /= rotation_axis_norm
+    coefficient_cos = float(np.dot(desired_motion_world, separation_world))
+    coefficient_sin = float(
+        np.dot(
+            desired_motion_world,
+            np.cross(rotation_axis_world, separation_world),
+        )
+    )
+    required_motion_m = float((target_fraction - fractions[weak]) * extent)
+
+    def predicted_motion(angle: float) -> float:
+        return float(
+            coefficient_cos * (np.cos(angle) - 1.0)
+            + coefficient_sin * np.sin(angle)
+        )
+
+    if predicted_motion(maximum_rotation_rad) < required_motion_m:
+        raise ValueError("measured weak-pad residual exceeds the pivot rotation bound")
+    low, high = 0.0, float(maximum_rotation_rad)
+    for _ in range(64):
+        midpoint = 0.5 * (low + high)
+        if predicted_motion(midpoint) < required_motion_m:
+            low = midpoint
+        else:
+            high = midpoint
+    rotation_rad = high
+
+    observed_inverse = inverse_pose(observed_wrist)
+    pivot_local = quaternion_rotate(
+        observed_inverse[3:], pivot_world - observed_wrist[:3]
+    )
+    rotation_axis_local = quaternion_rotate(
+        observed_inverse[3:], rotation_axis_world
+    )
+    target_pivot_world = grasp[:3] + quaternion_rotate(grasp[3:], pivot_local)
+    target_rotation_axis_world = quaternion_rotate(
+        grasp[3:], rotation_axis_local
+    )
+    target_rotation_axis_world /= np.linalg.norm(target_rotation_axis_world)
+    delta = np.concatenate(
+        (
+            [np.cos(0.5 * rotation_rad)],
+            target_rotation_axis_world * np.sin(0.5 * rotation_rad),
+        )
+    )
+    result = grasp.copy()
+    result[:3] = target_pivot_world + quaternion_rotate(
+        delta, grasp[:3] - target_pivot_world
+    )
+    result[3:] = quaternion_multiply(delta, grasp[3:])
+    result[3:] /= np.linalg.norm(result[3:])
+    transformed_pivot_world = result[:3] + quaternion_rotate(
+        result[3:], pivot_local
+    )
+    predicted_fraction = float(
+        fractions[weak] + predicted_motion(rotation_rad) / extent
+    )
+    return pregrasp, result, {
+        "enabled": True,
+        "mechanism": "measured_dual_contact_strong_pad_pivot",
+        "trace": {
+            "path": str(path),
+            "sample_step": int(sample_step),
+            "sha256": _sha256(path),
+        },
+        "finger_forces_n": forces.tolist(),
+        "pad_fractions_before": fractions.tolist(),
+        "strong_finger_index": strong,
+        "weak_finger_index": weak,
+        "target_weak_pad_fraction": float(target_fraction),
+        "predicted_weak_pad_fraction": predicted_fraction,
+        "required_weak_pad_motion_m": required_motion_m,
+        "rotation_axis_observed_world": rotation_axis_world.tolist(),
+        "rotation_rad": rotation_rad,
+        "maximum_rotation_rad": float(maximum_rotation_rad),
+        "strong_contact_pivot_world": pivot_world.tolist(),
+        "predicted_strong_contact_pivot_drift_m": float(
+            np.linalg.norm(transformed_pivot_world - target_pivot_world)
+        ),
+        "pregrasp_unchanged": bool(np.array_equal(pregrasp, desired_pregrasp)),
+        "grasp_orientation_changed": bool(
+            not np.array_equal(result[3:], grasp[3:])
+        ),
+    }
+
+
 def _offset_object_contact_frame(
     observed_object_pose, observed_contact_frame, object_local_translation
 ):
@@ -897,6 +1086,19 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "pivot. Valid only for strict quality left-first acquisition; "
             "controller gains, contact gates, and the right grasp are unchanged."
         ),
+    )
+    parser.add_argument(
+        "--target-left-measured-contact-pivot-trace",
+        help=(
+            "Pair-lane complete trace containing one force-backed dual-contact "
+            "left sample used to pivot the executable grasp about its measured "
+            "interior pad contact."
+        ),
+    )
+    parser.add_argument(
+        "--target-left-measured-contact-pivot-step",
+        type=int,
+        help="Sample step in the measured-contact pivot trace.",
     )
     return parser.parse_args(argv)
 
@@ -2933,6 +3135,22 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError(
                 "left handle-pad balance authority must be finite and positive"
             )
+    measured_contact_pivot_requested = bool(
+        args.target_left_measured_contact_pivot_trace
+    )
+    if measured_contact_pivot_requested != (
+        args.target_left_measured_contact_pivot_step is not None
+    ):
+        raise ValueError("measured contact pivot requires both trace and step")
+    if measured_contact_pivot_requested:
+        if not quality_left_first_local_mpc:
+            raise ValueError(
+                "measured contact pivot requires strict quality left-first MPC"
+            )
+        if args.target_left_handle_pad_balance_limit_m is not None:
+            raise ValueError(
+                "measured contact pivot is exclusive with a geometry balance override"
+            )
     if args.target_handle_local_mpc_acquisition_extension_steps:
         if not (args.target_handle_local_mpc_acquisition and args.acquisition_only):
             raise ValueError(
@@ -3869,6 +4087,21 @@ def main(argv: list[str] | None = None) -> None:
                         ] = "after_depth_guard_released"
                     else:
                         precontact_pad_balance["mpc_contact_reference_applied"] = False
+                if measured_contact_pivot_requested:
+                    (
+                        desired_pregrasp,
+                        desired_grasp,
+                        executable_pad_pivot,
+                    ) = _pivot_source_corridor_from_measured_contacts(
+                        desired_pregrasp,
+                        desired_grasp,
+                        args.target_left_measured_contact_pivot_trace,
+                        int(args.target_left_measured_contact_pivot_step),
+                        lane_id=os.environ["CPGEN_LANE_ID"],
+                        minimum_force_n=float(
+                            quality_config.grasp["minimum_force_n"]
+                        ),
+                    )
                 if quality_combined_centering:
                     desired_pregrasp, desired_grasp = (
                         _translate_source_corridor_endpoints(

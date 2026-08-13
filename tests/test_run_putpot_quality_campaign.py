@@ -14,6 +14,7 @@ from run_putpot_skill_program import (
     _collision_clear_peer_pregrasp,
     _critic_owned_precontact_pad_balance,
     _offset_object_contact_frame,
+    _pivot_source_corridor_from_measured_contacts,
     _pivot_source_corridor_grasp_endpoint,
     _pad_balance_mpc_reference_active,
     _quality_left_first_local_mpc_enabled,
@@ -49,6 +50,17 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     assert parsed.target_left_handle_pad_balance_limit_m == pytest.approx(
         0.01819198772819174
     )
+    parsed = _parser(
+        required
+        + [
+            "--target-left-measured-contact-pivot-trace",
+            "trace.npz",
+            "--target-left-measured-contact-pivot-step",
+            "136",
+        ]
+    )
+    assert parsed.target_left_measured_contact_pivot_trace == "trace.npz"
+    assert parsed.target_left_measured_contact_pivot_step == 136
 
 
 def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
@@ -68,6 +80,58 @@ def test_pair_owned_pad_pivot_routes_to_executable_grasp_only():
     )
     assert receipt["relative_balance_m"] == pytest.approx(0.01819198772819174)
     assert receipt["source_corridor_sign_reversed"]
+
+
+def test_measured_contact_pivot_holds_strong_contact_and_deepens_weak_pad(tmp_path):
+    lane_id = "putpot-quality-v1-n2-gpu7-pair000015"
+    trace = tmp_path / "lanes" / lane_id / "attempts" / "attempt-000022" / "trace.npz"
+    trace.parent.mkdir(parents=True)
+    observed_wrist = np.asarray(
+        [0.5640212893, 0.2785080969, 0.9418922663, 1.0, 0.0, 0.0, 0.0]
+    )
+    fractions = np.asarray([0.5646404624, 0.02680289745])
+    centers = np.asarray(
+        [
+            [0.61423218, 0.23112977, 0.85405874],
+            [0.62944001, 0.19547606, 0.90003788],
+        ]
+    )
+    axes = np.asarray(
+        [
+            [-0.53429878, 0.60616170, 0.58914583],
+            [-0.51440213, 0.55229118, 0.65602203],
+        ]
+    )
+    np.savez(
+        trace,
+        partial_trace=np.asarray(False),
+        left_eef_poses=observed_wrist[None, :],
+        left_finger_forces_n=np.asarray([[11.55667, 22.79371]]),
+        left_pad_fractions=fractions[None, :],
+        left_pad_centers_world=centers[None, :, :],
+        left_pad_axes_world=axes[None, :, :],
+    )
+    pregrasp = np.asarray([0.5, 0.3, 0.92, 1.0, 0.0, 0.0, 0.0])
+    grasp = np.asarray([0.56, 0.29, 0.91, 1.0, 0.0, 0.0, 0.0])
+    routed_pregrasp, routed_grasp, receipt = (
+        _pivot_source_corridor_from_measured_contacts(
+            pregrasp,
+            grasp,
+            trace,
+            0,
+            lane_id=lane_id,
+            minimum_force_n=1.0,
+        )
+    )
+    np.testing.assert_array_equal(routed_pregrasp, pregrasp)
+    assert not np.array_equal(routed_grasp, grasp)
+    assert receipt["pregrasp_unchanged"]
+    assert receipt["strong_finger_index"] == 0
+    assert receipt["weak_finger_index"] == 1
+    assert receipt["predicted_weak_pad_fraction"] == pytest.approx(0.25)
+    assert receipt["predicted_strong_contact_pivot_drift_m"] < 1.0e-12
+    assert receipt["rotation_rad"] == pytest.approx(0.2759809, abs=1.0e-5)
+    assert receipt["rotation_rad"] < receipt["maximum_rotation_rad"]
 
 
 def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():
