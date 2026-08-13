@@ -28,6 +28,7 @@ from judo_isaaclab.put_marker import (
     quaternion_rotate,
 )
 from run_hangmug_skill_program import (
+    _DynamicStepRange,
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_support_offset_pose,
@@ -60,6 +61,7 @@ from run_hangmug_skill_program import (
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
     _resolve_target_assets,
+    _rollout_total_steps,
     _requires_observed_handover_reanchor,
     _require_reusable_pick_boundary,
     _source_pick_prefix_steps,
@@ -87,6 +89,54 @@ def _return_clearance_row(environment_force, mug_force, prior_rows):
         "return_contact_clearance": receipt,
         "passed": receipt["passed"],
     }
+
+
+def test_dynamic_rollout_horizon_executes_longer_reanchored_terminal_suffix():
+    source_prefix_steps = 393
+    rollout_steps = _DynamicStepRange(880)
+    executed = []
+
+    for step in rollout_steps:
+        executed.append(step)
+        if step == source_prefix_steps:
+            total_steps = _rollout_total_steps(
+                SimpleNamespace(steps=569),
+                source_prefix_steps=source_prefix_steps,
+                source_action_count=880,
+            )
+            rollout_steps.update(total_steps)
+
+    assert executed == list(range(962))
+    assert [step for step in executed if 872 <= step <= 901] == list(
+        range(872, 902)
+    )
+    assert [step for step in executed if 902 <= step <= 961] == list(
+        range(902, 962)
+    )
+
+
+@pytest.mark.parametrize(
+    ("replacement_steps", "expected_total"),
+    [(487, 880), (427, 820)],
+)
+def test_dynamic_rollout_horizon_preserves_unchanged_or_shorter_reanchors(
+    replacement_steps, expected_total
+):
+    source_prefix_steps = 393
+    rollout_steps = _DynamicStepRange(880)
+    executed = []
+
+    for step in rollout_steps:
+        executed.append(step)
+        if step == source_prefix_steps:
+            total_steps = _rollout_total_steps(
+                SimpleNamespace(steps=replacement_steps),
+                source_prefix_steps=source_prefix_steps,
+                source_action_count=880,
+            )
+            rollout_steps.update(total_steps)
+
+    assert executed == list(range(expected_total))
 
 
 def test_post_release_contact_must_clear_monotonically_within_eight_rows():
