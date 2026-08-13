@@ -1317,6 +1317,64 @@ def _contact_force_by_body_receipt(
     }
 
 
+def _contact_view_max_force_vector(view, physics_dt: float) -> list[float]:
+    """Return the world-frame vector corresponding to a view's peak force."""
+    if isinstance(view, (tuple, list)):
+        vectors = [
+            _contact_view_max_force_vector(item, physics_dt) for item in view
+        ]
+        return max(
+            vectors,
+            key=lambda vector: float(np.linalg.norm(vector)),
+            default=[0.0] * 3,
+        )
+    if hasattr(view, "data"):
+        values = view.data.force_matrix_w
+        if values is None:
+            raise RuntimeError("predeclared contact sensor has no filtered force matrix")
+    else:
+        values = view.get_contact_force_matrix(dt=physics_dt)
+    if hasattr(values, "detach"):
+        values = values.detach().cpu().numpy()
+    array = np.asarray(values, dtype=np.float64)
+    if array.size == 0:
+        return [0.0, 0.0, 0.0]
+    if array.shape[-1] != 3:
+        raise RuntimeError(
+            f"filtered contact force matrix must end in xyz, got {array.shape}"
+        )
+    vectors = array.reshape(-1, 3)
+    vector = vectors[int(np.argmax(np.linalg.norm(vectors, axis=1)))]
+    return [float(value) for value in vector]
+
+
+def _contact_force_vector_by_body_receipt(
+    views: object, body_paths: object, physics_dt: float
+) -> dict[str, list[float]]:
+    """Attribute peak filtered world-frame vectors without changing any guard."""
+    sensors = tuple(views) if isinstance(views, (tuple, list)) else (views,)
+    paths = (
+        tuple(body_paths)
+        if isinstance(body_paths, (tuple, list))
+        else (body_paths,)
+    )
+    if len(sensors) != len(paths):
+        raise RuntimeError(
+            "contact sensor/body path count mismatch: "
+            f"{len(sensors)} sensors for {len(paths)} paths"
+        )
+    return {
+        str(path): vector
+        for path, sensor in zip(paths, sensors)
+        if float(
+            np.linalg.norm(
+                vector := _contact_view_max_force_vector(sensor, physics_dt)
+            )
+        )
+        > 1.0e-6
+    }
+
+
 def _pose_path_step_receipt(
     poses: np.ndarray,
     *,
@@ -1582,11 +1640,26 @@ def _handover_wave_live_row(
                 views["environment"], views["right_body_paths"], physics_dt
             )
         ),
+        "environment_contact_force_vector_by_right_body_world_n": (
+            _contact_force_vector_by_body_receipt(
+                views["environment"], views["right_body_paths"], physics_dt
+            )
+        ),
         "mug_contact_force_by_right_body_n": _contact_force_by_body_receipt(
             views["mug"], views["right_body_paths"], physics_dt
         ),
+        "mug_contact_force_vector_by_right_body_world_n": (
+            _contact_force_vector_by_body_receipt(
+                views["mug"], views["right_body_paths"], physics_dt
+            )
+        ),
         "tree_contact_force_by_left_body_n": _contact_force_by_body_receipt(
             views["left_tree"], views["left_body_paths"], physics_dt
+        ),
+        "tree_contact_force_vector_by_left_body_world_n": (
+            _contact_force_vector_by_body_receipt(
+                views["left_tree"], views["left_body_paths"], physics_dt
+            )
         ),
         "intended_right_mug_contact": intended_contact,
         "checks": checks,
@@ -1870,8 +1943,18 @@ def _direct_segment_live_row(
                 views["environment"], views["right_body_paths"], physics_dt
             )
         ),
+        "environment_contact_force_vector_by_right_body_world_n": (
+            _contact_force_vector_by_body_receipt(
+                views["environment"], views["right_body_paths"], physics_dt
+            )
+        ),
         "mug_contact_force_by_right_body_n": _contact_force_by_body_receipt(
             views["mug"], views["right_body_paths"], physics_dt
+        ),
+        "mug_contact_force_vector_by_right_body_world_n": (
+            _contact_force_vector_by_body_receipt(
+                views["mug"], views["right_body_paths"], physics_dt
+            )
         ),
         "right_pad_fractions": fractions.tolist(),
         "right_finger_forces_n": forces.tolist(),

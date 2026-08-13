@@ -39,6 +39,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
+    _contact_force_vector_by_body_receipt,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
     _direct_segment_live_row,
@@ -218,6 +219,24 @@ def test_contact_force_receipt_attributes_only_nonzero_body_forces():
     assert receipt == {"colliding_link": 5.0}
 
 
+def test_contact_force_vector_receipt_attributes_peak_world_vector_by_body():
+    def sensor(forces):
+        return SimpleNamespace(
+            data=SimpleNamespace(force_matrix_w=np.asarray(forces, dtype=np.float64))
+        )
+
+    receipt = _contact_force_vector_by_body_receipt(
+        (
+            sensor([[[0.0, 0.0, 0.0]]]),
+            sensor([[[1.0, 2.0, 2.0], [-3.0, 0.0, 4.0]]]),
+        ),
+        ("quiet_link", "colliding_link"),
+        1.0 / 120.0,
+    )
+
+    assert receipt == {"colliding_link": [-3.0, 0.0, 4.0]}
+
+
 def test_direct_segment_live_row_attributes_environment_and_mug_by_body():
     def sensor(forces):
         return SimpleNamespace(
@@ -251,6 +270,12 @@ def test_direct_segment_live_row_attributes_environment_and_mug_by_body():
         "right_finger": 7.0
     }
     assert row["mug_contact_force_by_right_body_n"] == {"right_camera": 2.0}
+    assert row["environment_contact_force_vector_by_right_body_world_n"] == {
+        "right_finger": [0.0, 0.0, 7.0]
+    }
+    assert row["mug_contact_force_vector_by_right_body_world_n"] == {
+        "right_camera": [0.0, 0.0, 2.0]
+    }
     assert row["maximum_environment_contact_force_n"] == 7.0
     assert row["maximum_mug_contact_force_n"] == 2.0
     assert row["passed"] is False
