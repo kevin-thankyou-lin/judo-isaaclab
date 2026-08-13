@@ -1833,6 +1833,65 @@ def _direct_segment_plan_screen(
     }
 
 
+def _direct_pose_interpolation_receipt(
+    trajectory,
+    boundaries: dict[str, dict[str, int | None]],
+    previous: str,
+    segment: str,
+) -> dict[str, object]:
+    """Measure whether one named pose segment is one Cartesian interpolation."""
+    previous_end = boundaries[previous]["last_row"]
+    segment_start = boundaries[segment]["first_row"]
+    segment_end = boundaries[segment]["last_row"]
+    if previous_end is None or segment_start is None or segment_end is None:
+        return {
+            "rows": 0,
+            "maximum_line_residual_m": float("inf"),
+            "fractions_monotone": False,
+            "endpoint_fraction": None,
+            "passed": False,
+        }
+    desired = np.asarray(trajectory.right_poses, dtype=np.float64)
+    if segment_end >= len(desired):
+        return {
+            "rows": int(segment_end - segment_start + 1),
+            "maximum_line_residual_m": float("inf"),
+            "fractions_monotone": False,
+            "endpoint_fraction": None,
+            "passed": False,
+        }
+    start = desired[previous_end, :3]
+    points = desired[segment_start : segment_end + 1, :3]
+    direction = points[-1] - start
+    squared = float(direction @ direction)
+    if squared <= 0.0:
+        return {
+            "rows": int(len(points)),
+            "maximum_line_residual_m": float("inf"),
+            "fractions_monotone": False,
+            "endpoint_fraction": None,
+            "passed": False,
+        }
+    fractions = (points - start) @ direction / squared
+    residuals = np.linalg.norm(
+        points - (start + fractions[:, None] * direction), axis=1
+    )
+    maximum_residual = float(residuals.max(initial=0.0))
+    monotone = bool(np.all(np.diff(fractions) >= -1.0e-9))
+    endpoint_fraction = float(fractions[-1])
+    return {
+        "rows": int(len(points)),
+        "maximum_line_residual_m": maximum_residual,
+        "fractions_monotone": monotone,
+        "endpoint_fraction": endpoint_fraction,
+        "passed": bool(
+            maximum_residual <= 1.0e-6
+            and monotone
+            and abs(endpoint_fraction - 1.0) <= 1.0e-6
+        ),
+    }
+
+
 def _direct_phase_contract_receipt(
     trajectory,
     trace_waypoints,
@@ -1874,6 +1933,12 @@ def _direct_phase_contract_receipt(
     ordered = all_required and all(
         boundaries[left]["last_row"] < boundaries[right]["first_row"]
         for left, right in zip(required[:-1], required[1:], strict=True)
+    )
+    outbound_interpolation = _direct_pose_interpolation_receipt(
+        trajectory, boundaries, "carrying_rest_observer", "direct_preinsert"
+    )
+    return_interpolation = _direct_pose_interpolation_receipt(
+        trajectory, boundaries, "right_release", "post_release_return"
     )
     action_array = np.asarray(actions, dtype=np.float64)
     right_gripper = (
@@ -1946,6 +2011,10 @@ def _direct_phase_contract_receipt(
         "legacy_transport_orientation_approach_unload_absent": not any(
             np.any(names == name) for name in forbidden
         ),
+        "outbound_one_direct_interpolation": bool(
+            outbound_interpolation["passed"]
+        ),
+        "return_one_direct_interpolation": bool(return_interpolation["passed"]),
         "carrier_command_closed_through_supported_hold": carrier_closed,
         "one_monotone_final_opening": release_monotone and opening_runs == 1,
         "right_gripper_never_reclosed": never_reclosed,
@@ -1961,6 +2030,8 @@ def _direct_phase_contract_receipt(
         "observed_compressed_suffix": list(observed_suffix),
         "forbidden_waypoints": list(forbidden),
         "phase_boundaries": boundaries,
+        "outbound_interpolation": outbound_interpolation,
+        "post_release_return_interpolation": return_interpolation,
         "right_opening_transition_runs": opening_runs,
         "maximum_left_observer_position_error_m": float(observer_error),
         "checks": checks,

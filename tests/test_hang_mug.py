@@ -19,7 +19,12 @@ from judo_isaaclab.hang_mug import (
     transfer_handover_contact_by_handle_frame,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
-from judo_isaaclab.put_marker import compose_pose, inverse_pose, quaternion_rotate
+from judo_isaaclab.put_marker import (
+    SkillTrajectory,
+    compose_pose,
+    inverse_pose,
+    quaternion_rotate,
+)
 from run_hangmug_skill_program import (
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
@@ -1336,6 +1341,85 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     )
     assert receipt["passed"] is True
     assert receipt["right_opening_transition_runs"] == 1
+
+    curved_right = trajectory.right_poses.copy()
+    first_preinsert = trajectory.waypoint_steps["carrying_rest_observer"] + 1
+    curved_right[first_preinsert, 1] += 0.02
+    curved_trajectory = SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=curved_right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+    curved_receipt = _direct_phase_contract_receipt(
+        curved_trajectory,
+        names,
+        actions,
+        [{"left_eef_pose": _pose().tolist(), "right_grasp": False}, *sample_rows],
+    )
+    assert curved_receipt["passed"] is False
+    assert curved_receipt["checks"]["outbound_one_direct_interpolation"] is False
+    assert curved_receipt["outbound_interpolation"][
+        "maximum_line_residual_m"
+    ] > 0.01
+    json.dumps(curved_receipt)
+
+
+def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    quarter_turn = np.sqrt(0.5)
+    preinsert = np.asarray(
+        [0.7, -0.2, 0.95, quarter_turn, 0.0, 0.0, quarter_turn]
+    )
+    insert = preinsert.copy()
+    insert[:3] = [0.75, -0.15, 0.85]
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(right_start, left_observer, steps=4)
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=12, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_return_to_rest(
+        insert, right_start, support_steps=2, release_steps=3,
+        return_steps=5, settle_steps=2,
+    )
+    trajectory = program.build()
+    planned_contact = _pose(0.05, -0.02, 0.03)
+    observed_mug = _pose(0.35, -0.25, 0.82)
+    observed_contact = _pose(0.075, -0.01, 0.045)
+    observed_right = compose_pose(observed_mug, observed_contact)
+    adjusted = reanchor_branch_transport_contact(
+        trajectory,
+        planned_contact,
+        observed_mug,
+        observed_right,
+        completed_waypoint="carrying_rest_observer",
+    )
+
+    rest_end = trajectory.waypoint_steps["carrying_rest_observer"]
+    preinsert_end = trajectory.waypoint_steps["direct_preinsert"]
+    intended_endpoint_mug = compose_pose(
+        trajectory.right_poses[preinsert_end], inverse_pose(planned_contact)
+    )
+    np.testing.assert_allclose(
+        adjusted.right_poses[preinsert_end],
+        compose_pose(intended_endpoint_mug, observed_contact),
+    )
+    points = adjusted.right_poses[rest_end + 1 : preinsert_end + 1, :3]
+    start = adjusted.right_poses[rest_end, :3]
+    direction = points[-1] - start
+    fractions = (points - start) @ direction / float(direction @ direction)
+    residuals = np.linalg.norm(
+        points - (start + fractions[:, None] * direction), axis=1
+    )
+    assert residuals.max() <= 1.0e-12
+    assert np.all(np.diff(fractions) >= -1.0e-12)
 
 
 def test_pose_path_step_receipt_rejects_discontinuous_wrist_jump():
