@@ -1306,7 +1306,29 @@ def _claim_explicit_lane(index: int, lane_id: str) -> Path:
     }
     path = RESULTS / "pairs" / f"{index:06d}" / "lane_assignment.json"
     if path.exists():
-        if _load(path) != receipt:
+        recorded = _load(path)
+        immutable_fields = (
+            "schema_version",
+            "pair_index",
+            "human_pair",
+            "lane_id",
+            "results_root",
+        )
+        fields_changed = any(
+            recorded.get(field) != receipt[field] for field in immutable_fields
+        )
+        recorded_head = recorded.get("judo_head")
+        current_head = receipt["judo_head"]
+        head_is_authorized = recorded_head == current_head
+        if not head_is_authorized and isinstance(recorded_head, str):
+            head_is_authorized = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", recorded_head, current_head],
+                cwd=REPO_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode == 0
+        if fields_changed or not head_is_authorized:
             raise RuntimeError(f"pair/lane assignment changed: {path}")
         return path
     _atomic_json(path, receipt, immutable=True)

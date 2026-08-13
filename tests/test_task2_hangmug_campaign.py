@@ -84,6 +84,54 @@ def test_explicit_lane_claim_is_pair_specific_and_immutable(tmp_path, monkeypatc
         campaign._claim_explicit_lane(12, "node2-gpu0")
 
 
+def test_explicit_lane_claim_allows_descendant_commit_without_rewriting_receipt(
+    tmp_path, monkeypatch,
+):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "repair-head\n"))
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: next(heads),
+    )
+    ancestry_calls = []
+
+    def run(command, **kwargs):
+        ancestry_calls.append((command, kwargs))
+        return campaign.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    path = campaign._claim_explicit_lane(12, "node1-gpu3")
+    original = path.read_bytes()
+    assert campaign._claim_explicit_lane(12, "node1-gpu3") == path
+    assert path.read_bytes() == original
+    assert ancestry_calls[0][0] == [
+        "git", "merge-base", "--is-ancestor", "base-head", "repair-head",
+    ]
+
+
+def test_explicit_lane_claim_rejects_non_descendant_commit(tmp_path, monkeypatch):
+    results = tmp_path / "task2"
+    results.mkdir()
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    heads = iter(("base-head\n", "unrelated-head\n"))
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: next(heads),
+    )
+    monkeypatch.setattr(
+        campaign.subprocess,
+        "run",
+        lambda command, **_kwargs: campaign.subprocess.CompletedProcess(command, 1),
+    )
+    campaign._claim_explicit_lane(12, "node1-gpu3")
+    with pytest.raises(RuntimeError, match="assignment changed"):
+        campaign._claim_explicit_lane(12, "node1-gpu3")
+
+
 @pytest.mark.parametrize("lane", ("", "node/gpu", "node gpu"))
 def test_explicit_lane_claim_rejects_ambiguous_ids(tmp_path, monkeypatch, lane):
     monkeypatch.setattr(campaign, "RESULTS", tmp_path)
