@@ -184,14 +184,13 @@ def _repair_command(
         "--handover-confirm-steps",
         str(strategy.get("handover_confirm_steps", 12)),
     ]
+    arguments.append("--require-source-dual-body-contact")
     if strategy.get("require_broad_pad_contact"):
         arguments.append("--require-broad-pad-contact")
     if "pick_lift_margin_m" in strategy:
         arguments.extend([
             "--pick-lift-margin-m", str(strategy["pick_lift_margin_m"])
         ])
-    if strategy.get("handover_handle_frame_transfer"):
-        arguments.append("--handover-handle-frame-transfer")
     for field, option in (
         ("post_handover_right_return_steps", "--post-handover-right-return-steps"),
         ("left_branch_point_steps", "--left-branch-point-steps"),
@@ -218,26 +217,6 @@ def _repair_command(
             arguments.extend([
                 "--handover-contact-acquire-steps",
                 str(strategy["handover_contact_acquire_steps"]),
-            ])
-        if "handover_target_offset_m" in strategy:
-            arguments.extend([
-                "--handover-target-offset-m",
-                *map(str, strategy["handover_target_offset_m"]),
-            ])
-        if "handover_target_local_pitch_rad" in strategy:
-            arguments.extend([
-                "--handover-target-local-pitch-rad",
-                str(strategy["handover_target_local_pitch_rad"]),
-            ])
-        if "handover_target_camera_clockwise_roll_rad" in strategy:
-            arguments.extend([
-                "--handover-target-camera-clockwise-roll-rad",
-                str(strategy["handover_target_camera_clockwise_roll_rad"]),
-            ])
-        if "handover_straddle_local_x_m" in strategy:
-            arguments.extend([
-                "--handover-straddle-local-x-m",
-                str(strategy["handover_straddle_local_x_m"]),
             ])
         for field, option in (
             ("handover_orient_clearance_m", "--handover-orient-clearance-m"),
@@ -302,6 +281,7 @@ def _repair_strategy(index: int) -> dict:
     value = _load(path)
     allowed = {
         "force_semantic_regeneration",
+        "require_source_dual_body_contact",
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
         "handover_confirm_steps",
@@ -334,11 +314,32 @@ def _repair_strategy(index: int) -> dict:
     }
     if set(value) - allowed:
         raise ValueError(f"unsupported repair candidate fields: {sorted(value)}")
+    if (
+        "require_source_dual_body_contact" in value
+        and value["require_source_dual_body_contact"] is not True
+    ):
+        raise ValueError("source dual-grasp BODY contact must be true when selected")
+    contact_override_fields = {
+        "handover_handle_frame_transfer",
+        "handover_target_offset_m",
+        "handover_target_local_pitch_rad",
+        "handover_target_camera_clockwise_roll_rad",
+        "handover_straddle_local_x_m",
+    }
+    selected_contact_overrides = sorted(set(value) & contact_override_fields)
+    if selected_contact_overrides:
+        raise ValueError(
+            "source dual-grasp BODY contact forbids handle/edge target overrides: "
+            f"{selected_contact_overrides}"
+        )
     late_support_fields = set(BRANCH_SUFFIX_STRATEGY_FIELDS)
     handover_fields = allowed - late_support_fields - {
-        "force_semantic_regeneration", "pick_lift_margin_m"
+        "force_semantic_regeneration", "pick_lift_margin_m",
+        "require_source_dual_body_contact",
     }
     strategy = {}
+    if value.get("require_source_dual_body_contact") is True:
+        strategy["require_source_dual_body_contact"] = True
     if "force_semantic_regeneration" in value:
         if value["force_semantic_regeneration"] is not True:
             raise ValueError(
@@ -350,13 +351,6 @@ def _repair_strategy(index: int) -> dict:
                 "broad pad contact must be true when selected"
             )
         strategy["require_broad_pad_contact"] = True
-    if "handover_handle_frame_transfer" in value:
-        enabled = value["handover_handle_frame_transfer"]
-        if enabled is not True:
-            raise ValueError(
-                "handover handle-frame transfer must be true when selected"
-            )
-        strategy["handover_handle_frame_transfer"] = True
     if "pick_lift_margin_m" in value:
         margin = value["pick_lift_margin_m"]
         if (
@@ -586,14 +580,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_confirm_steps": confirm,
         "handover_post_release_lift_m": float(post_release_lift),
         "handover_post_release_lift_steps": post_release_steps,
-        "handover_target_offset_m": offset.tolist(),
     })
-    if "handover_target_local_pitch_rad" in value:
-        strategy["handover_target_local_pitch_rad"] = float(pitch)
-    if "handover_target_camera_clockwise_roll_rad" in value:
-        strategy["handover_target_camera_clockwise_roll_rad"] = float(
-            clockwise_roll
-        )
     if orient_steps:
         strategy["handover_orient_clearance_m"] = float(orient_clearance)
         strategy["handover_orient_steps"] = orient_steps
@@ -601,12 +588,6 @@ def _repair_strategy(index: int) -> dict:
         strategy["handover_standoff_outside_m"] = float(outside_standoff)
     if np.linalg.norm(local_standoff) > 0.0:
         strategy["handover_standoff_local_offset_m"] = local_standoff.tolist()
-    if straddle:
-        if not orient_steps:
-            raise ValueError(
-                "handover local straddle correction requires orient-first descent"
-            )
-        strategy["handover_straddle_local_x_m"] = float(straddle)
     if "left_release_retreat_m" in value:
         retreat = value["left_release_retreat_m"]
         if (

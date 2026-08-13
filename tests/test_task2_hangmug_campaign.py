@@ -337,15 +337,12 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "post_handover_right_return_steps": 45,
         "left_branch_point_steps": 35,
         "require_broad_pad_contact": True,
+        "require_source_dual_body_contact": True,
         "pick_lift_margin_m": 0.01,
-        "handover_handle_frame_transfer": True,
-        "handover_target_local_pitch_rad": 0.7853981633974483,
-        "handover_target_camera_clockwise_roll_rad": 0.08290313946973066,
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_standoff_outside_m": 0.08,
         "handover_standoff_local_offset_m": [-0.02, -0.04, 0.015],
-        "handover_straddle_local_x_m": -0.124,
         "branch_orient_steps": 60,
         "insert_clearance_m": 0.04,
         "branch_approach_height_m": 0.0,
@@ -366,6 +363,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--post-handover-right-return-steps") + 1] == "45"
     assert command[command.index("--left-branch-point-steps") + 1] == "35"
     assert "--require-broad-pad-contact" in command
+    assert "--require-source-dual-body-contact" in command
     assert float(command[command.index("--pick-lift-margin-m") + 1]) == 0.01
     assert command[command.index("--handover-confirm-steps") + 1] == "20"
     assert command[command.index("--handover-contact-acquire-steps") + 1] == "24"
@@ -378,13 +376,11 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert command[command.index("--stable-support-steps") + 1] == "180"
     assert float(command[command.index("--handover-post-release-lift-m") + 1]) == 0.055
     assert command[command.index("--handover-post-release-lift-steps") + 1] == "30"
-    assert "--handover-handle-frame-transfer" in command
-    assert float(command[command.index("--handover-target-local-pitch-rad") + 1]) == pytest.approx(
-        0.7853981633974483
-    )
-    assert float(command[
-        command.index("--handover-target-camera-clockwise-roll-rad") + 1
-    ]) == pytest.approx(0.08290313946973066)
+    assert "--handover-handle-frame-transfer" not in command
+    assert "--handover-target-offset-m" not in command
+    assert "--handover-target-local-pitch-rad" not in command
+    assert "--handover-target-camera-clockwise-roll-rad" not in command
+    assert "--handover-straddle-local-x-m" not in command
     assert float(command[command.index("--handover-orient-clearance-m") + 1]) == 0.08
     assert command[command.index("--handover-orient-steps") + 1] == "30"
     assert float(command[command.index("--handover-standoff-outside-m") + 1]) == 0.08
@@ -392,11 +388,10 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert list(map(float, command[local_cursor + 1 : local_cursor + 4])) == [
         -0.02, -0.04, 0.015
     ]
-    assert float(command[command.index("--handover-straddle-local-x-m") + 1]) == -0.124
     assert command[command.index("--branch-orient-steps") + 1] == "60"
     assert "--target-branch-rank" not in command
     candidate.write_text(json.dumps({"handover_target_offset_m": [0.05, 0, 0]}))
-    with pytest.raises(ValueError, match="within 4 cm"):
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"left_release_retreat_m": 0.01}))
     with pytest.raises(ValueError, match=r"\[0.02, 0.12\]"):
@@ -446,19 +441,22 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     candidate.write_text(json.dumps({"require_broad_pad_contact": False}))
     with pytest.raises(ValueError, match="must be true"):
         campaign._repair_strategy(2)
-    candidate.write_text(json.dumps({"handover_handle_frame_transfer": False}))
+    candidate.write_text(json.dumps({"require_source_dual_body_contact": False}))
     with pytest.raises(ValueError, match="must be true"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({"handover_handle_frame_transfer": True}))
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_contact_acquire_steps": 61}))
     with pytest.raises(ValueError, match="contact acquire"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
-    with pytest.raises(ValueError, match="within 45 degrees"):
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_target_camera_clockwise_roll_rad": -1.0e-6
     }))
-    with pytest.raises(ValueError, match=r"\[0, 45\]"):
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_orient_clearance_m": 0.08}))
     with pytest.raises(ValueError, match="orient clearance"):
@@ -484,14 +482,14 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     with pytest.raises(ValueError, match="standoff"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_straddle_local_x_m": -0.124}))
-    with pytest.raises(ValueError, match="requires orient-first"):
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({
         "handover_orient_clearance_m": 0.08,
         "handover_orient_steps": 30,
         "handover_straddle_local_x_m": -0.141,
     }))
-    with pytest.raises(ValueError, match="within 14 cm"):
+    with pytest.raises(ValueError, match="forbids handle/edge"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"branch_orient_steps": 91}))
     with pytest.raises(ValueError, match="branch orient steps"):

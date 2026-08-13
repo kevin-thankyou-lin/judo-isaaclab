@@ -12,13 +12,37 @@ import sys
 def _grasp_assist_errors(result: dict) -> list[str]:
     checks = result.get("checks", result.get("acceptance_checks", {}))
     errors = []
-    for name in ("datagen_grasp_assist_configured", "left_grasp_assist_engaged"):
+    for name in (
+        "datagen_grasp_assist_configured",
+        "left_only_fixed_joint_assist_configured",
+        "left_grasp_assist_engaged",
+        "right_grasp_assist_absent",
+    ):
         if checks.get(name) is not True:
             errors.append(f"missing grasp-assist evidence: {name}")
     if result.get("terminal", {}).get("task_success") is True:
-        for arm in ("left", "right"):
-            if checks.get(f"{arm}_grasp_assist_released") is not True:
-                errors.append(f"{arm} grasp assist remained engaged at terminal")
+        if checks.get("left_grasp_assist_released") is not True:
+            errors.append("left grasp assist remained engaged at terminal")
+    return errors
+
+
+def _handover_contact_target_errors(result: dict) -> list[str]:
+    if result.get("mode") != "skill":
+        return []
+    receipt = result.get("handover_contact_target", {})
+    checks = receipt.get("checks", {})
+    errors = []
+    if (
+        result.get("protocol", {})
+        .get("parameters", {})
+        .get("require_source_dual_body_contact")
+        is not True
+    ):
+        errors.append("source dual-grasp BODY contact was not required")
+    if receipt.get("method") != "source_dual_grasp_right_eef_in_mug_body_scaled":
+        errors.append("receiver contact target is not the scaled source BODY-frame pose")
+    if receipt.get("passed") is not True or not checks or not all(checks.values()):
+        errors.append("scaled source BODY-frame receiver contact receipt failed")
     return errors
 
 
@@ -57,9 +81,12 @@ def main() -> None:
         if failed:
             errors.append(f"failed result checks: {failed}")
         grasp_assistance = result.get("protocol", {}).get("grasp_assistance", "")
-        if not str(grasp_assistance).startswith("task_config:"):
-            errors.append("canonical task-configured grasp assistance was not used")
+        if grasp_assistance != "task_config:left=fixed_joint":
+            errors.append(
+                "canonical left-only fixed-joint grasp assistance was not used"
+            )
         errors.extend(_grasp_assist_errors(result))
+        errors.extend(_handover_contact_target_errors(result))
         if result.get("protocol", {}).get("candidate_sampling") is not False:
             errors.append("candidate sampling was not disabled")
         if not result.get("protocol", {}).get("physics_device_actual"):

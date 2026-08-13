@@ -88,7 +88,7 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
     rows = [
         {**reset, "left_grasp": True, "grasp_assist_engaged": {"left": True},
          "stage1": True},
-        {**reset, "right_grasp": True, "grasp_assist_engaged": {"right": True},
+        {**reset, "right_grasp": True, "grasp_assist_engaged": {},
          "stage1": True, "stage2": True},
     ]
 
@@ -102,4 +102,5 @@ def test_trace_status_arrays_are_one_to_one_with_executed_rows():
     assert all(value.shape == (2,) and value.dtype == bool for value in trace.values())
     assert trace["left_grasp"].tolist() == [True, False]
     assert trace["right_grasp"].tolist() == [False, True]
+    assert trace["right_assist_engaged"].tolist() == [False, False]
     assert trace["stage2_latched"].tolist() == [False, True]

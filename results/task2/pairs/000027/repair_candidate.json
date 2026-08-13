@@ -1,7 +1,6 @@
 {
   "direct_rest_to_preinsert_steps": 170,
   "force_semantic_regeneration": true,
-  "handover_handle_frame_transfer": true,
   "handover_orient_clearance_m": 0.03,
   "handover_orient_steps": 30,
   "handover_standoff_local_offset_m": [
@@ -10,15 +9,8 @@
     0.005
   ],
   "handover_standoff_outside_m": 0.11,
-  "handover_straddle_local_x_m": 0.0305858,
-  "handover_target_camera_clockwise_roll_rad": 0.7223237095596253,
-  "handover_target_local_pitch_rad": 0.23561944901923448,
-  "handover_target_offset_m": [
-    0.0012967941351382608,
-    -0.03153629921831227,
-    -0.01963907011905004
-  ],
   "post_handover_rest_observer_steps": 60,
   "post_release_return_to_rest_steps": 120,
-  "require_broad_pad_contact": true
+  "require_broad_pad_contact": true,
+  "require_source_dual_body_contact": true
 }

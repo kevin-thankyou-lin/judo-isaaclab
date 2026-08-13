@@ -198,6 +198,14 @@ def _parser() -> argparse.Namespace:
         help="Transfer the demonstrated receiver pose through authored handle-hole frames.",
     )
     parser.add_argument(
+        "--require-source-dual-body-contact",
+        action="store_true",
+        help=(
+            "Fail closed unless the receiver target is the source dual-grasp "
+            "right-EEF pose transferred through the mug BODY frame with target scaling."
+        ),
+    )
+    parser.add_argument(
         "--branch-orient-steps",
         type=int,
         default=0,
@@ -641,17 +649,23 @@ def _select_grasp_assist_config(config, mechanism: str):
     return selected
 
 
-def _add_right_handover_assist(config):
-    """Mirror the datagen-supported mug assist onto the receiving hand."""
+def _require_canonical_left_fixed_joint_assist(config, mechanism: str):
+    """Accept only the task's canonical left fixed-joint assist."""
 
+    if mechanism != "task_config":
+        raise RuntimeError("HangMug evidence requires the task-configured assist")
     selected = copy.deepcopy(config)
-    if "left" not in selected:
-        raise RuntimeError("HangMug right assist requires the canonical left assist")
-    right = copy.deepcopy(selected["left"])
-    right["arm"] = "right_arm"
-    right["mechanism"] = "fixed_joint"
-    right["grasp_delay_s"] = 0.0
-    selected["right"] = right
+    if set(selected) != {"left"}:
+        raise RuntimeError("HangMug evidence requires exactly one left grasp assist")
+    left = selected["left"]
+    if (
+        left.get("mechanism") != "fixed_joint"
+        or left.get("arm") != "left_arm"
+        or left.get("target", {}).get("object") != "mug"
+    ):
+        raise RuntimeError(
+            "HangMug evidence requires the canonical left fixed-joint mug assist"
+        )
     return selected
 
 
@@ -790,12 +804,9 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
     import dc_study.envs.tasks.hang_mug_on_tree_manager_cfg as config_module
 
-    assist_config = _select_grasp_assist_config(
+    assist_config = _require_canonical_left_fixed_joint_assist(
         config_module.GRASP_ASSIST_CONFIG, mechanism
     )
-    assist_config = _add_right_handover_assist(assist_config)
-    if not assist_config:
-        raise RuntimeError("HangMug datagen grasp-assist config is empty")
     if manager_module.GRASP_ASSIST_CONFIG != config_module.GRASP_ASSIST_CONFIG:
         raise RuntimeError("HangMug manager/config grasp-assist maps disagree")
     _install_grasp_assist_config(manager_module, config_module, assist_config)
@@ -887,7 +898,7 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
     """
     import torch
 
-    left_grasping, right_grasping = env.robot.is_grasping()
+    left_grasping, _ = env.robot.is_grasping()
     left_assist = env.grasp_assists.get("left")
     releasing_left = step >= trajectory.waypoint_steps["left_release"]
     if left_assist is not None and releasing_left:
@@ -896,18 +907,8 @@ def _update_authored_assist_releases(env, trajectory, step: int) -> None:
             disable=torch.ones_like(left_grasping, dtype=torch.bool),
         )
 
-    right_assist = env.grasp_assists.get("right")
-    if right_assist is not None:
-        support_boundary = (
-            "supported_release_hold"
-            if "supported_release_hold" in trajectory.waypoint_steps
-            else "branch_unload"
-        )
-        releasing_right = step > trajectory.waypoint_steps[support_boundary]
-        right_assist.update(
-            engage=right_grasping,
-            disable=torch.full_like(right_grasping, releasing_right),
-        )
+    if set(env.grasp_assists) != {"left"}:
+        raise RuntimeError("authored HangMug execution requires left-only grasp assist")
 
 
 def _schema_aware_success_acceptance(
@@ -915,12 +916,10 @@ def _schema_aware_success_acceptance(
 ) -> dict[str, bool]:
     """Select the applicable authoritative acceptance checks.
 
-    Direct action replay does not drive the skill runner's receiving-hand
-    fixed-joint state machine.  Its physical right grasp and handover remain
-    mandatory through ``right_handover_observed``, while the skill-only assist
-    engagement bit is inapplicable.  For a coded target repair, task-manager
-    stage latches remain diagnostics: the independent terminal hang receipt is
-    the physical success authority and is never inferred from those latches.
+    The right receiver is always physical and unassisted.  For a coded target
+    repair, task-manager stage latches remain diagnostics: the independent
+    terminal hang receipt is the physical success authority and is never
+    inferred from those latches.
     """
     acceptance = dict(checks)
     if coded_skill:
@@ -932,8 +931,6 @@ def _schema_aware_success_acceptance(
             "handover_boundary_passed",
         ):
             acceptance.pop(name, None)
-    else:
-        acceptance.pop("right_grasp_assist_engaged", None)
     return acceptance
 
 
@@ -954,6 +951,52 @@ def _bounded_handover_offset(value) -> np.ndarray:
     if np.linalg.norm(offset) > 0.04:
         raise ValueError("handover target offset exceeds 4 cm")
     return offset
+
+
+def _source_dual_body_contact_receipt(
+    source_right_eef,
+    source_body,
+    target_body,
+    target_right_eef,
+    target_scale,
+) -> dict[str, object]:
+    """Prove the receiver target preserves the scaled demo BODY-frame pose."""
+
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    source_local = compose_pose(inverse_pose(source_body), source_right_eef)
+    target_local = compose_pose(inverse_pose(target_body), target_right_eef)
+    scale = np.asarray(target_scale, dtype=np.float64)
+    if scale.shape != (3,) or np.any(~np.isfinite(scale)) or np.any(scale <= 0.0):
+        raise ValueError("mug BODY-frame target scale must contain three positives")
+    expected_local = source_local.copy()
+    expected_local[:3] *= scale
+    quaternion_alignment = float(
+        abs(
+            np.dot(
+                expected_local[3:] / np.linalg.norm(expected_local[3:]),
+                target_local[3:] / np.linalg.norm(target_local[3:]),
+            )
+        )
+    )
+    checks = {
+        "target_position_is_scaled_source_body_contact": bool(
+            np.allclose(target_local[:3], expected_local[:3], atol=1.0e-12, rtol=0.0)
+        ),
+        "target_orientation_is_source_body_contact": bool(
+            quaternion_alignment >= 1.0 - 1.0e-12
+        ),
+    }
+    return {
+        "method": "source_dual_grasp_right_eef_in_mug_body_scaled",
+        "source_right_eef_in_mug_body": source_local.tolist(),
+        "target_right_eef_in_mug_body": target_local.tolist(),
+        "target_position_scale": scale.tolist(),
+        "expected_target_right_eef_in_mug_body": expected_local.tolist(),
+        "quaternion_alignment": quaternion_alignment,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
 
 
 def _bounded_handover_standoff_local_offset(value) -> np.ndarray:
@@ -1515,11 +1558,19 @@ def _handover_wave_live_row(
 
 
 def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
+    if side not in {"left", "right"}:
+        raise ValueError("side must be left or right")
     fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=np.float64)
     forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=np.float64)
+    assists = sample["grasp_assist_engaged"]
+    assist_contract = (
+        bool(assists.get("left", False))
+        if side == "left"
+        else "right" not in assists
+    )
     return bool(
         sample[f"{side}_grasp"]
-        and sample["grasp_assist_engaged"].get(side, False)
+        and assist_contract
         and fractions.shape == (2,)
         and forces.shape == (2,)
         and np.isfinite(fractions).all()
@@ -1621,6 +1672,13 @@ def _handover_wave_contract_receipt(
         "right_close_monotone_at_grasp_pose": close_monotone,
         "broad_force_backed_right_contact_before_giver_release": bool(secure_rows),
         "left_giver_held_until_right_contact_secure": giver_held_until_secure,
+        "right_grasp_assist_absent_all_handover_rows": bool(
+            aligned
+            and all(
+                "right" not in sample_rows[row]["grasp_assist_engaged"]
+                for row in observed_handover_rows
+            )
+        ),
     }
     return {
         "selection": {
@@ -1640,6 +1698,68 @@ def _handover_wave_contract_receipt(
             ),
         },
         "first_broad_right_contact_trace_row": first_secure,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _right_carrier_contact_receipt(
+    trace_waypoints, samples
+) -> dict[str, object] | None:
+    """Require unassisted bilateral broad-pad retention through supported unload."""
+
+    carrier_waypoints = {
+        "left_release",
+        "handover_receiver_lift",
+        "handover_confirm",
+        "right_return_start",
+        "carrying_rest_observer",
+        "left_branch_point",
+        "tree_transport",
+        "branch_orient_clear",
+        "branch_approach",
+        "direct_preinsert",
+        "branch_insert",
+        "branch_unload",
+        "supported_release_hold",
+    }
+    names = np.asarray(trace_waypoints, dtype=str)
+    rows = samples[1:]
+    aligned = len(names) == len(rows)
+    indices = (
+        np.flatnonzero(np.isin(names, tuple(carrier_waypoints)))
+        if aligned
+        else np.empty((0,), dtype=int)
+    )
+    if not len(indices):
+        return None
+    broad = [_sample_has_broad_contact(rows[index], "right") for index in indices]
+    no_right_assist = [
+        "right" not in rows[index]["grasp_assist_engaged"] for index in indices
+    ]
+    first_failed_position = next(
+        (position for position, passed in enumerate(broad) if not passed), None
+    )
+    first_failed_index = (
+        None
+        if first_failed_position is None
+        else int(indices[first_failed_position])
+    )
+    checks = {
+        "trace_rows_aligned": aligned,
+        "carrier_rows_present": bool(len(indices)),
+        "right_grasp_assist_absent_every_carrier_row": all(no_right_assist),
+        "bilateral_broad_pad_contact_every_carrier_row": all(broad),
+    }
+    return {
+        "carrier_waypoints": sorted(carrier_waypoints),
+        "first_trace_row": int(indices[0]),
+        "last_trace_row": int(indices[-1]),
+        "observed_rows": int(len(indices)),
+        "first_failed_trace_row": first_failed_index,
+        "first_failed_waypoint": (
+            None if first_failed_index is None else str(names[first_failed_index])
+        ),
         "checks": checks,
         "passed": all(checks.values()),
     }
@@ -2162,8 +2282,13 @@ def _trajectory_after(trajectory, waypoint: str):
 def _require_reusable_pick_boundary(sample) -> None:
     """Fail closed unless the live source prefix still holds a completed Pick."""
     left_assist = sample["grasp_assist_engaged"].get("left", False)
-    right_assist = sample["grasp_assist_engaged"].get("right", False)
-    if not sample["stage1"] or sample["stage2"] or not left_assist or right_assist:
+    right_assist_present = "right" in sample["grasp_assist_engaged"]
+    if (
+        not sample["stage1"]
+        or sample["stage2"]
+        or not left_assist
+        or right_assist_present
+    ):
         raise RuntimeError("source prefix did not preserve the completed Pick boundary")
 
 
@@ -2175,9 +2300,7 @@ def _pick_boundary_receipt(sample) -> dict[str, object]:
         "left_assist_secure": bool(
             sample["grasp_assist_engaged"].get("left", False)
         ),
-        "right_assist_clear": not bool(
-            sample["grasp_assist_engaged"].get("right", False)
-        ),
+        "right_assist_absent": "right" not in sample["grasp_assist_engaged"],
     }
     return {
         "stage": "pick",
@@ -2192,10 +2315,11 @@ def _handover_boundary_receipt(sample) -> dict[str, object]:
     """Check the live Handover postcondition before branch transport."""
     checks = {
         "stage2_latched": bool(sample["stage2"]),
-        "right_contact_secure": bool(sample["right_grasp"]),
-        "right_assist_secure": bool(
-            sample["grasp_assist_engaged"].get("right", False)
+        "right_bilateral_broad_pad_contact": _sample_has_broad_contact(
+            sample, "right"
         ),
+        "right_grasp_assist_absent": "right"
+        not in sample["grasp_assist_engaged"],
         "left_assist_released": not bool(
             sample["grasp_assist_engaged"].get("left", False)
         ),
@@ -2218,26 +2342,24 @@ def _handover_contact_acquire_guard_receipt(
     """Fail closed while bringing the left-held mug into the receiver."""
     checks = {
         "pick_latched": bool(sample["stage1"]),
+        "right_grasp_assist_absent": "right"
+        not in sample["grasp_assist_engaged"],
     }
     if phase == "entry":
         checks["left_assist_secure"] = bool(
             sample["grasp_assist_engaged"].get("left", False)
         )
     elif phase == "row":
-        receiver_secure = bool(
-            sample["right_grasp"]
-            and sample["grasp_assist_engaged"].get("right", False)
-        )
-        checks["assist_backed_support_secure"] = bool(
+        receiver_secure = _sample_has_broad_contact(sample, "right")
+        checks["physical_or_left_assist_support_secure"] = bool(
             sample["grasp_assist_engaged"].get("left", False)
             or receiver_secure
         )
     elif phase == "completion":
         checks.update(
             {
-                "right_contact_secure": bool(sample["right_grasp"]),
-                "right_assist_secure": bool(
-                    sample["grasp_assist_engaged"].get("right", False)
+                "right_bilateral_broad_pad_contact": _sample_has_broad_contact(
+                    sample, "right"
                 ),
             }
         )
@@ -2254,16 +2376,16 @@ def _handover_contact_acquire_guard_receipt(
 
 
 def _handover_lift_guard_receipt(sample, *, phase: str) -> dict[str, object]:
-    """Bind receiver lift entry to contact, then retain assist-backed support."""
+    """Require physical bilateral receiver contact throughout the lift."""
     checks = {
         "pick_latched": bool(sample["stage1"]),
-        "right_assist_secure": bool(
-            sample["grasp_assist_engaged"].get("right", False)
+        "right_grasp_assist_absent": "right"
+        not in sample["grasp_assist_engaged"],
+        "right_bilateral_broad_pad_contact": _sample_has_broad_contact(
+            sample, "right"
         ),
     }
-    if phase == "entry":
-        checks["right_contact_secure"] = bool(sample["right_grasp"])
-    elif phase != "lift_row":
+    if phase not in {"entry", "lift_row"}:
         raise ValueError(f"unknown handover lift phase: {phase!r}")
     return {
         "stage": "handover_post_release_lift",
@@ -2582,6 +2704,17 @@ def _build_skill(
             target_handover_body,
             local_position_scale=target_parts.body_size / source_parts.body_size,
         )
+    body_contact_receipt = _source_dual_body_contact_receipt(
+        source_dual["right_eef_pose"],
+        source_dual_body,
+        target_handover_body,
+        right_grasp,
+        target_parts.body_size / source_parts.body_size,
+    )
+    if args.require_source_dual_body_contact and not body_contact_receipt["passed"]:
+        raise RuntimeError(
+            "receiver target does not preserve the scaled source dual-grasp BODY contact"
+        )
     right_grasp[:3] += _bounded_handover_offset(args.handover_target_offset_m)
     right_grasp = _handover_target_with_local_pitch(
         right_grasp, args.handover_target_local_pitch_rad
@@ -2758,6 +2891,7 @@ def _build_skill(
         right_contact,
         source_branch,
         target_branch,
+        body_contact_receipt,
     )
 
 
@@ -2884,6 +3018,19 @@ def main() -> None:
         )
     if args.handover_straddle_local_x_m and not args.handover_orient_steps:
         raise ValueError("handover local straddle correction requires orient-first descent")
+    if args.require_source_dual_body_contact:
+        forbidden_contact_override = bool(
+            args.handover_handle_frame_transfer
+            or np.linalg.norm(_bounded_handover_offset(args.handover_target_offset_m))
+            or args.handover_target_local_pitch_rad
+            or args.handover_target_camera_clockwise_roll_rad
+            or args.handover_straddle_local_x_m
+        )
+        if args.mode != "skill" or forbidden_contact_override:
+            raise ValueError(
+                "source dual-grasp BODY contact requires skill mode and forbids "
+                "handle-frame, translation, pitch, roll, or straddle contact offsets"
+            )
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -3060,7 +3207,7 @@ def main() -> None:
         source_branches = tree_branches(source_assets["mug_tree"])
         target_branches = tree_branches(target_assets["mug_tree"])
         keyframes = _load_keyframes(args.source_keyframes, args.source_dataset) if args.mode == "skill" else None
-        trajectory, intended_final, nominal_handover_mug, nominal_right_contact, source_branch, target_branch = (
+        trajectory, intended_final, nominal_handover_mug, nominal_right_contact, source_branch, target_branch, handover_contact_target = (
             _build_skill(
                 keyframes,
                 source_mug,
@@ -3075,7 +3222,7 @@ def main() -> None:
                 _eef_pose(env, "right_arm"),
                 args,
             )
-            if keyframes is not None else (None, None, None, None, None, None)
+            if keyframes is not None else (None, None, None, None, None, None, None)
         )
         source_prefix_steps = (
             _source_pick_prefix_steps(keyframes)
@@ -3546,6 +3693,11 @@ def main() -> None:
             side: _broad_pad_contact_receipt(samples[1:], side)
             for side in ("left", "right")
         }
+        right_carrier_contact = (
+            _right_carrier_contact_receipt(trace_waypoints, samples)
+            if trajectory is not None
+            else None
+        )
         right_start_configuration = None
         if args.post_handover_right_return_steps or args.post_handover_rest_observer_steps:
             setup_waypoint = (
@@ -3683,18 +3835,17 @@ def main() -> None:
             == source_receipt["file_sha256"],
             "contact_backed_grasps_only": True,
             "datagen_grasp_assist_configured": bool(env.grasp_assists),
+            "left_only_fixed_joint_assist_configured": grasp_assistance
+            == "task_config:left=fixed_joint",
             "left_grasp_assist_engaged": any(
                 row["grasp_assist_engaged"].get("left", False) for row in samples
             ),
             "left_grasp_assist_released": not final[
                 "grasp_assist_engaged"
             ].get("left", False),
-            "right_grasp_assist_engaged": any(
-                row["grasp_assist_engaged"].get("right", False) for row in samples
+            "right_grasp_assist_absent": all(
+                "right" not in row["grasp_assist_engaged"] for row in samples
             ),
-            "right_grasp_assist_released": not final[
-                "grasp_assist_engaged"
-            ].get("right", False),
             "coded_task_success": bool(final["task_success"]),
             "all_stages_latched": bool(final["stage1"] and final["stage2"] and final["stage3"]),
             "left_pick_observed": any(row["left_grasp"] and row["stage1"] for row in samples),
@@ -3712,6 +3863,14 @@ def main() -> None:
             )
             checks["right_broad_pad_contact"] = bool(
                 broad_pad_contact["right"]["passed"]
+            )
+            if trajectory is not None:
+                checks["right_carrier_bilateral_contact_retained"] = bool(
+                    right_carrier_contact and right_carrier_contact["passed"]
+                )
+        if args.require_source_dual_body_contact:
+            checks["source_dual_body_contact_preserved"] = bool(
+                handover_contact_target and handover_contact_target["passed"]
             )
         if right_start_configuration is not None:
             checks["right_start_configuration_reached"] = bool(
@@ -3770,6 +3929,8 @@ def main() -> None:
                 for name in (
                     "one_reset", "zero_inter_stage_resets", "real_target_assets",
                     "contact_backed_grasps_only", "datagen_grasp_assist_configured",
+                    "left_only_fixed_joint_assist_configured",
+                    "right_grasp_assist_absent",
                     "configured_controller_matches_expected",
                     "configured_controller_unchanged", "live_controller_unchanged",
                     "starting_live_controller_matches_spec",
@@ -3780,7 +3941,7 @@ def main() -> None:
                 )
             }
         elif args.expect_failure:
-            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "configured_controller_matches_expected", "configured_controller_unchanged", "live_controller_unchanged", "starting_live_controller_matches_spec", "ending_live_controller_matches_spec", "single_source_action_dataset", "source_dataset_unchanged", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
+            acceptance = {name: checks[name] for name in ("one_reset", "zero_inter_stage_resets", "real_target_assets", "configured_controller_matches_expected", "configured_controller_unchanged", "live_controller_unchanged", "starting_live_controller_matches_spec", "ending_live_controller_matches_spec", "single_source_action_dataset", "source_dataset_unchanged", "contact_backed_grasps_only", "datagen_grasp_assist_configured", "left_only_fixed_joint_assist_configured", "right_grasp_assist_absent", "left_grasp_assist_engaged", "h264_nonempty", "fully_decodable")}
             if trajectory is None:
                 acceptance["executed_source_actions_exact"] = checks[
                     "executed_source_actions_exact"
@@ -3839,7 +4000,9 @@ def main() -> None:
             "grasp_quality": {
                 "required": bool(args.require_broad_pad_contact),
                 "broad_pad_contact": broad_pad_contact,
+                "right_carrier_contact": right_carrier_contact,
             },
+            "handover_contact_target": handover_contact_target,
             "handover_wave_contract": handover_wave_contract,
             "post_handover_setup": {
                 "right_start_configuration": right_start_configuration,
@@ -3939,6 +4102,9 @@ def main() -> None:
         result["protocol"]["parameters"][
             "handover_target_camera_clockwise_roll_rad"
         ] = float(args.handover_target_camera_clockwise_roll_rad)
+        result["protocol"]["parameters"][
+            "require_source_dual_body_contact"
+        ] = bool(args.require_source_dual_body_contact)
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
         )

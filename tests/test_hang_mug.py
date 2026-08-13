@@ -32,7 +32,6 @@ from run_hangmug_skill_program import (
     _branch_reanchor_waypoints,
     _branch_support_seated_pose,
     PROVEN_CONTROL_DEFAULTS,
-    _add_right_handover_assist,
     _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_handover_offset,
@@ -58,10 +57,13 @@ from run_hangmug_skill_program import (
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
+    _require_canonical_left_fixed_joint_assist,
+    _right_carrier_contact_receipt,
     _resolve_target_assets,
     _requires_observed_handover_reanchor,
     _require_reusable_pick_boundary,
     _source_pick_prefix_steps,
+    _source_dual_body_contact_receipt,
     _source_dataset_receipt,
     _sparse_joint_nominal,
     _schema_aware_success_acceptance,
@@ -446,13 +448,13 @@ def test_reusable_pick_boundary_requires_latch_and_only_left_assist():
     sample = {
         "stage1": True,
         "stage2": False,
-        "grasp_assist_engaged": {"left": True, "right": False},
+        "grasp_assist_engaged": {"left": True},
     }
     _require_reusable_pick_boundary(sample)
     for mutation in (
         {"stage1": False},
         {"stage2": True},
-        {"grasp_assist_engaged": {"left": False, "right": False}},
+        {"grasp_assist_engaged": {"left": False}},
         {"grasp_assist_engaged": {"left": True, "right": True}},
     ):
         changed = {**sample, **mutation}
@@ -460,12 +462,14 @@ def test_reusable_pick_boundary_requires_latch_and_only_left_assist():
             _require_reusable_pick_boundary(changed)
 
 
-def test_handover_boundary_requires_latch_right_contact_and_assist_release():
+def test_handover_boundary_requires_unassisted_bilateral_right_contact():
     sample = {
         "step": 592,
         "stage2": True,
         "right_grasp": True,
-        "grasp_assist_engaged": {"left": False, "right": True},
+        "grasp_assist_engaged": {"left": False},
+        "right_finger_forces_n": [3.0, 4.0],
+        "right_pad_fractions": [0.35, 0.65],
     }
     receipt = _handover_boundary_receipt(sample)
     assert receipt == {
@@ -473,8 +477,8 @@ def test_handover_boundary_requires_latch_right_contact_and_assist_release():
         "checked_after_step": 592,
         "checks": {
             "stage2_latched": True,
-            "right_contact_secure": True,
-            "right_assist_secure": True,
+            "right_bilateral_broad_pad_contact": True,
+            "right_grasp_assist_absent": True,
             "left_assist_released": True,
         },
         "passed": True,
@@ -482,13 +486,17 @@ def test_handover_boundary_requires_latch_right_contact_and_assist_release():
     }
     for mutation, failed_check in (
         ({"stage2": False}, "stage2_latched"),
-        ({"right_grasp": False}, "right_contact_secure"),
+        ({"right_grasp": False}, "right_bilateral_broad_pad_contact"),
         (
-            {"grasp_assist_engaged": {"left": False, "right": False}},
-            "right_assist_secure",
+            {"right_pad_fractions": [0.02, 0.65]},
+            "right_bilateral_broad_pad_contact",
         ),
         (
-            {"grasp_assist_engaged": {"left": True, "right": True}},
+            {"grasp_assist_engaged": {"left": False, "right": False}},
+            "right_grasp_assist_absent",
+        ),
+        (
+            {"grasp_assist_engaged": {"left": True}},
             "left_assist_released",
         ),
     ):
@@ -504,7 +512,9 @@ def test_missing_stage2_alone_does_not_block_physically_secure_continuation():
             "step": 499,
             "stage2": False,
             "right_grasp": True,
-            "grasp_assist_engaged": {"left": False, "right": True},
+            "grasp_assist_engaged": {"left": False},
+            "right_finger_forces_n": [2.0, 2.0],
+            "right_pad_fractions": [0.4, 0.6],
         }
     )
     assert not receipt["passed"]
@@ -512,12 +522,14 @@ def test_missing_stage2_alone_does_not_block_physically_secure_continuation():
     assert receipt["checks"]["stage2_latched"] is False
 
 
-def test_handover_lift_guard_requires_entry_contact_then_assist_only():
+def test_handover_lift_guard_requires_unassisted_bilateral_contact_every_row():
     sample = {
         "step": 449,
         "stage1": True,
         "right_grasp": True,
-        "grasp_assist_engaged": {"left": False, "right": True},
+        "grasp_assist_engaged": {"left": False},
+        "right_finger_forces_n": [2.0, 2.0],
+        "right_pad_fractions": [0.4, 0.6],
     }
     receipt = _handover_lift_guard_receipt(sample, phase="entry")
     assert receipt["passed"]
@@ -529,10 +541,10 @@ def test_handover_lift_guard_requires_entry_contact_then_assist_only():
     }
     for mutation, failed_check in (
         ({"stage1": False}, "pick_latched"),
-        ({"right_grasp": False}, "right_contact_secure"),
+        ({"right_grasp": False}, "right_bilateral_broad_pad_contact"),
         (
             {"grasp_assist_engaged": {"left": False, "right": False}},
-            "right_assist_secure",
+            "right_grasp_assist_absent",
         ),
     ):
         failed = _handover_lift_guard_receipt({**sample, **mutation}, phase="entry")
@@ -541,9 +553,9 @@ def test_handover_lift_guard_requires_entry_contact_then_assist_only():
     raw_flicker = _handover_lift_guard_receipt(
         {**sample, "right_grasp": False}, phase="lift_row"
     )
-    assert raw_flicker["passed"]
+    assert not raw_flicker["passed"]
     assert not raw_flicker["diagnostics"]["right_contact_raw"]
-    assert "right_contact_secure" not in raw_flicker["checks"]
+    assert not raw_flicker["checks"]["right_bilateral_broad_pad_contact"]
 
 
 def test_task2_target_assets_are_same_index_and_use_source_state_template(tmp_path):
@@ -908,26 +920,82 @@ def test_datagen_grasp_assist_mechanism_override():
     assert config["left"]["mechanism"] == "fixed_joint"
 
 
-def test_right_handover_assist_uses_zero_delay_contact_backed_joint():
+def test_grasp_assist_config_requires_canonical_left_fixed_joint_only():
     config = {
         "left": {
-            "mechanism": "friction",
+            "mechanism": "fixed_joint",
             "arm": "left_arm",
             "target": {"object": "mug"},
             "friction": {"high": 100.0, "low": 0.5},
         }
     }
-    selected = _add_right_handover_assist(config)
-    assert selected["right"] == {
-        **config["left"],
-        "arm": "right_arm",
-        "mechanism": "fixed_joint",
-        "grasp_delay_s": 0.0,
+    selected = _require_canonical_left_fixed_joint_assist(config, "task_config")
+    assert selected == config
+    assert selected is not config
+    with pytest.raises(RuntimeError, match="task-configured"):
+        _require_canonical_left_fixed_joint_assist(config, "friction")
+    with pytest.raises(RuntimeError, match="exactly one left"):
+        _require_canonical_left_fixed_joint_assist(
+            {**config, "right": {**config["left"], "arm": "right_arm"}},
+            "task_config",
+        )
+    with pytest.raises(RuntimeError, match="canonical left fixed-joint"):
+        _require_canonical_left_fixed_joint_assist(
+            {"left": {**config["left"], "mechanism": "friction"}},
+            "task_config",
+        )
+
+
+def test_source_dual_body_contact_receipt_requires_scaled_demo_relation():
+    source_body = _pose(0.2, 0.1, 0.8)
+    source_local = _pose(0.03, -0.04, 0.01)
+    source_right = compose_pose(source_body, source_local)
+    target_body = _pose(-0.1, 0.3, 0.9)
+    scale = np.asarray([1.2, 0.8, 1.1])
+    expected_local = source_local.copy()
+    expected_local[:3] *= scale
+    target_right = compose_pose(target_body, expected_local)
+
+    receipt = _source_dual_body_contact_receipt(
+        source_right, source_body, target_body, target_right, scale
+    )
+    assert receipt["passed"]
+    assert receipt["method"] == "source_dual_grasp_right_eef_in_mug_body_scaled"
+
+    shifted = target_right.copy()
+    shifted[0] += 1.0e-4
+    failed = _source_dual_body_contact_receipt(
+        source_right, source_body, target_body, shifted, scale
+    )
+    assert not failed["passed"]
+    assert not failed["checks"]["target_position_is_scaled_source_body_contact"]
+
+
+def test_right_carrier_contact_receipt_requires_unassisted_bilateral_retention():
+    row = {
+        "right_grasp": True,
+        "right_finger_forces_n": [2.0, 3.0],
+        "right_pad_fractions": [0.4, 0.6],
+        "grasp_assist_engaged": {"left": False},
     }
-    assert config.keys() == {"left"}
+    names = ["left_release", "carrying_rest_observer", "direct_preinsert"]
+    receipt = _right_carrier_contact_receipt(names, [{}, row, row, row])
+    assert receipt["passed"]
+    assert receipt["observed_rows"] == 3
+
+    weak = {**row, "right_pad_fractions": [0.05, 0.6]}
+    failed = _right_carrier_contact_receipt(names, [{}, row, weak, row])
+    assert not failed["passed"]
+    assert failed["first_failed_trace_row"] == 1
+    assert failed["first_failed_waypoint"] == "carrying_rest_observer"
+
+    assisted = {**row, "grasp_assist_engaged": {"right": False}}
+    failed = _right_carrier_contact_receipt(names, [{}, row, assisted, row])
+    assert not failed["passed"]
+    assert not failed["checks"]["right_grasp_assist_absent_every_carrier_row"]
 
 
-def test_authored_boundaries_release_both_grasp_assists():
+def test_authored_boundary_releases_only_canonical_left_assist():
     import torch
 
     class Assist:
@@ -938,7 +1006,6 @@ def test_authored_boundaries_release_both_grasp_assists():
             self.calls.append((engage.tolist(), disable.tolist()))
 
     left = Assist()
-    right = Assist()
     env = SimpleNamespace(
         robot=SimpleNamespace(
             is_grasping=lambda: (
@@ -946,7 +1013,7 @@ def test_authored_boundaries_release_both_grasp_assists():
                 torch.tensor([True]),
             )
         ),
-        grasp_assists={"left": left, "right": right},
+        grasp_assists={"left": left},
     )
     trajectory = SimpleNamespace(
         waypoint_steps={"left_release": 5, "branch_unload": 7}
@@ -954,18 +1021,19 @@ def test_authored_boundaries_release_both_grasp_assists():
 
     _update_authored_assist_releases(env, trajectory, 4)
     assert left.calls == []
-    assert right.calls[-1] == ([True], [False])
 
     _update_authored_assist_releases(env, trajectory, 5)
     assert left.calls[-1] == ([True], [True])
-    assert right.calls[-1] == ([True], [False])
 
     _update_authored_assist_releases(env, trajectory, 8)
     assert left.calls[-1] == ([True], [True])
-    assert right.calls[-1] == ([True], [True])
+
+    env.grasp_assists["right"] = Assist()
+    with pytest.raises(RuntimeError, match="left-only"):
+        _update_authored_assist_releases(env, trajectory, 8)
 
 
-def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
+def test_acceptance_keeps_left_only_assist_checks_for_replay_and_skill():
     checks = {
         "coded_task_success": True,
         "all_stages_latched": True,
@@ -975,19 +1043,21 @@ def test_replay_acceptance_omits_only_skill_driven_right_assist_check():
         "handover_boundary_passed": True,
         "handover_safe_to_continue": True,
         "physics_device_cpu": True,
-        "right_grasp_assist_engaged": False,
-        "right_grasp_assist_released": True,
+        "left_only_fixed_joint_assist_configured": True,
+        "right_grasp_assist_absent": True,
     }
 
     replay = _schema_aware_success_acceptance(checks, coded_skill=False)
-    assert "right_grasp_assist_engaged" not in replay
+    assert replay["left_only_fixed_joint_assist_configured"] is True
+    assert replay["right_grasp_assist_absent"] is True
     assert replay["right_handover_observed"] is True
     assert replay["stable_hang_window"] is True
     assert replay["coded_task_success"] is True
     assert replay["physics_device_cpu"] is True
 
     skill = _schema_aware_success_acceptance(checks, coded_skill=True)
-    assert skill["right_grasp_assist_engaged"] is False
+    assert skill["left_only_fixed_joint_assist_configured"] is True
+    assert skill["right_grasp_assist_absent"] is True
     assert skill["independent_terminal_hang"] is True
     assert skill["handover_safe_to_continue"] is True
     for diagnostic in (
@@ -1543,7 +1613,6 @@ def test_handover_wave_contract_requires_screened_contact_before_release():
                 "right_grasp": secure,
                 "grasp_assist_engaged": {
                     "left": row <= secure_row,
-                    "right": secure,
                 },
                 "left_finger_forces_n": [2.0, 2.0],
                 "left_pad_fractions": [0.5, 0.5],
@@ -1580,6 +1649,7 @@ def test_handover_wave_contract_requires_screened_contact_before_release():
     )
 
     assert receipt["passed"] is True
+    assert receipt["checks"]["right_grasp_assist_absent_all_handover_rows"]
     assert receipt["first_broad_right_contact_trace_row"] == secure_row
     assert receipt["live_physx_contact_guard"]["first_right_mug_contact"][
         "waypoint"
@@ -1720,13 +1790,13 @@ def test_pick_boundary_requires_latched_contact_backed_left_hold():
         "step": 219,
         "stage1": True,
         "left_grasp": True,
-        "grasp_assist_engaged": {"left": True, "right": False},
+        "grasp_assist_engaged": {"left": True},
     }
     assert _pick_boundary_receipt(sample)["passed"] is True
     for mutation in (
         {"stage1": False},
         {"left_grasp": False},
-        {"grasp_assist_engaged": {"left": False, "right": False}},
+        {"grasp_assist_engaged": {"left": False}},
         {"grasp_assist_engaged": {"left": True, "right": True}},
     ):
         receipt = _pick_boundary_receipt({**sample, **mutation})
@@ -2090,7 +2160,9 @@ def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
         "stage1": True,
         "left_grasp": True,
         "right_grasp": False,
-        "grasp_assist_engaged": {"left": True, "right": False},
+        "grasp_assist_engaged": {"left": True},
+        "right_finger_forces_n": [0.0, 0.0],
+        "right_pad_fractions": [float("nan"), float("nan")],
     }
     assert _handover_contact_acquire_guard_receipt(sample, phase="entry")["passed"]
     assert _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
@@ -2098,15 +2170,21 @@ def test_contact_acquire_guard_requires_receiver_contact_only_at_completion():
         sample, phase="completion"
     )["passed"]
     sample["right_grasp"] = True
-    sample["grasp_assist_engaged"]["right"] = True
+    sample["right_finger_forces_n"] = [2.0, 2.0]
+    sample["right_pad_fractions"] = [0.4, 0.6]
     sample["grasp_assist_engaged"]["left"] = False
     assert _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
     assert _handover_contact_acquire_guard_receipt(
         sample, phase="completion"
     )["passed"]
     sample["right_grasp"] = False
-    sample["grasp_assist_engaged"]["right"] = False
     assert not _handover_contact_acquire_guard_receipt(sample, phase="row")["passed"]
+
+    sample["right_grasp"] = True
+    sample["grasp_assist_engaged"]["right"] = False
+    assert not _handover_contact_acquire_guard_receipt(
+        sample, phase="completion"
+    )["passed"]
 
 
 def test_receiver_lift_requires_target_and_follows_release():
