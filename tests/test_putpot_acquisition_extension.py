@@ -6,10 +6,12 @@ from run_putpot_skill_program import (
     _assert_acquisition_only_stage,
     _extend_handle_local_acquisition_window,
     _finish_handle_local_acquisition_window_after_latch,
+    _latched_peer_force_refresh_jaw_increment,
     _parser,
     _quality_environment_kwargs,
     _resolved_program_command,
 )
+from judo_isaaclab.putpot_local_mpc import HandleLocalMpcConfig
 
 
 def _trajectory() -> SkillTrajectory:
@@ -77,6 +79,43 @@ def test_zero_acquisition_extension_preserves_non_contact_behavior():
     )
     assert unchanged_trajectory is trajectory
     assert unchanged_nominal is nominal
+
+
+def test_latched_peer_force_refresh_is_motion_budgeted_and_quality_gated():
+    config = HandleLocalMpcConfig()
+    increment = _latched_peer_force_refresh_jaw_increment(
+        latch_previously_ready=True,
+        finger_forces_n=[1.1, 0.98],
+        pad_fractions=[0.67, 0.104],
+        current_jaw_command=-0.027,
+        pre_peer_pot_displacement_m=0.0028,
+        config=config,
+    )
+    assert increment == pytest.approx(0.0002)
+    assert _latched_peer_force_refresh_jaw_increment(
+        latch_previously_ready=True,
+        finger_forces_n=[1.1, 1.01],
+        pad_fractions=[0.67, 0.104],
+        current_jaw_command=-0.027,
+        pre_peer_pot_displacement_m=0.0028,
+        config=config,
+    ) == 0.0
+    assert _latched_peer_force_refresh_jaw_increment(
+        latch_previously_ready=True,
+        finger_forces_n=[1.1, 0.98],
+        pad_fractions=[0.67, 0.099],
+        current_jaw_command=-0.027,
+        pre_peer_pot_displacement_m=0.0028,
+        config=config,
+    ) == 0.0
+    assert _latched_peer_force_refresh_jaw_increment(
+        latch_previously_ready=True,
+        finger_forces_n=[1.1, 0.98],
+        pad_fractions=[0.67, 0.104],
+        current_jaw_command=-0.027,
+        pre_peer_pot_displacement_m=0.003,
+        config=config,
+    ) == 0.0
 
 
 def test_acquisition_extension_is_inserted_before_transport_suffix():

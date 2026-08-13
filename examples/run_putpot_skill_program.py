@@ -852,6 +852,58 @@ def _pad_balance_mpc_reference_active(
     )
 
 
+def _latched_peer_force_refresh_jaw_increment(
+    *,
+    latch_previously_ready,
+    finger_forces_n,
+    pad_fractions,
+    current_jaw_command,
+    pre_peer_pot_displacement_m,
+    config,
+):
+    """Close a decaying latched peer only inside its remaining motion budget."""
+
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if forces.shape != (2,) or fractions.shape != (2,):
+        raise ValueError("peer force refresh requires two force and pad values")
+    scalars = np.asarray(
+        [current_jaw_command, pre_peer_pot_displacement_m], dtype=np.float64
+    )
+    if not np.all(np.isfinite(scalars)):
+        raise ValueError("peer force refresh inputs must be finite")
+    physical = forces >= config.physical_contact_threshold_n
+    interior = bool(
+        np.all(np.isfinite(fractions))
+        and np.all(fractions >= config.minimum_pad_fraction_margin - 1.0e-12)
+        and np.all(
+            fractions
+            <= 1.0 - config.minimum_pad_fraction_margin + 1.0e-12
+        )
+    )
+    robust = bool(np.all(forces >= config.minimum_force_n) and interior)
+    remaining_motion_m = max(
+        0.0,
+        config.maximum_pre_peer_pot_motion_m
+        - float(pre_peer_pot_displacement_m),
+    )
+    remaining_jaw_m = max(
+        0.0, config.closed_jaw_command - float(current_jaw_command)
+    )
+    if not (
+        latch_previously_ready
+        and np.all(physical)
+        and interior
+        and not robust
+        and remaining_motion_m > 0.0
+        and remaining_jaw_m > 0.0
+    ):
+        return 0.0
+    return float(
+        min(config.maximum_jaw_step, remaining_motion_m, remaining_jaw_m)
+    )
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -1401,6 +1453,17 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
             "aligned with both prospective pad fractions inside the unchanged "
             "quality margin; an actual edge intersection still routes through "
             "the existing bounded geometric preseat."
+        ),
+    )
+    parser.add_argument(
+        "--target-right-quality-postclosure-force-settle",
+        action="store_true",
+        help=(
+            "Pair-owned opt-in that holds a closed right wrist while two "
+            "geometrically intersecting pads finish force settling, applies "
+            "the existing dual-force pad-margin pivot to the right arm, and "
+            "refreshes the passed left latch only inside the unchanged pre-peer "
+            "object-motion allowance."
         ),
     )
     parser.add_argument(
@@ -3566,6 +3629,16 @@ def main(argv: list[str] | None = None) -> None:
             "the collision-clear right pregrasp, depth guard, and contact-"
             "fraction telemetry"
         )
+    if args.target_right_quality_postclosure_force_settle and not (
+        args.target_right_quality_geometric_preseat
+        and args.target_left_quality_dual_force_pad_margin_pivot
+        and args.target_left_quality_pre_peer_motion_budgeted_closure
+    ):
+        raise ValueError(
+            "right post-closure force settling requires the mapped geometric "
+            "preseat and the passed left latch's bounded pivot and motion-budget "
+            "machinery"
+        )
     if args.target_left_quality_pre_peer_motion_budgeted_closure and not (
         quality_left_first_local_mpc
         and args.target_left_bounded_closure_commit
@@ -3753,8 +3826,18 @@ def main(argv: list[str] | None = None) -> None:
                 "handle-local acquisition extension requires acquisition-only "
                 "MPC or strict sequential quality MPC"
             )
-        if not 1 <= args.target_handle_local_mpc_acquisition_extension_steps <= 120:
-            raise ValueError("handle-local acquisition extension exceeds 120 frames")
+        maximum_extension_steps = (
+            240 if args.target_right_quality_postclosure_force_settle else 120
+        )
+        if not (
+            1
+            <= args.target_handle_local_mpc_acquisition_extension_steps
+            <= maximum_extension_steps
+        ):
+            raise ValueError(
+                "handle-local acquisition extension exceeds "
+                f"{maximum_extension_steps} frames"
+            )
     if _source_left_first_requires_measured_corridor(
         requested=args.target_source_left_first_acquisition,
         has_measured_corridor=args.target_left_source_approach_corridor,
@@ -4985,6 +5068,11 @@ def main(argv: list[str] | None = None) -> None:
                 joint_nominal,
                 extension_steps,
                 acquisition_end_step=grasp_complete_step,
+                maximum_extension_steps=(
+                    240
+                    if args.target_right_quality_postclosure_force_settle
+                    else 120
+                ),
             )
             grasp_complete_step += extension_steps
         pregrasp_complete_step = (
@@ -5018,6 +5106,7 @@ def main(argv: list[str] | None = None) -> None:
             left_handle_contact = right_handle_contact = None
         local_mpc_config = None
         local_mpc_frame_receipts = []
+        local_mpc_left_force_refresh_receipts = []
         local_mpc_contact_window_step = 0
         local_mpc_robust_streak = 0
         local_mpc_latch_ready = False
@@ -5903,8 +5992,24 @@ def main(argv: list[str] | None = None) -> None:
                                     else None
                                 ),
                                 allow_dual_force_pad_margin_pivot=bool(
-                                    active_arm == "left"
-                                    and args.target_left_quality_dual_force_pad_margin_pivot
+                                    (
+                                        active_arm == "left"
+                                        and args.target_left_quality_dual_force_pad_margin_pivot
+                                    )
+                                    or (
+                                        active_arm == "right"
+                                        and args.target_right_quality_postclosure_force_settle
+                                    )
+                                ),
+                                dual_force_pad_margin_pivot_target_margin=(
+                                    0.20
+                                    if active_arm == "right"
+                                    and args.target_right_quality_postclosure_force_settle
+                                    else 0.25
+                                ),
+                                hold_closed_geometric_pair_for_force_settle=bool(
+                                    active_arm == "right"
+                                    and args.target_right_quality_postclosure_force_settle
                                 ),
                                 require_geometric_preseat_for_closure=bool(
                                     active_arm == "right"
@@ -5990,6 +6095,62 @@ def main(argv: list[str] | None = None) -> None:
                                 grippers[1] = local_command.jaw_command
                                 if actions:
                                     grippers[0] = float(actions[-1][6])
+                                if (
+                                    args.target_right_quality_postclosure_force_settle
+                                    and actions
+                                ):
+                                    left_force_refresh_increment = (
+                                        _latched_peer_force_refresh_jaw_increment(
+                                            latch_previously_ready=(
+                                                local_mpc_latch_ready
+                                            ),
+                                            finger_forces_n=samples[-1][
+                                                "left_finger_forces_n"
+                                            ],
+                                            pad_fractions=samples[-1][
+                                                "left_pad_fractions"
+                                            ],
+                                            current_jaw_command=float(
+                                                actions[-1][6]
+                                            ),
+                                            pre_peer_pot_displacement_m=(
+                                                pre_peer_displacement_m
+                                            ),
+                                            config=local_mpc_config,
+                                        )
+                                    )
+                                    if left_force_refresh_increment > 0.0:
+                                        grippers[0] += left_force_refresh_increment
+                                        local_mpc_left_force_refresh_receipts.append(
+                                            {
+                                                "program_step": step,
+                                                "jaw_before": float(actions[-1][6]),
+                                                "jaw_increment": (
+                                                    left_force_refresh_increment
+                                                ),
+                                                "jaw_after": float(grippers[0]),
+                                                "pre_peer_pot_displacement_m": (
+                                                    pre_peer_displacement_m
+                                                ),
+                                                "remaining_motion_before_m": max(
+                                                    0.0,
+                                                    local_mpc_config.maximum_pre_peer_pot_motion_m
+                                                    - pre_peer_displacement_m,
+                                                ),
+                                                "finger_forces_n": np.asarray(
+                                                    samples[-1][
+                                                        "left_finger_forces_n"
+                                                    ],
+                                                    dtype=np.float64,
+                                                ).tolist(),
+                                                "pad_fractions": np.asarray(
+                                                    samples[-1][
+                                                        "left_pad_fractions"
+                                                    ],
+                                                    dtype=np.float64,
+                                                ).tolist(),
+                                            }
+                                        )
                                 stage = (
                                     "quality_right_handle_local_mpc_acquisition"
                                     if quality_left_first_local_mpc
@@ -8045,7 +8206,11 @@ def main(argv: list[str] | None = None) -> None:
                     "enabled": bool(
                         args.target_handle_local_mpc_acquisition_extension_steps
                     ),
-                    "maximum_allowed_steps": 120,
+                    "maximum_allowed_steps": (
+                        240
+                        if args.target_right_quality_postclosure_force_settle
+                        else 120
+                    ),
                     "executed_steps": (
                         int(args.target_handle_local_mpc_acquisition_extension_steps)
                         if local_mpc_acquisition_extension_finished_step is None
@@ -8125,6 +8290,15 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "right_geometric_preseat": bool(
                         args.target_right_quality_geometric_preseat
+                    ),
+                    "right_postclosure_force_settle": bool(
+                        args.target_right_quality_postclosure_force_settle
+                    ),
+                    "right_uses_dual_force_pad_margin_pivot": bool(
+                        args.target_right_quality_postclosure_force_settle
+                    ),
+                    "left_latch_force_refresh_receipts": (
+                        local_mpc_left_force_refresh_receipts
                     ),
                     "left_pre_peer_motion_budgeted_closure": bool(
                         args.target_left_quality_pre_peer_motion_budgeted_closure

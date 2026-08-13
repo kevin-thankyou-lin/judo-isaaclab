@@ -1416,6 +1416,74 @@ def test_pair_15_right_closure_requires_interior_geometric_preseat():
     ]
 
 
+def test_pair_15_closed_geometric_pair_holds_for_delayed_force_settle():
+    wrist = _pose(x=0.018)
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=147,
+            active_wrist_pose=wrist,
+            object_relative_wrist_prior=wrist,
+            source_warm_start_wrist_pose=wrist,
+            active_pad_fractions=[-0.0102, 0.3124],
+            active_finger_forces_n=[0.64, 0.0],
+            active_grasp=False,
+            current_jaw_command=0.0,
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        allow_dual_force_pad_margin_pivot=True,
+        hold_closed_geometric_pair_for_force_settle=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.5286, 0.5287],
+        active_pad_fraction_axis_extent_m=0.068,
+    )
+    closure = command.frame_receipt["closure"]
+    assert not command.fail_closed
+    assert closure["closed_geometric_pair_force_settle_enabled"]
+    assert closure["closed_geometric_pair_force_settle_active"]
+    assert closure["wrist_frozen_for_closed_geometric_pair_force_settle"]
+    np.testing.assert_allclose(command.wrist_target_pose, wrist)
+    assert command.jaw_command == 0.0
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
+
+
+def test_pair_15_right_dual_force_pivot_uses_geometry_feasible_broad_target():
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=209,
+            active_pad_centers_world=[
+                [0.75681418, -0.05532027, 0.89254224],
+                [0.78465658, -0.08674072, 0.87222230],
+            ],
+            active_pad_axes_world=[
+                [-0.54078770, -0.70778477, 0.45452100],
+                [-0.49053645, -0.76724416, 0.41317207],
+            ],
+            active_pad_fractions=[-0.01220037, 0.1387868],
+            active_finger_forces_n=[2.007078, 1.8325146],
+            current_jaw_command=0.0,
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        allow_dual_force_pad_margin_pivot=True,
+        dual_force_pad_margin_pivot_target_margin=0.20,
+        hold_closed_geometric_pair_for_force_settle=True,
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+    closure = command.frame_receipt["closure"]
+    assert not command.fail_closed
+    assert closure["dual_force_pad_margin_pivot_active"]
+    assert closure["dual_force_pad_margin_pivot_geometry_feasible"]
+    assert closure["dual_force_pad_margin_pivot_target_fraction"] == 0.20
+    assert closure["dual_force_pad_margin_pivot_predicted_fraction"] > -0.0122
+    assert not closure["closed_geometric_pair_force_settle_active"]
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
+
+
 def test_strict_four_pad_latch_requires_fifteen_consecutive_margin_frames():
     streak = 0
     command = None

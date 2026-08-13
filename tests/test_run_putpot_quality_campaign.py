@@ -83,6 +83,10 @@ def test_pair_owned_left_pad_balance_limit_is_explicit_opt_in():
     parsed = _parser(required + ["--target-right-quality-geometric-preseat"])
     assert parsed.target_right_quality_geometric_preseat is True
     parsed = _parser(
+        required + ["--target-right-quality-postclosure-force-settle"]
+    )
+    assert parsed.target_right_quality_postclosure_force_settle is True
+    parsed = _parser(
         required
         + ["--target-left-quality-pre-peer-motion-budgeted-closure"]
     )

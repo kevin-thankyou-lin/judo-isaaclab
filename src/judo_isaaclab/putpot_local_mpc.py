@@ -404,6 +404,9 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "transverse_aligned_two_pad_triggered",
             "transverse_aligned_two_pad_closure_hold_active",
             "wrist_frozen_for_transverse_aligned_two_pad_closure",
+            "closed_geometric_pair_force_settle_enabled",
+            "closed_geometric_pair_force_settle_active",
+            "wrist_frozen_for_closed_geometric_pair_force_settle",
             "loaded_pad_pivot_closure_enabled",
             "loaded_pad_pivot_closure_active",
             "loaded_pad_pivot_index",
@@ -497,6 +500,8 @@ def handle_local_mpc_step(
     allow_transverse_aligned_two_pad_closure: bool = False,
     transverse_aligned_closure_pivot_pad_index: int | None = None,
     allow_dual_force_pad_margin_pivot: bool = False,
+    dual_force_pad_margin_pivot_target_margin: float = 0.25,
+    hold_closed_geometric_pair_for_force_settle: bool = False,
     require_geometric_preseat_for_closure: bool = False,
     geometric_preseat_predicted_pad_fractions: Any | None = None,
     budget_committed_closure_by_pre_peer_motion: bool = False,
@@ -523,6 +528,15 @@ def handle_local_mpc_step(
     ):
         raise ValueError(
             "closure pivot pad requires transverse-aligned two-pad closure"
+        )
+    if not (
+        config.minimum_pad_fraction_margin
+        <= dual_force_pad_margin_pivot_target_margin
+        < 0.5
+    ):
+        raise ValueError(
+            "dual-force pivot target margin must preserve the configured "
+            "acceptance margin and remain below 0.5"
         )
     pot = _pose(observed_pot_pose, "observed_pot_pose")
     handle = _pose(observed_handle_contact_frame, "observed_handle_contact_frame")
@@ -1004,7 +1018,11 @@ def handle_local_mpc_step(
         # predicates unchanged.
         weak = int(np.argmin(pad_edge_margins))
         strong = 1 - weak
-        target_fraction = 0.25 if fractions[weak] < 0.5 else 0.75
+        target_fraction = (
+            dual_force_pad_margin_pivot_target_margin
+            if fractions[weak] < 0.5
+            else 1.0 - dual_force_pad_margin_pivot_target_margin
+        )
         fraction_direction = float(np.sign(target_fraction - fractions[weak]))
         unit_axes = axes / np.linalg.norm(axes, axis=1)[:, None]
         contacts = centers + (
@@ -1104,6 +1122,16 @@ def handle_local_mpc_step(
         dual_force_pad_margin_pivot_active = bool(
             dual_force_pad_margin_pivot_geometry_feasible
         )
+    closed_geometric_pair_force_settle_active = bool(
+        hold_closed_geometric_pair_for_force_settle
+        and closure_committed
+        and abs(current_jaw_command - config.closed_jaw_command) <= 1.0e-12
+        and np.all(finite_pad_intersections)
+        and pot_motion_ok
+        and peer_margin_ok
+        and not (active_robust and peer_robust)
+        and not dual_force_pad_margin_pivot_active
+    )
     # ``contact_recenter_total_m`` is the realized positive axial wrist motion
     # accumulated by the runtime from the preceding commands.  Do not charge
     # this physical-motion budget for a command before its realization is
@@ -1122,6 +1150,7 @@ def handle_local_mpc_step(
         contact_recenter_active
         or guarded_depth_completion_active
         or dual_force_pad_margin_pivot_active
+        or closed_geometric_pair_force_settle_active
     ):
         fail_reason = "active_contact_outside_pad_margin"
     elif not peer_margin_ok:
@@ -1229,6 +1258,7 @@ def handle_local_mpc_step(
     if (
         interior_single_pad_closure_hold_active
         or transverse_aligned_two_pad_closure_hold_active
+        or closed_geometric_pair_force_settle_active
     ):
         # A force-backed interior pad is stronger near-contact evidence than
         # the distant nominal contact-frame residual.  Keep that loaded pad
@@ -1604,6 +1634,17 @@ def handle_local_mpc_step(
             ),
             "wrist_frozen_for_transverse_aligned_two_pad_closure": bool(
                 transverse_aligned_two_pad_closure_hold_active
+                and np.allclose(translation_increment, 0.0, atol=1.0e-12)
+                and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
+            ),
+            "closed_geometric_pair_force_settle_enabled": bool(
+                hold_closed_geometric_pair_for_force_settle
+            ),
+            "closed_geometric_pair_force_settle_active": (
+                closed_geometric_pair_force_settle_active
+            ),
+            "wrist_frozen_for_closed_geometric_pair_force_settle": bool(
+                closed_geometric_pair_force_settle_active
                 and np.allclose(translation_increment, 0.0, atol=1.0e-12)
                 and np.allclose(rotation_increment, 0.0, atol=1.0e-12)
             ),
