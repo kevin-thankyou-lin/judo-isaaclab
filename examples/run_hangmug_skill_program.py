@@ -25,6 +25,11 @@ PROVEN_CONTROL_DEFAULTS = {
     "max_rotation_step": 0.16,
 }
 
+_RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N = 6.0
+_RETURN_CONTACT_CLEARANCE_STEPS = 8
+_RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N = 0.25
+_CONTACT_FREE_FORCE_N = 1.0e-6
+
 
 def _parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1569,8 +1574,104 @@ def _handover_wave_contract_receipt(
     }
 
 
+def _return_contact_clearance_receipt(
+    environment_force_n: float,
+    mug_force_n: float,
+    prior_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    """Allow only bounded, monotonically clearing release-pose contact.
+
+    The direct return starts at the supported release pose.  PhysX can therefore
+    report residual robot/tree or open-finger/mug contact on the first control
+    row even when the already-screened interpolation immediately moves away.
+    The grace below does not add a waypoint or permit sustained contact: both
+    channels must start below a small force cap, never increase materially, and
+    be fully clear by the eighth return row.
+    """
+
+    return_rows = [
+        row for row in prior_rows if row.get("waypoint") == "post_release_return"
+    ]
+    row_index = len(return_rows)
+    previous_environment = (
+        float(return_rows[-1]["maximum_environment_contact_force_n"])
+        if return_rows
+        else None
+    )
+    previous_mug = (
+        float(return_rows[-1]["maximum_mug_contact_force_n"])
+        if return_rows
+        else None
+    )
+    initial_environment = (
+        float(return_rows[0]["maximum_environment_contact_force_n"])
+        if return_rows
+        else float(environment_force_n)
+    )
+    initial_mug = (
+        float(return_rows[0]["maximum_mug_contact_force_n"])
+        if return_rows
+        else float(mug_force_n)
+    )
+    contact_free = bool(
+        environment_force_n <= _CONTACT_FREE_FORCE_N
+        and mug_force_n <= _CONTACT_FREE_FORCE_N
+    )
+    contact_reappeared = bool(
+        (
+            previous_environment is not None
+            and previous_environment <= _CONTACT_FREE_FORCE_N
+            and environment_force_n > _CONTACT_FREE_FORCE_N
+        )
+        or (
+            previous_mug is not None
+            and previous_mug <= _CONTACT_FREE_FORCE_N
+            and mug_force_n > _CONTACT_FREE_FORCE_N
+        )
+    )
+    starts_bounded = bool(
+        initial_environment <= _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N
+        and initial_mug <= _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N
+    )
+    nonincreasing = bool(
+        not contact_reappeared
+        and (
+            previous_environment is None
+            or environment_force_n
+            <= previous_environment + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
+        )
+        and (
+            previous_mug is None
+            or mug_force_n
+            <= previous_mug + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
+        )
+    )
+    grace_row = row_index < _RETURN_CONTACT_CLEARANCE_STEPS - 1
+    grace_allowed = bool(
+        not contact_free and grace_row and starts_bounded and nonincreasing
+    )
+    return {
+        "return_row_index": row_index,
+        "required_clear_by_row_index": _RETURN_CONTACT_CLEARANCE_STEPS - 1,
+        "maximum_initial_force_n": _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N,
+        "force_increase_tolerance_n": _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N,
+        "initial_environment_force_n": initial_environment,
+        "initial_mug_force_n": initial_mug,
+        "contact_free": contact_free,
+        "contact_reappeared": contact_reappeared,
+        "starts_bounded": starts_bounded,
+        "force_nonincreasing": nonincreasing,
+        "grace_allowed": grace_allowed,
+        "passed": bool(contact_free or grace_allowed),
+    }
+
+
 def _direct_segment_live_row(
-    views: dict[str, object], sample: dict[str, object], waypoint: str, physics_dt: float
+    views: dict[str, object],
+    sample: dict[str, object],
+    waypoint: str,
+    physics_dt: float,
+    prior_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     environment_force = _contact_view_max_force(views["environment"], physics_dt)
     mug_force = _contact_view_max_force(views["mug"], physics_dt)
@@ -1588,10 +1689,24 @@ def _direct_segment_live_row(
         and (fractions <= 0.85).all()
         and (forces > 0.0).all()
     )
+    return_clearance = (
+        _return_contact_clearance_receipt(
+            environment_force,
+            mug_force,
+            [] if prior_rows is None else prior_rows,
+        )
+        if returning
+        else None
+    )
+    environment_clear = environment_force <= _CONTACT_FREE_FORCE_N
+    mug_clear = mug_force <= _CONTACT_FREE_FORCE_N
+    if return_clearance is not None and return_clearance["grace_allowed"]:
+        environment_clear = True
+        mug_clear = True
     checks = {
-        "right_arm_tree_and_left_arm_contact_free": environment_force <= 1.0e-6,
+        "right_arm_tree_and_left_arm_contact_free": environment_clear,
         "carrier_grasp_not_degraded": grasp_secure if outbound else True,
-        "open_right_arm_mug_contact_free": mug_force <= 1.0e-6 if returning else True,
+        "open_right_arm_mug_contact_free": mug_clear if returning else True,
         "right_open_during_return": not sample["right_grasp"] if returning else True,
     }
     return {
@@ -1601,6 +1716,7 @@ def _direct_segment_live_row(
         "maximum_mug_contact_force_n": mug_force,
         "right_pad_fractions": fractions.tolist(),
         "right_finger_forces_n": forces.tolist(),
+        "return_contact_clearance": return_clearance,
         "checks": checks,
         "passed": bool((outbound or returning) and all(checks.values())),
     }
@@ -3081,7 +3197,11 @@ def main() -> None:
                 stop_after_row = stop_after_row or not wave_row["passed"]
             if waypoint in {"direct_preinsert", "post_release_return"}:
                 live_row = _direct_segment_live_row(
-                    direct_contact_views, sample, waypoint, physics_dt
+                    direct_contact_views,
+                    sample,
+                    waypoint,
+                    physics_dt,
+                    prior_rows=direct_live_rows,
                 )
                 direct_live_rows.append(live_row)
                 stop_after_row = stop_after_row or not live_row["passed"]
