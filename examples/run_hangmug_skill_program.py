@@ -639,6 +639,19 @@ def _activate_quality_wave_contact_reports(scene) -> tuple[str, ...]:
     return tuple(enabled)
 
 
+def _preserve_quality_wave_contact_reports_across_arm_rebuild(scene) -> None:
+    """Re-enable reports after Gear rebuilds both articulation configs."""
+    original_build = scene.build_from_spec
+
+    def build_with_contact_reports(*args, **kwargs):
+        result = original_build(*args, **kwargs)
+        _activate_quality_wave_contact_reports(scene)
+        return result
+
+    scene.build_from_spec = build_with_contact_reports
+    _activate_quality_wave_contact_reports(scene)
+
+
 def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
@@ -661,11 +674,10 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
         instance.terminations.task_success = None
         instance.terminations.mug_below_table = None
         instance.terminations.mug_tree_below_table = None
-        # Quality-wave audits create filtered PhysX contact views for every arm
-        # link.  Both sensor and filter rigid bodies must have contact reports;
-        # enabling only the tree or finger links yields a view whose backend
-        # rejects the first force-matrix query.
-        _activate_quality_wave_contact_reports(instance.scene)
+        # Gear rebuilds both articulation configs after asset/contact-sensor
+        # binding.  Preserve the reporter bit across that rebuild: setting it
+        # only on the initial arm configs is silently discarded.
+        _preserve_quality_wave_contact_reports_across_arm_rebuild(instance.scene)
         ground = instance.scene.ground
         ground.init_state.pos = (0.0, 0.0, -0.05)
         ground.spawn = sim_utils.CuboidCfg(

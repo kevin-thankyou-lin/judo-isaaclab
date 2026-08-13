@@ -40,6 +40,7 @@ from run_hangmug_skill_program import (
     _handover_lift_guard_receipt,
     _handover_wave_contract_receipt,
     _pose_path_step_receipt,
+    _preserve_quality_wave_contact_reports_across_arm_rebuild,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
     _require_proven_control_defaults,
@@ -73,6 +74,29 @@ def test_quality_wave_contact_reports_cover_both_arms_and_tree():
         "right_arm",
         "mug_tree",
     )
+    assert scene.left_arm.spawn.activate_contact_sensors is True
+    assert scene.right_arm.spawn.activate_contact_sensors is True
+    assert scene.mug_tree.spawn.activate_contact_sensors is True
+
+
+def test_quality_wave_contact_reports_survive_gear_arm_rebuild():
+    def spawn():
+        return SimpleNamespace(activate_contact_sensors=False)
+
+    scene = SimpleNamespace(
+        left_arm=SimpleNamespace(spawn=spawn()),
+        right_arm=SimpleNamespace(spawn=spawn()),
+        mug_tree=SimpleNamespace(spawn=spawn()),
+    )
+
+    def build_from_spec(_spec):
+        scene.left_arm = SimpleNamespace(spawn=spawn())
+        scene.right_arm = SimpleNamespace(spawn=spawn())
+
+    scene.build_from_spec = build_from_spec
+    _preserve_quality_wave_contact_reports_across_arm_rebuild(scene)
+    scene.build_from_spec("task-specific spec")
+
     assert scene.left_arm.spawn.activate_contact_sensors is True
     assert scene.right_arm.spawn.activate_contact_sensors is True
     assert scene.mug_tree.spawn.activate_contact_sensors is True
