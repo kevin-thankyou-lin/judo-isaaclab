@@ -37,6 +37,13 @@ def test_same_index_assets_and_proven_command_are_pinned(tmp_path, monkeypatch):
         assert f"--{name.replace('_', '-')}" not in command
 
 
+def test_evidence_runner_disables_unused_environment_hdf5_recorder():
+    runner = Path(campaign.__file__).with_name("run_hangmug_skill_program.py")
+    source = runner.read_text()
+
+    assert "disable_env_recorders=True" in source
+
+
 def test_missing_or_cross_index_asset_fails_before_command(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "OBJECTS", tmp_path)
     (tmp_path / "MugHangable/mug_teacup_000003").mkdir(parents=True)
