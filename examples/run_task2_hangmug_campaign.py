@@ -227,6 +227,14 @@ def _repair_command(
                     strategy["handover_contact_acquire_target_mug_position_m"],
                 ),
             ])
+        if "handover_contact_acquire_target_mug_quaternion_wxyz" in strategy:
+            arguments.extend([
+                "--handover-contact-acquire-target-mug-quaternion-wxyz",
+                *map(
+                    str,
+                    strategy["handover_contact_acquire_target_mug_quaternion_wxyz"],
+                ),
+            ])
         if "handover_target_offset_m" in strategy:
             arguments.extend([
                 "--handover-target-offset-m",
@@ -308,6 +316,7 @@ def _repair_strategy(index: int) -> dict:
         "handover_contact_settle_steps",
         "handover_contact_acquire_steps",
         "handover_contact_acquire_target_mug_position_m",
+        "handover_contact_acquire_target_mug_quaternion_wxyz",
         "handover_confirm_steps",
         "handover_post_release_lift_m",
         "handover_post_release_lift_steps",
@@ -502,6 +511,9 @@ def _repair_strategy(index: int) -> dict:
     acquire_target = value.get(
         "handover_contact_acquire_target_mug_position_m"
     )
+    acquire_target_quaternion = value.get(
+        "handover_contact_acquire_target_mug_quaternion_wxyz"
+    )
     confirm = value.get("handover_confirm_steps", 12)
     offset = np.asarray(value.get("handover_target_offset_m", (0, 0, 0)), dtype=float)
     pitch = value.get("handover_target_local_pitch_rad", 0.0)
@@ -523,6 +535,22 @@ def _repair_strategy(index: int) -> dict:
         if not acquire:
             raise ValueError(
                 "handover contact-acquire target requires positive acquisition steps"
+            )
+    if acquire_target_quaternion is not None:
+        acquire_target_quaternion = np.asarray(
+            acquire_target_quaternion, dtype=float
+        )
+        if (
+            acquire_target_quaternion.shape != (4,)
+            or not np.isfinite(acquire_target_quaternion).all()
+            or abs(np.linalg.norm(acquire_target_quaternion) - 1.0) > 1.0e-6
+        ):
+            raise ValueError(
+                "handover contact-acquire quaternion must be a unit quaternion"
+            )
+        if acquire_target is None:
+            raise ValueError(
+                "handover contact-acquire quaternion requires a target position"
             )
     if not isinstance(confirm, int) or not 0 <= confirm <= 60:
         raise ValueError("handover confirmation must be an integer in [0, 60]")
@@ -596,6 +624,10 @@ def _repair_strategy(index: int) -> dict:
     if acquire_target is not None:
         strategy["handover_contact_acquire_target_mug_position_m"] = (
             acquire_target.tolist()
+        )
+    if acquire_target_quaternion is not None:
+        strategy["handover_contact_acquire_target_mug_quaternion_wxyz"] = (
+            acquire_target_quaternion.tolist()
         )
     if "handover_target_local_pitch_rad" in value:
         strategy["handover_target_local_pitch_rad"] = float(pitch)

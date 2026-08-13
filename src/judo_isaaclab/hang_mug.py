@@ -411,14 +411,17 @@ def reanchor_handover_contact_acquire(
     observed_right_pose: Any,
     *,
     target_contact_mug_position_m: Any | None = None,
+    target_contact_mug_quaternion_wxyz: Any | None = None,
     maximum_translation_m: float = 0.04,
     maximum_rotation_error_rad: float = 0.12,
 ) -> tuple[SkillTrajectory, dict[str, Any]]:
     """Move the left-held mug into a closed, stationary receiver.
 
     The correction is the live world-space residual between the demonstrated
-    mug-relative receiver contact and the observed right wrist.  It changes no
-    orientation, controller setting, or later semantic target.
+    mug-relative receiver contact and the observed right wrist.  An explicit,
+    evidence-backed target quaternion may also rotate the left-held mug while
+    the closed receiver remains stationary.  It changes no controller setting
+    or later semantic target.
     """
 
     required = (
@@ -440,6 +443,11 @@ def reanchor_handover_contact_acquire(
     observed_left = _pose(observed_left_pose, "observed_left_pose")
     observed_right = _pose(observed_right_pose, "observed_right_pose")
     desired_contact = nominal_contact.copy()
+    explicit_target = (
+        target_contact_mug_position_m is not None
+        or target_contact_mug_quaternion_wxyz is not None
+    )
+    observed_contact = compose_pose(inverse_pose(mug), observed_right)
     if target_contact_mug_position_m is not None:
         target_position = np.asarray(
             target_contact_mug_position_m, dtype=np.float64
@@ -448,16 +456,42 @@ def reanchor_handover_contact_acquire(
             raise ValueError(
                 "target contact mug position must contain three finite values"
             )
-        observed_contact = compose_pose(inverse_pose(mug), observed_right)
         desired_contact[:3] = target_position
+    if target_contact_mug_quaternion_wxyz is not None:
+        target_quaternion = np.asarray(
+            target_contact_mug_quaternion_wxyz, dtype=np.float64
+        )
+        if target_quaternion.shape != (4,) or not np.isfinite(target_quaternion).all():
+            raise ValueError(
+                "target contact mug quaternion must contain four finite values"
+            )
+        desired_contact = _pose(
+            np.concatenate((desired_contact[:3], target_quaternion)),
+            "target_contact_mug_pose",
+        )
+    elif explicit_target:
         # Acquisition intentionally translates the left-held mug into the
         # stationary closed receiver. Preserve the already-achieved live
         # receiver orientation instead of introducing an orientation action.
         desired_contact[3:] = observed_contact[3:]
     desired_right = compose_pose(mug, desired_contact)
-    translation = observed_right[:3] - desired_right[:3]
+    rotate_held_mug = target_contact_mug_quaternion_wxyz is not None
+    target_mug = (
+        compose_pose(observed_right, inverse_pose(desired_contact))
+        if rotate_held_mug
+        else mug.copy()
+    )
+    if rotate_held_mug:
+        translation = target_mug[:3] - mug[:3]
+    else:
+        translation = observed_right[:3] - desired_right[:3]
+        target_mug[:3] += translation
     norm = float(np.linalg.norm(translation))
-    rotation_error = compose_pose(inverse_pose(desired_right), observed_right)
+    rotation_error = (
+        compose_pose(inverse_pose(target_mug), mug)
+        if rotate_held_mug
+        else compose_pose(inverse_pose(desired_right), observed_right)
+    )
     rotation_error_rad = float(
         2.0 * np.arccos(np.clip(abs(rotation_error[3]), 0.0, 1.0))
     )
@@ -479,14 +513,24 @@ def reanchor_handover_contact_acquire(
         raise ValueError("contact acquisition must lie between grasp and release")
     left = np.asarray(trajectory.left_poses, dtype=np.float64).copy()
     right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
-    corrected_left = observed_left.copy()
-    corrected_left[:3] += translation
+    corrected_left = (
+        transfer_pose(observed_left, mug, target_mug)
+        if rotate_held_mug
+        else observed_left.copy()
+    )
+    if not rotate_held_mug:
+        corrected_left[:3] += translation
     left[grasp_end + 1 : acquire_end + 1] = interpolate_poses(
         observed_left, corrected_left, acquire_end - grasp_end
     )
     right[grasp_end + 1 : acquire_end + 1] = observed_right
-    corrected_release = trajectory.left_poses[release_end].copy()
-    corrected_release[:3] += translation
+    corrected_release = (
+        transfer_pose(trajectory.left_poses[release_end], mug, target_mug)
+        if rotate_held_mug
+        else trajectory.left_poses[release_end].copy()
+    )
+    if not rotate_held_mug:
+        corrected_release[:3] += translation
     left[acquire_end + 1 : release_end + 1] = interpolate_poses(
         corrected_left, corrected_release, release_end - acquire_end
     )
@@ -510,12 +554,13 @@ def reanchor_handover_contact_acquire(
         "desired_right_contact_world": desired_right.tolist(),
         "target_contact_mug_frame": desired_contact.tolist(),
         "observed_right_eef_world": observed_right.tolist(),
+        "target_mug_world": target_mug.tolist(),
         "world_translation_m": translation.tolist(),
         "translation_norm_m": norm,
         "maximum_translation_m": limit,
         "rotation_error_rad": rotation_error_rad,
         "maximum_rotation_error_rad": rotation_limit,
-        "orientation_unchanged": True,
+        "orientation_unchanged": not rotate_held_mug,
         "acquire_steps": acquire_end - grasp_end,
     }
     return (

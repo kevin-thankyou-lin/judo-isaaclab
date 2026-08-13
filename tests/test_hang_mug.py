@@ -25,6 +25,7 @@ from judo_isaaclab.put_marker import (
     compose_pose,
     inverse_pose,
     quaternion_rotate,
+    transfer_pose,
 )
 from run_hangmug_skill_program import (
     _broad_pad_contact_receipt,
@@ -2104,6 +2105,54 @@ def test_contact_acquire_can_target_evidence_backed_mug_frame_position():
     assert receipt["translation_norm_m"] < 0.04
     grasp_end = adjusted.waypoint_steps["right_grasp"]
     acquire_end = adjusted.waypoint_steps["handover_contact_acquire"]
+    np.testing.assert_allclose(
+        adjusted.right_poses[grasp_end + 1 : acquire_end + 1],
+        np.repeat(observed_right[None], acquire_end - grasp_end, axis=0),
+    )
+
+
+def test_contact_acquire_can_target_evidence_backed_mug_frame_pose():
+    program = HangMugSkillProgram(_pose(), _pose())
+    program.physical_handover(
+        _pose(), _pose(), _pose(), _pose(),
+        approach_steps=1,
+        close_steps=1,
+        contact_acquire_steps=3,
+        release_steps=1,
+    )
+    mug = _pose(0.5, 0.0, 0.8)
+    observed_left = _pose(0.4, 0.1, 0.8)
+    observed_right = _pose(0.4, -0.1, 0.9)
+    observed_contact = compose_pose(inverse_pose(mug), observed_right)
+    angle = 0.01
+    target_quaternion = compose_pose(
+        np.asarray([0.0, 0.0, 0.0, np.cos(angle / 2), 0.0, 0.0, np.sin(angle / 2)]),
+        observed_contact,
+    )[3:]
+    target_position = observed_contact[:3] + [0.001, -0.002, 0.003]
+    target_contact = np.concatenate((target_position, target_quaternion))
+    target_mug = compose_pose(observed_right, inverse_pose(target_contact))
+
+    adjusted, receipt = reanchor_handover_contact_acquire(
+        program.build(),
+        _pose(-0.1, -0.02, 0.1),
+        mug,
+        observed_left,
+        observed_right,
+        target_contact_mug_position_m=target_position,
+        target_contact_mug_quaternion_wxyz=target_quaternion,
+    )
+
+    grasp_end = adjusted.waypoint_steps["right_grasp"]
+    acquire_end = adjusted.waypoint_steps["handover_contact_acquire"]
+    np.testing.assert_allclose(receipt["target_contact_mug_frame"], target_contact)
+    np.testing.assert_allclose(receipt["target_mug_world"], target_mug)
+    assert receipt["rotation_error_rad"] == pytest.approx(angle)
+    assert receipt["orientation_unchanged"] is False
+    np.testing.assert_allclose(
+        adjusted.left_poses[acquire_end],
+        transfer_pose(observed_left, mug, target_mug),
+    )
     np.testing.assert_allclose(
         adjusted.right_poses[grasp_end + 1 : acquire_end + 1],
         np.repeat(observed_right[None], acquire_end - grasp_end, axis=0),

@@ -331,6 +331,7 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_contact_settle_steps": 30,
         "handover_contact_acquire_steps": 24,
         "handover_contact_acquire_target_mug_position_m": [-0.07, -0.06, 0.13],
+        "handover_contact_acquire_target_mug_quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
         "handover_confirm_steps": 20,
         "handover_post_release_lift_m": 0.055,
         "handover_post_release_lift_steps": 30,
@@ -375,6 +376,12 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
     assert list(map(float, command[acquire_target + 1 : acquire_target + 4])) == pytest.approx(
         [-0.07, -0.06, 0.13]
     )
+    acquire_quaternion = command.index(
+        "--handover-contact-acquire-target-mug-quaternion-wxyz"
+    )
+    assert list(
+        map(float, command[acquire_quaternion + 1 : acquire_quaternion + 5])
+    ) == pytest.approx([1.0, 0.0, 0.0, 0.0])
     assert float(command[command.index("--insert-clearance-m") + 1]) == 0.04
     assert float(command[command.index("--branch-approach-height-m") + 1]) == 0.0
     assert float(command[command.index("--branch-roll-offset-rad") + 1]) == pytest.approx(
@@ -458,6 +465,19 @@ def test_pair_repair_candidate_is_bounded_and_pinned_in_command(tmp_path, monkey
         "handover_contact_acquire_target_mug_position_m": [-0.07, -0.06, 0.13]
     }))
     with pytest.raises(ValueError, match="requires positive"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_contact_acquire_steps": 24,
+        "handover_contact_acquire_target_mug_quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+    }))
+    with pytest.raises(ValueError, match="requires a target position"):
+        campaign._repair_strategy(2)
+    candidate.write_text(json.dumps({
+        "handover_contact_acquire_steps": 24,
+        "handover_contact_acquire_target_mug_position_m": [-0.07, -0.06, 0.13],
+        "handover_contact_acquire_target_mug_quaternion_wxyz": [2.0, 0.0, 0.0, 0.0],
+    }))
+    with pytest.raises(ValueError, match="unit quaternion"):
         campaign._repair_strategy(2)
     candidate.write_text(json.dumps({"handover_target_local_pitch_rad": 0.8}))
     with pytest.raises(ValueError, match="within 45 degrees"):
