@@ -35,6 +35,14 @@ def _milestone_reanchor_enabled(
     return bool(right_first_close and not forced_right_first_stabilization)
 
 
+def _source_left_first_requires_measured_corridor(
+    *, requested: bool, has_measured_corridor: bool, quality_mode: bool
+) -> bool:
+    """Keep legacy recovery calibration mandatory outside the quality wave."""
+
+    return bool(requested and not has_measured_corridor and not quality_mode)
+
+
 def _extend_handle_local_acquisition_window(
     trajectory,
     joint_nominal,
@@ -327,7 +335,9 @@ def _parser(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Preserve the source card's left-then-right acquisition order by "
-            "holding the right gripper open at pregrasp through left closure."
+            "holding the right gripper open at pregrasp through left closure. "
+            "Explicit quality mode may use this chronology directly; legacy "
+            "repair runs still require a measured source corridor."
         ),
     )
     parser.add_argument(
@@ -2233,9 +2243,10 @@ def main(argv: list[str] | None = None) -> None:
             )
         if not 1 <= args.target_handle_local_mpc_acquisition_extension_steps <= 120:
             raise ValueError("handle-local acquisition extension exceeds 120 frames")
-    if (
-        args.target_source_left_first_acquisition
-        and not args.target_left_source_approach_corridor
+    if _source_left_first_requires_measured_corridor(
+        requested=args.target_source_left_first_acquisition,
+        has_measured_corridor=args.target_left_source_approach_corridor,
+        quality_mode=quality_config is not None,
     ):
         raise ValueError(
             "source left-first acquisition requires the measured source corridor"

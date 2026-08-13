@@ -5,10 +5,29 @@ import sys
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 from run_putpot_quality_campaign import build_plan, execute_plan
+from run_putpot_skill_program import _source_left_first_requires_measured_corridor
 
 
 ROOT = Path(__file__).parents[1]
 CONFIG = ROOT / "configs/putpot_quality_wave_v1.json"
+
+
+def test_quality_mode_allows_explicit_left_first_without_legacy_calibration():
+    assert not _source_left_first_requires_measured_corridor(
+        requested=True,
+        has_measured_corridor=False,
+        quality_mode=True,
+    )
+    assert _source_left_first_requires_measured_corridor(
+        requested=True,
+        has_measured_corridor=False,
+        quality_mode=False,
+    )
+    assert not _source_left_first_requires_measured_corridor(
+        requested=True,
+        has_measured_corridor=True,
+        quality_mode=False,
+    )
 
 
 def _runner_args(tmp_path):
