@@ -344,11 +344,13 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "budget_accounting",
             "enabled",
             "active",
+            "preserve_transverse_centering",
             "finger_tip_to_base_axis_world",
             "pad_fraction_axis_extent_m",
             "contact_fraction_delta",
             "requested_translation_m",
             "executed_translation_m",
+            "retained_transverse_translation_world_m",
             "total_translation_m",
             "maximum_step_m",
             "maximum_total_m",
@@ -393,6 +395,7 @@ def handle_local_mpc_step(
     depth_guard_alignment_streak: int = 0,
     depth_guard_released: bool = False,
     contact_fraction_recenter: bool = False,
+    contact_recenter_preserve_transverse_centering: bool = False,
     active_pad_fraction_axis_extent_m: float = 0.0,
     contact_recenter_total_m: float = 0.0,
     config: HandleLocalMpcConfig = HandleLocalMpcConfig(),
@@ -604,13 +607,22 @@ def handle_local_mpc_step(
         fail_reason = "peer_contact_outside_pad_margin"
     fail_closed = fail_reason is not None
 
+    retained_transverse_translation = np.zeros(3, dtype=np.float64)
     if contact_recenter_active:
         # contact_pad_fraction is measured from finger tip (0) toward finger
         # base (1).  Translating the finger opposite its tip->base axis moves a
         # fixed world contact baseward in the finger frame, increasing a low
         # fraction; the sign reverses naturally for a high fraction.
-        translation_increment = (
+        contact_recenter_translation = (
             -executed_recenter_translation_m * contact_fraction_axis_world
+        )
+        if contact_recenter_preserve_transverse_centering:
+            retained_transverse_translation = translation_increment - float(
+                np.dot(translation_increment, contact_fraction_axis_world)
+            ) * contact_fraction_axis_world
+        translation_increment = _clip_norm(
+            contact_recenter_translation + retained_transverse_translation,
+            config.maximum_translation_step_m,
         )
         rotation_increment = np.zeros(3, dtype=np.float64)
     if robust_frame or fail_closed:
@@ -725,6 +737,9 @@ def handle_local_mpc_step(
             "budget_accounting": "measured_positive_axial_wrist_displacement",
             "enabled": bool(contact_fraction_recenter),
             "active": contact_recenter_active,
+            "preserve_transverse_centering": bool(
+                contact_recenter_preserve_transverse_centering
+            ),
             "finger_tip_to_base_axis_world": contact_fraction_axis_world.tolist(),
             "pad_fraction_axis_extent_m": float(
                 active_pad_fraction_axis_extent_m
@@ -733,6 +748,9 @@ def handle_local_mpc_step(
             "requested_translation_m": requested_recenter_translation_m,
             "executed_translation_m": (
                 executed_recenter_translation_m if contact_recenter_active else 0.0
+            ),
+            "retained_transverse_translation_world_m": (
+                retained_transverse_translation.tolist()
             ),
             "total_translation_m": next_contact_recenter_total_m,
             "maximum_step_m": config.maximum_contact_recenter_step_m,
