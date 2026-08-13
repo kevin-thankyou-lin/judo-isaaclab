@@ -1757,6 +1757,14 @@ def _direct_segment_live_row(
         "checked_after_step": int(sample["step"]),
         "maximum_environment_contact_force_n": environment_force,
         "maximum_mug_contact_force_n": mug_force,
+        "environment_contact_force_by_right_body_n": (
+            _contact_force_by_body_receipt(
+                views["environment"], views["right_body_paths"], physics_dt
+            )
+        ),
+        "mug_contact_force_by_right_body_n": _contact_force_by_body_receipt(
+            views["mug"], views["right_body_paths"], physics_dt
+        ),
         "right_pad_fractions": fractions.tolist(),
         "right_finger_forces_n": forces.tolist(),
         "return_contact_clearance": return_clearance,
