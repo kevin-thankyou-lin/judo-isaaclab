@@ -10,13 +10,13 @@
     0.005
   ],
   "handover_standoff_outside_m": 0.11,
-  "handover_straddle_local_x_m": 0.0303858,
-  "handover_target_camera_clockwise_roll_rad": 0.7223237095596253,
+  "handover_straddle_local_x_m": 0.0303,
+  "handover_target_camera_clockwise_roll_rad": 0.7213445798492564,
   "handover_target_local_pitch_rad": 0.23561944901923448,
   "handover_target_offset_m": [
-    -0.0006537381860256662,
-    -0.033175664726665076,
-    -0.01963907011905004
+    -0.0011384279280668556,
+    -0.03412282651323353,
+    -0.018454960836892027
   ],
   "post_handover_rest_observer_steps": 60,
   "post_release_return_to_rest_steps": 120,
