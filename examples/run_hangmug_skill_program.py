@@ -108,6 +108,15 @@ def _parser() -> argparse.Namespace:
         help="Bounded vertical seating offset applied before branch release.",
     )
     parser.add_argument(
+        "--post-release-return-clearance-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded early translation along the unchanged straight open-return "
+            "segment; insertion, support, endpoint, and wrist SLERP stay fixed."
+        ),
+    )
+    parser.add_argument(
         "--stable-support-steps",
         type=int,
         default=60,
@@ -1051,6 +1060,13 @@ def _bounded_branch_support_seat_down(value: float) -> float:
     if not np.isfinite(amount) or not 0.0 <= amount <= 0.03:
         raise ValueError("branch support seat-down must be in [0, 0.03] m")
     return amount
+
+
+def _bounded_post_release_return_clearance(value: float) -> float:
+    clearance = float(value)
+    if not np.isfinite(clearance) or not 0.0 <= clearance <= 0.02:
+        raise ValueError("post-release return clearance must be in [0, 0.02] m")
+    return clearance
 
 
 def _bounded_left_release_retreat(value: float) -> float:
@@ -2776,8 +2792,18 @@ def _build_skill(
             release_steps=40,
             settle_steps=args.stable_support_steps,
         )
+    trajectory = program.build()
+    if direct_contract:
+        from judo_isaaclab.hang_mug import apply_post_release_return_clearance
+
+        trajectory = apply_post_release_return_clearance(
+            trajectory,
+            _bounded_post_release_return_clearance(
+                args.post_release_return_clearance_m
+            ),
+        )
     return (
-        program.build(),
+        trajectory,
         final_mug_pose,
         target_handover_mug.root_pose,
         right_contact,
@@ -2955,6 +2981,7 @@ def main() -> None:
     ):
         raise ValueError("--branch-roll-offset-rad must be within 90 degrees")
     _bounded_branch_support_seat_down(args.branch_support_seat_down_m)
+    _bounded_post_release_return_clearance(args.post_release_return_clearance_m)
     _bounded_left_release_retreat(args.left_release_retreat_m)
     post_release_lift = _bounded_handover_post_release_lift(
         args.handover_post_release_lift_m
@@ -2984,6 +3011,10 @@ def main() -> None:
     if bool(direct_steps[0]) != bool(direct_steps[1]):
         raise ValueError(
             "direct rest-to-preinsert and post-release return steps must be selected together"
+        )
+    if args.post_release_return_clearance_m and not direct_steps[0]:
+        raise ValueError(
+            "post-release return clearance requires direct choreography"
         )
     simultaneous_setup = args.post_handover_rest_observer_steps
     if (
@@ -3512,6 +3543,17 @@ def main() -> None:
                     sample["right_eef_pose"],
                     completed_waypoint=completed_waypoint,
                 )
+                if "post_release_return" in trajectory.waypoint_steps:
+                    from judo_isaaclab.hang_mug import (
+                        apply_post_release_return_clearance,
+                    )
+
+                    trajectory = apply_post_release_return_clearance(
+                        trajectory,
+                        _bounded_post_release_return_clearance(
+                            args.post_release_return_clearance_m
+                        ),
+                    )
                 nominal_right_contact = compose_pose(
                     inverse_pose(sample["mug_pose"]),
                     sample["right_eef_pose"],
@@ -4019,6 +4061,12 @@ def main() -> None:
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
         )
+        result["protocol"]["parameters"]["post_release_return_clearance_m"] = (
+            _bounded_post_release_return_clearance(
+                args.post_release_return_clearance_m
+            )
+        )
+        result["protocol"]["parameters"]["post_release_return_clearance_rows"] = 7
         result["protocol"]["parameters"]["target_branch_rank"] = (
             args.target_branch_rank
         )

@@ -52,6 +52,7 @@ BRANCH_SUFFIX_STRATEGY_FIELDS = frozenset({
     "branch_roll_offset_rad",
     "branch_support_fraction",
     "branch_support_seat_down_m",
+    "post_release_return_clearance_m",
     "stable_support_steps",
 })
 LD_LIBRARY_PATH = ":".join(
@@ -204,6 +205,7 @@ def _repair_command(
         ("branch_roll_offset_rad", "--branch-roll-offset-rad"),
         ("branch_support_fraction", "--branch-support-fraction"),
         ("branch_support_seat_down_m", "--branch-support-seat-down-m"),
+        ("post_release_return_clearance_m", "--post-release-return-clearance-m"),
         ("stable_support_steps", "--stable-support-steps"),
         ("target_branch_rank", "--target-branch-rank"),
     ):
@@ -345,6 +347,7 @@ def _repair_strategy(index: int) -> dict:
         "branch_roll_offset_rad",
         "branch_support_fraction",
         "branch_support_seat_down_m",
+        "post_release_return_clearance_m",
         "stable_support_steps",
     }
     if set(value) - allowed:
@@ -498,6 +501,22 @@ def _repair_strategy(index: int) -> dict:
         ):
             raise ValueError("branch support seat-down must be in [0, 0.03] m")
         strategy["branch_support_seat_down_m"] = float(seat_down)
+    if "post_release_return_clearance_m" in value:
+        clearance = value["post_release_return_clearance_m"]
+        if (
+            isinstance(clearance, bool)
+            or not isinstance(clearance, (int, float))
+            or not np.isfinite(clearance)
+            or not 0.0 <= clearance <= 0.02
+        ):
+            raise ValueError(
+                "post-release return clearance must be in [0, 0.02] m"
+            )
+        if not direct_steps[0]:
+            raise ValueError(
+                "post-release return clearance requires direct choreography"
+            )
+        strategy["post_release_return_clearance_m"] = float(clearance)
     if "stable_support_steps" in value:
         steps = value["stable_support_steps"]
         if (

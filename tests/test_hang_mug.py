@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 from judo_isaaclab.hang_mug import (
     HangMugSkillProgram,
     RigidAssetGeometry,
+    apply_post_release_return_clearance,
     ensure_pick_latch_clearance,
     geometry_conditioned_hang_pose,
     reanchor_branch_transport_contact,
@@ -1438,6 +1439,61 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
         "maximum_line_residual_m"
     ] > 0.01
     json.dumps(curved_receipt)
+
+
+def test_post_release_clearance_advances_only_straight_return_translation():
+    right_start = _pose(0.2, -0.7, 0.9)
+    insert = _pose(0.6, -0.2, 0.95)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(),
+        _pose(),
+        _pose(),
+        _pose(),
+        approach_steps=1,
+        close_steps=1,
+        release_steps=1,
+        confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(right_start, _pose(), steps=2)
+    program.direct_rest_to_branch_insert(
+        _pose(0.5, -0.3, 1.0), insert, direct_steps=3, insert_steps=2,
+    )
+    program.release_and_return_to_rest(
+        insert,
+        right_start,
+        support_steps=2,
+        release_steps=2,
+        return_steps=120,
+        settle_steps=2,
+    )
+    baseline = program.build()
+    corrected = apply_post_release_return_clearance(
+        baseline, 0.005, clearance_rows=7
+    )
+    release_end = baseline.waypoint_steps["right_release"]
+    return_end = baseline.waypoint_steps["post_release_return"]
+    np.testing.assert_allclose(
+        corrected.right_poses[: release_end + 1],
+        baseline.right_poses[: release_end + 1],
+    )
+    np.testing.assert_allclose(
+        corrected.right_poses[release_end + 1 : return_end + 1, 3:],
+        baseline.right_poses[release_end + 1 : return_end + 1, 3:],
+    )
+    np.testing.assert_allclose(corrected.right_poses[return_end], right_start)
+    start = corrected.right_poses[release_end, :3]
+    points = corrected.right_poses[release_end + 1 : return_end + 1, :3]
+    direction = points[-1] - start
+    fractions = (points - start) @ direction / float(direction @ direction)
+    residuals = np.linalg.norm(
+        points - (start + fractions[:, None] * direction), axis=1
+    )
+    assert residuals.max() <= 1.0e-12
+    assert np.all(np.diff(fractions) >= -1.0e-12)
+    assert np.linalg.norm(points[6] - start) == pytest.approx(0.005)
+    with pytest.raises(ValueError, match="in \\[0, 0.02\\]"):
+        apply_post_release_return_clearance(baseline, 0.021)
 
 
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():

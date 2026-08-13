@@ -644,6 +644,64 @@ def reanchor_branch_transport_contact(
     )
 
 
+def apply_post_release_return_clearance(
+    trajectory: SkillTrajectory,
+    clearance_m: float,
+    *,
+    clearance_rows: int = 7,
+) -> SkillTrajectory:
+    """Advance open-return translation without changing its line or wrist SLERP.
+
+    The supported pose and demonstrated-rest endpoint stay fixed.  Only the
+    positional progress along that exact straight segment is advanced during
+    the first bounded rows; orientation retains the original full-duration
+    interpolation.  This lets a released finger move along an evidence-backed
+    separating direction before wrist rotation can sweep another rigid body
+    into the support.
+    """
+
+    clearance = float(clearance_m)
+    if not np.isfinite(clearance) or not 0.0 <= clearance <= 0.02:
+        raise ValueError("post-release return clearance must be in [0, 0.02] m")
+    if isinstance(clearance_rows, bool) or not isinstance(clearance_rows, int):
+        raise ValueError("post-release return clearance rows must be an integer")
+    if (
+        "right_release" not in trajectory.waypoint_steps
+        or "post_release_return" not in trajectory.waypoint_steps
+    ):
+        raise ValueError("post-release return clearance requires a direct return")
+    release_end = trajectory.waypoint_steps["right_release"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    return_steps = return_end - release_end
+    if not 1 <= clearance_rows < return_steps:
+        raise ValueError("post-release return clearance rows must precede the endpoint")
+
+    right = np.asarray(trajectory.right_poses, dtype=np.float64).copy()
+    start = right[release_end]
+    target = right[return_end]
+    displacement = target[:3] - start[:3]
+    distance = float(np.linalg.norm(displacement))
+    if distance <= 0.0 or clearance > distance:
+        raise ValueError("post-release return clearance exceeds return displacement")
+    direct = interpolate_poses(start, target, return_steps)
+    if clearance:
+        base_fraction = np.linalg.norm(direct[:, :3] - start[:3], axis=1) / distance
+        early_fraction = np.minimum(
+            (np.arange(return_steps, dtype=np.float64) + 1.0) / clearance_rows,
+            1.0,
+        ) * (clearance / distance)
+        translation_fraction = np.maximum(base_fraction, early_fraction)
+        direct[:, :3] = start[:3] + translation_fraction[:, None] * displacement
+    right[release_end + 1 : return_end + 1] = direct
+    return SkillTrajectory(
+        left_poses=trajectory.left_poses.copy(),
+        right_poses=right,
+        grippers=trajectory.grippers.copy(),
+        stage_names=trajectory.stage_names,
+        waypoint_steps=dict(trajectory.waypoint_steps),
+    )
+
+
 class HangMugSkillProgram:
     """Build one uninterrupted grasp, handover, insert, and release rollout."""
 
