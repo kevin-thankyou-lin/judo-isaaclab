@@ -604,11 +604,11 @@ def _interpolate_open_return(
     result = interpolate_poses(start, target, steps)
     if not rotation_hold_steps:
         return result
-    # The clear row still carries rotational momentum: holding its target let
-    # the measured wrist overshoot back into the tree on the next row.  Use the
-    # immediately preceding orientation as a bounded brake target while the
-    # unchanged straight translation continues outward.
-    clear_pose = result[clearance_rows - 2].copy()
+    # The clear row still carries rotational momentum: holding its target or
+    # the immediately preceding target let the measured wrist overshoot back
+    # into the tree on the next row.  Use the next preceding orientation as a
+    # bounded brake target while unchanged straight translation continues.
+    clear_pose = result[clearance_rows - 3].copy()
     result[clearance_rows : clearance_rows + rotation_hold_steps, 3:] = (
         clear_pose[3:]
     )
