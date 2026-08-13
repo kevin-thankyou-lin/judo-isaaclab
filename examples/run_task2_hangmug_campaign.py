@@ -163,12 +163,17 @@ def _guarded(attempt: Path, workload: list[str]) -> list[str]:
     return [str(GUARD), str(_steady_state_seconds()), str(attempt / "replay.log"), *workload]
 
 
-def _classification_command(index: int, attempt: Path) -> list[str]:
+def _classification_command(
+    index: int, attempt: Path, *, guard: Path | None = None
+) -> list[str]:
     workload = _common_workload(index, attempt)
     workload[workload.index("--device"):workload.index("--device")] = [
         "--mode", "replay", "--classification-run",
     ]
-    return _guarded(attempt, workload)
+    command = _guarded(attempt, workload)
+    if guard is not None:
+        command[0] = str(guard)
+    return command
 
 
 def _repair_command(
@@ -1173,7 +1178,9 @@ def _asset_provenance_matches(recorded: dict, expected: dict[str, Path]) -> bool
         return False
 
 
-def classification_audit(index: int, attempt: Path) -> dict:
+def classification_audit(
+    index: int, attempt: Path, *, launch_guard: Path | None = None
+) -> dict:
     guard = _guard_lifecycle(attempt)
     result = _load(attempt / "result.json")
     manifest = _load(attempt / "manifest.json")
@@ -1182,7 +1189,8 @@ def classification_audit(index: int, attempt: Path) -> dict:
         or result.get("mode") != "replay"
         or not all(result.get("acceptance_checks", {}).values())
         or manifest.get("method") != "direct_source_action_replay"
-        or manifest.get("launch_command") != _classification_command(index, attempt)
+        or manifest.get("launch_command")
+        != _classification_command(index, attempt, guard=launch_guard)
     ):
         raise RuntimeError("direct classification technical checks failed")
     trace = np.load(attempt / "trace.npz")
@@ -1448,7 +1456,23 @@ def _reusable_classification(index: int) -> tuple[Path, dict] | None:
         if not path.is_file():
             continue
         recorded = _load(path)
-        if recorded != classification_audit(index, attempt):
+        manifest_path = attempt / "manifest.json"
+        if (
+            recorded.get("artifacts", {}).get("manifest_sha256")
+            != _sha256(manifest_path)
+        ):
+            raise RuntimeError(f"classification receipt changed: {path}")
+        launch_command = _load(manifest_path).get("launch_command")
+        if (
+            not isinstance(launch_command, list)
+            or not launch_command
+            or not isinstance(launch_command[0], str)
+        ):
+            raise RuntimeError(f"classification launch receipt malformed: {manifest_path}")
+        recorded_guard = Path(launch_command[0])
+        if recorded != classification_audit(
+            index, attempt, launch_guard=recorded_guard
+        ):
             raise RuntimeError(f"classification receipt changed: {path}")
         print(f"TASK2_HANGMUG_REUSE_CLASSIFICATION={index:06d} attempt={attempt}", flush=True)
         return attempt, recorded

@@ -724,6 +724,86 @@ def test_classification_binding_and_manifest_preserve_actual_boundary(
     assert manifest["repair_strategy"] == {"handover_contact_settle_steps": 30}
 
 
+def test_classification_command_can_reaudit_manifest_bound_guard(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        campaign,
+        "_common_workload",
+        lambda *_: ["runner", "--device", "cpu"],
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_guarded",
+        lambda _attempt, workload: ["current-guard", "600", *workload],
+    )
+
+    current = campaign._classification_command(2, tmp_path / "attempt")
+    recorded = campaign._classification_command(
+        2, tmp_path / "attempt", guard=Path("/sealed/historical-guard")
+    )
+
+    assert current[0] == "current-guard"
+    assert recorded[0] == "/sealed/historical-guard"
+    assert recorded[1:] == current[1:]
+
+
+def test_reusable_classification_reaudits_under_hashed_manifest_guard(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    attempt = (
+        results / "pairs/000002/attempt_003_direct_source_classification"
+    )
+    attempt.mkdir(parents=True)
+    manifest = {
+        "launch_command": ["/sealed/historical-guard", "600", "workload"]
+    }
+    manifest_path = attempt / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    recorded = {
+        "artifacts": {"manifest_sha256": campaign._sha256(manifest_path)},
+        "status": "repair_required",
+    }
+    (attempt / "classification_audit.json").write_text(json.dumps(recorded))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    observed = []
+
+    def audit(index, path, *, launch_guard=None):
+        observed.append((index, path, launch_guard))
+        return recorded
+
+    monkeypatch.setattr(campaign, "classification_audit", audit)
+
+    assert campaign._reusable_classification(2) == (attempt, recorded)
+    assert observed == [(2, attempt, Path("/sealed/historical-guard"))]
+
+
+def test_reusable_classification_rejects_manifest_hash_drift(
+    tmp_path, monkeypatch
+):
+    results = tmp_path / "task2"
+    attempt = (
+        results / "pairs/000002/attempt_003_direct_source_classification"
+    )
+    attempt.mkdir(parents=True)
+    (attempt / "manifest.json").write_text(json.dumps({
+        "launch_command": ["/sealed/historical-guard", "600", "workload"]
+    }))
+    (attempt / "classification_audit.json").write_text(json.dumps({
+        "artifacts": {"manifest_sha256": "not-the-current-manifest"}
+    }))
+    monkeypatch.setattr(campaign, "RESULTS", results)
+    monkeypatch.setattr(
+        campaign,
+        "classification_audit",
+        lambda *_args, **_kwargs: pytest.fail("drifted manifest was reaudited"),
+    )
+
+    with pytest.raises(RuntimeError, match="classification receipt changed"):
+        campaign._reusable_classification(2)
+
+
 def test_guard_lifecycle_requires_all_markers_and_live_zero_workers(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign, "_worker_pids", lambda: [])
     (tmp_path / "replay.log").write_text("POST_RUN_ZERO_WORKER=PASS\n")
