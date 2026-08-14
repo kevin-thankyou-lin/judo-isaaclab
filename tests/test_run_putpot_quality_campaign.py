@@ -295,6 +295,15 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
         partial_trace=np.asarray(False),
         right_finger_forces_n=forces[None, :],
         right_pad_fractions=fractions[None, :],
+        right_eef_poses=np.asarray(
+            [[0.715, -0.154, 0.923, 1.0, 0.0, 0.0, 0.0]]
+        ),
+        pot_poses=np.asarray(
+            [[0.710, 0.088, 0.814, 1.0, 0.0, 0.0, 0.0]]
+        ),
+        right_pad_centers_world=np.asarray(
+            [[[0.75, -0.04, 0.91], [0.78, -0.10, 0.84]]]
+        ),
         right_pad_axes_world=np.asarray(
             [[[-0.54078770, -0.70778477, 0.45452100],
               [-0.49053645, -0.76724416, 0.41317207]]]
@@ -309,7 +318,7 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
                 "trace_sha256": trace_sha256,
                 "earliest_causal_failure": {
                     "classification": (
-                        "right_raw_pad_axis_precontact_translation_leaves_handle_surface"
+                        "right_handle_tangent_translation_preserves_edge_contact_local_fraction"
                     ),
                     "attempt_62_trace_sha256": trace_sha256,
                     "attempt_62_first_right_dual_force_program_step": 0,
@@ -317,19 +326,36 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
                     "attempt_62_first_right_dual_force_pad_fractions": (
                         fractions.tolist()
                     ),
-                    "attempt_63_runtime_handle_normal_world": [
-                        0.26815366,
-                        -0.96219699,
-                        -0.04765038,
-                    ],
+                    "candidate_precontact_wrist_pivot": {
+                        "calibrated_predicted_contact_pad_fractions": [0.20, 0.25],
+                        "maximum_rotation_rad": 0.35,
+                        "maximum_translation_m": 0.025,
+                        "predicted_contact_line_distances_m": [0.0, 0.003],
+                        "reference_contact_line_distances_m": [0.0, 0.003],
+                        "rotation_axis_pot_local": [0.0, 0.0, 1.0],
+                        "rotation_rad": 0.20,
+                        "target_handle_collider_json_sha256": (
+                            "c39c4c745ee5d79a59d4f3b809028b7820f6ff26bdd185434ea250561fd6300e"
+                        ),
+                        "translation_pot_local_m": [0.01, 0.0, 0.0],
+                    },
                 },
             }
         ),
         encoding="utf-8",
     )
     grasp = np.asarray([0.715, -0.154, 0.923, 1.0, 0.0, 0.0, 0.0])
+    target_root = np.asarray([0.710, 0.088, 0.814, 1.0, 0.0, 0.0, 0.0])
+    pad_centers = np.asarray([[0.75, -0.04, 0.91], [0.78, -0.10, 0.84]])
+    pad_axes = np.asarray(
+        [[-0.54078770, -0.70778477, 0.45452100],
+         [-0.49053645, -0.76724416, 0.41317207]]
+    )
     corrected, receipt = _measured_right_dual_contact_pad_balance(
         grasp,
+        target_root,
+        pad_centers,
+        pad_axes,
         trace,
         diagnosis,
         0,
@@ -342,23 +368,24 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
     assert receipt["weak_finger_index"] == 0
     assert receipt["strong_finger_index"] == 1
     assert receipt["predicted_pad_fractions"] == pytest.approx(
-        [0.20, 0.431503]
+        [0.20, 0.25]
     )
-    assert receipt["planned_tangent_translation_norm_m"] == pytest.approx(
-        0.0174211, abs=1.0e-6
-    )
+    assert receipt["translation_norm_m"] == pytest.approx(0.01)
     assert (
-        receipt["planned_tangent_translation_norm_m"]
-        < receipt["maximum_translation_m"]
+        receipt["translation_norm_m"] < receipt["maximum_translation_m"]
     )
-    assert abs(receipt["planned_handle_normal_component_m"]) < 1.0e-12
-    assert receipt["orientation_unchanged"]
+    assert receipt["rotation_rad"] == pytest.approx(0.20)
+    assert receipt["disable_falsified_handle_tangent_translation"]
+    assert not receipt["orientation_unchanged"]
     assert receipt["collision_clear_pregrasp_preserved"]
-    np.testing.assert_array_equal(corrected[3:], grasp[3:])
-    np.testing.assert_array_equal(corrected, grasp)
+    np.testing.assert_allclose(corrected[:3], grasp[:3] + [0.01, 0.0, 0.0])
+    assert not np.array_equal(corrected[3:], grasp[3:])
     with pytest.raises(ValueError, match="unchanged geometry bounds"):
         _measured_right_dual_contact_pad_balance(
             grasp,
+            target_root,
+            pad_centers,
+            pad_axes,
             trace,
             diagnosis,
             0,

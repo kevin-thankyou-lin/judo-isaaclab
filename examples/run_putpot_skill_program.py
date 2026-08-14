@@ -824,6 +824,9 @@ def _pivot_source_corridor_from_measured_contacts(
 
 def _measured_right_dual_contact_pad_balance(
     desired_grasp,
+    target_root_pose,
+    predicted_pad_centers_world,
+    predicted_pad_axes_world,
     trace_path,
     diagnosis_path,
     sample_step: int,
@@ -834,15 +837,30 @@ def _measured_right_dual_contact_pad_balance(
     target_weak_pad_fraction: float = 0.20,
     maximum_translation_m: float = 0.025,
 ):
-    """Plan a measured handle-tangent right recenter without moving the prior."""
+    """Apply one mesh-screened right wrist correction before handle contact."""
 
-    from judo_isaaclab.put_pot import YAM_FINGER_PAD_AXIS_LENGTH_M
+    from judo_isaaclab.put_marker import quaternion_multiply, quaternion_rotate
 
     grasp = np.asarray(desired_grasp, dtype=np.float64).copy()
+    target_root = np.asarray(target_root_pose, dtype=np.float64)
+    pad_centers = np.asarray(predicted_pad_centers_world, dtype=np.float64)
+    pad_axes = np.asarray(predicted_pad_axes_world, dtype=np.float64)
     trace_source = Path(trace_path).resolve()
     diagnosis_source = Path(diagnosis_path).resolve()
-    if grasp.shape != (7,) or not np.all(np.isfinite(grasp)):
-        raise ValueError("right pad balance requires one finite grasp pose")
+    if (
+        grasp.shape != (7,)
+        or target_root.shape != (7,)
+        or pad_centers.shape != (2, 3)
+        or pad_axes.shape != (2, 3)
+        or not np.all(
+            np.isfinite(
+                np.concatenate(
+                    (grasp, target_root, pad_centers.ravel(), pad_axes.ravel())
+                )
+            )
+        )
+    ):
+        raise ValueError("right pad balance requires finite target geometry")
     if not trace_source.is_file() or not diagnosis_source.is_file():
         raise FileNotFoundError("right pad balance evidence is missing")
     if any(
@@ -879,9 +897,23 @@ def _measured_right_dual_contact_pad_balance(
         failure.get("attempt_62_first_right_dual_force_pad_fractions", []),
         dtype=np.float64,
     )
-    handle_normal = np.asarray(
-        failure.get("attempt_63_runtime_handle_normal_world", []),
+    candidate = failure.get("candidate_precontact_wrist_pivot", {})
+    rotation_axis_local = np.asarray(
+        candidate.get("rotation_axis_pot_local", []), dtype=np.float64
+    )
+    translation_local = np.asarray(
+        candidate.get("translation_pot_local_m", []), dtype=np.float64
+    )
+    predicted = np.asarray(
+        candidate.get("calibrated_predicted_contact_pad_fractions", []),
         dtype=np.float64,
+    )
+    rotation_rad = float(candidate.get("rotation_rad", float("nan")))
+    diagnosis_maximum_rotation_rad = float(
+        candidate.get("maximum_rotation_rad", float("nan"))
+    )
+    diagnosis_maximum_translation_m = float(
+        candidate.get("maximum_translation_m", float("nan"))
     )
     if (
         diagnosis.get("lane_id") != lane_id
@@ -889,10 +921,14 @@ def _measured_right_dual_contact_pad_balance(
         or failure.get("attempt_62_first_right_dual_force_program_step")
         != int(sample_step)
         or failure.get("classification")
-        != "right_raw_pad_axis_precontact_translation_leaves_handle_surface"
+        != "right_handle_tangent_translation_preserves_edge_contact_local_fraction"
         or expected_forces.shape != (2,)
         or expected_fractions.shape != (2,)
-        or handle_normal.shape != (3,)
+        or rotation_axis_local.shape != (3,)
+        or translation_local.shape != (3,)
+        or predicted.shape != (2,)
+        or candidate.get("target_handle_collider_json_sha256")
+        != "c39c4c745ee5d79a59d4f3b809028b7820f6ff26bdd185434ea250561fd6300e"
     ):
         raise ValueError("right pad balance diagnosis does not own the trace sample")
     with np.load(trace_source, allow_pickle=False) as trace:
@@ -901,6 +937,9 @@ def _measured_right_dual_contact_pad_balance(
             "right_finger_forces_n",
             "right_pad_fractions",
             "right_pad_axes_world",
+            "right_pad_centers_world",
+            "right_eef_poses",
+            "pot_poses",
         }
         if not required.issubset(trace.files):
             raise ValueError("right pad balance trace lacks physical telemetry")
@@ -917,11 +956,36 @@ def _measured_right_dual_contact_pad_balance(
         axes = np.asarray(
             trace["right_pad_axes_world"][sample_step], dtype=np.float64
         )
+        measured_centers = np.asarray(
+            trace["right_pad_centers_world"][sample_step], dtype=np.float64
+        )
+        measured_wrist = np.asarray(
+            trace["right_eef_poses"][sample_step], dtype=np.float64
+        )
+        measured_root = np.asarray(
+            trace["pot_poses"][sample_step], dtype=np.float64
+        )
     if (
         forces.shape != (2,)
         or fractions.shape != (2,)
         or axes.shape != (2, 3)
-        or not np.all(np.isfinite(np.concatenate((forces, fractions, axes.ravel()))))
+        or measured_centers.shape != (2, 3)
+        or measured_wrist.shape != (7,)
+        or measured_root.shape != (7,)
+        or not np.all(
+            np.isfinite(
+                np.concatenate(
+                    (
+                        forces,
+                        fractions,
+                        axes.ravel(),
+                        measured_centers.ravel(),
+                        measured_wrist,
+                        measured_root,
+                    )
+                )
+            )
+        )
         or not np.allclose(forces, expected_forces, atol=1.0e-7, rtol=0.0)
         or not np.allclose(fractions, expected_fractions, atol=1.0e-7, rtol=0.0)
         or not np.all(forces >= minimum_force_n)
@@ -936,42 +1000,58 @@ def _measured_right_dual_contact_pad_balance(
         <= 1.0 - minimum_pad_fraction_margin
     ):
         raise ValueError("right pad balance requires one edge and one interior pad")
-    axis_norms = np.linalg.norm(axes, axis=1)
-    if np.any(axis_norms <= 1.0e-9):
-        raise ValueError("right pad balance axes are degenerate")
-    axes /= axis_norms[:, None]
-    mean_axis = np.mean(axes, axis=0)
-    mean_axis_norm = float(np.linalg.norm(mean_axis))
-    handle_normal_norm = float(np.linalg.norm(handle_normal))
-    if mean_axis_norm <= 1.0e-9 or handle_normal_norm <= 1.0e-9:
-        raise ValueError("right pad balance measurement axes are degenerate")
-    mean_axis /= mean_axis_norm
-    handle_normal /= handle_normal_norm
-    tangent_axis = mean_axis - float(np.dot(mean_axis, handle_normal)) * handle_normal
-    tangent_projection_gain = float(np.linalg.norm(tangent_axis))
-    if tangent_projection_gain <= 1.0e-9:
-        raise ValueError("right pad balance handle tangent is degenerate")
-    tangent_axis /= tangent_projection_gain
-    applied_fraction_delta = float(target_weak_pad_fraction - fractions[weak])
-    translation = (
-        -applied_fraction_delta
-        * float(YAM_FINGER_PAD_AXIS_LENGTH_M)
-        / tangent_projection_gain
-        * tangent_axis
-    )
-    translation_norm = float(np.linalg.norm(translation))
-    predicted = fractions + applied_fraction_delta
+    rotation_axis_norm = float(np.linalg.norm(rotation_axis_local))
+    translation_norm = float(np.linalg.norm(translation_local))
+    if rotation_axis_norm <= 1.0e-9:
+        raise ValueError("right pad balance rotation axis is degenerate")
+    rotation_axis_local /= rotation_axis_norm
     if (
-        translation_norm > maximum_translation_m + 1.0e-12
+        not np.isfinite(rotation_rad)
+        or not 0.0 < rotation_rad <= diagnosis_maximum_rotation_rad <= 0.35
+        or not np.isclose(diagnosis_maximum_translation_m, maximum_translation_m)
+        or translation_norm > maximum_translation_m + 1.0e-12
         or not np.all(
             (predicted >= minimum_pad_fraction_margin)
             & (predicted <= 1.0 - minimum_pad_fraction_margin)
         )
+        or not np.isclose(predicted[weak], target_weak_pad_fraction, atol=1.0e-4)
     ):
         raise ValueError("right pad balance exceeds its unchanged geometry bounds")
-    return grasp.copy(), {
+    rotation_axis_world = quaternion_rotate(
+        target_root[3:], rotation_axis_local
+    )
+    rotation_axis_world /= np.linalg.norm(rotation_axis_world)
+    translation = quaternion_rotate(target_root[3:], translation_local)
+    translation_norm = float(np.linalg.norm(translation))
+    delta = np.concatenate(
+        (
+            [np.cos(0.5 * rotation_rad)],
+            rotation_axis_world * np.sin(0.5 * rotation_rad),
+        )
+    )
+    corrected = grasp.copy()
+    corrected[:3] += translation
+    corrected[3:] = quaternion_multiply(delta, corrected[3:])
+    corrected[3:] /= np.linalg.norm(corrected[3:])
+    corrected_centers = np.stack(
+        [
+            grasp[:3]
+            + quaternion_rotate(delta, center - grasp[:3])
+            + translation
+            for center in pad_centers
+        ]
+    )
+    corrected_axes = np.stack(
+        [quaternion_rotate(delta, axis) for axis in pad_axes]
+    )
+    corrected_axes /= np.linalg.norm(corrected_axes, axis=1)[:, None]
+    jaw_axis = corrected_centers[1] - corrected_centers[0]
+    jaw_axis /= np.linalg.norm(jaw_axis)
+    mean_axis = np.mean(corrected_axes, axis=0)
+    mean_axis /= np.linalg.norm(mean_axis)
+    return corrected, {
         "enabled": True,
-        "mechanism": "measured_right_open_jaw_handle_tangent_pad_balance",
+        "mechanism": "measured_right_force_free_mesh_screened_wrist_pivot",
         "trace": {
             "path": str(trace_source),
             "sample_step": int(sample_step),
@@ -986,26 +1066,40 @@ def _measured_right_dual_contact_pad_balance(
         "weak_finger_index": weak,
         "strong_finger_index": strong,
         "target_weak_pad_fraction": float(target_weak_pad_fraction),
-        "applied_fraction_delta": applied_fraction_delta,
         "predicted_pad_fractions": predicted.tolist(),
         "minimum_pad_fraction_margin": float(minimum_pad_fraction_margin),
-        "mean_tip_to_base_axis_world": mean_axis.tolist(),
-        "handle_normal_world": handle_normal.tolist(),
-        "handle_tangent_axis_world": tangent_axis.tolist(),
-        "tangent_projection_gain": tangent_projection_gain,
-        "planned_tangent_translation_world_m": translation.tolist(),
-        "planned_tangent_translation_norm_m": translation_norm,
+        "corrected_pad_centers_world": corrected_centers.tolist(),
+        "corrected_pad_axes_world": corrected_axes.tolist(),
+        "corrected_jaw_axis_world": jaw_axis.tolist(),
+        "corrected_mean_pad_axis_world": mean_axis.tolist(),
+        "rotation_axis_world": rotation_axis_world.tolist(),
+        "rotation_axis_pot_local": rotation_axis_local.tolist(),
+        "rotation_rad": rotation_rad,
+        "maximum_rotation_rad": diagnosis_maximum_rotation_rad,
+        "translation_world_m": translation.tolist(),
+        "translation_pot_local_m": translation_local.tolist(),
+        "translation_norm_m": translation_norm,
         "maximum_translation_m": float(maximum_translation_m),
         "bound_margin_m": float(maximum_translation_m - translation_norm),
-        "planned_handle_normal_component_m": float(
-            np.dot(translation, handle_normal)
+        "rotation_bound_margin_rad": float(
+            diagnosis_maximum_rotation_rad - rotation_rad
         ),
-        "orientation_unchanged": True,
+        "target_handle_collider_json_sha256": candidate[
+            "target_handle_collider_json_sha256"
+        ],
+        "reference_contact_line_distances_m": candidate[
+            "reference_contact_line_distances_m"
+        ],
+        "predicted_contact_line_distances_m": candidate[
+            "predicted_contact_line_distances_m"
+        ],
+        "orientation_unchanged": False,
         "collision_clear_pregrasp_preserved": True,
-        "grasp_translation_applied": False,
+        "grasp_translation_applied": True,
         "pregrasp_translation_applied": False,
-        "source_mapped_wrist_prior_unchanged": True,
-        "defer_closure_until_observed_target": True,
+        "source_mapped_wrist_prior_unchanged": False,
+        "defer_closure_until_corrected_target": True,
+        "disable_falsified_handle_tangent_translation": True,
         "correction_is_force_free": True,
     }
 
@@ -4857,6 +4951,81 @@ def main(argv: list[str] | None = None) -> None:
                     ],
                     dtype=np.float64,
                 )
+                if right_precontact_pad_balance_requested:
+                    original_right_source_contact_wrist = (
+                        desired_right_source_contact_wrist.copy()
+                    )
+                    (
+                        desired_right_source_contact_wrist,
+                        right_precontact_pad_balance,
+                    ) = _measured_right_dual_contact_pad_balance(
+                        desired_right_source_contact_wrist,
+                        calibration_pot_pose,
+                        local_mpc_right_frame_receipt[
+                            "predicted_pad_centers_world"
+                        ],
+                        local_mpc_right_frame_receipt[
+                            "predicted_pad_axes_world"
+                        ],
+                        args.target_right_quality_precontact_pad_balance_trace,
+                        args.target_right_quality_precontact_pad_balance_diagnosis_json,
+                        int(args.target_right_quality_precontact_pad_balance_step),
+                        lane_id=os.environ["CPGEN_LANE_ID"],
+                        minimum_force_n=float(
+                            quality_config.grasp["minimum_force_n"]
+                        ),
+                        minimum_pad_fraction_margin=float(
+                            quality_config.grasp["minimum_pad_fraction_margin"]
+                        ),
+                        target_weak_pad_fraction=0.20,
+                        maximum_translation_m=float(args.collision_clearance_m),
+                    )
+                    right_precontact_pad_balance[
+                        "source_mapped_target_wrist_pose_before_correction"
+                    ] = original_right_source_contact_wrist.tolist()
+                    right_precontact_pad_balance[
+                        "corrected_target_wrist_pose"
+                    ] = desired_right_source_contact_wrist.tolist()
+                    local_mpc_right_frame_receipt[
+                        "target_wrist_pose_before_measured_correction"
+                    ] = original_right_source_contact_wrist.tolist()
+                    local_mpc_right_frame_receipt[
+                        "target_wrist_pose"
+                    ] = desired_right_source_contact_wrist.tolist()
+                    local_mpc_right_frame_receipt[
+                        "predicted_pad_centers_world"
+                    ] = right_precontact_pad_balance[
+                        "corrected_pad_centers_world"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "predicted_pad_axes_world"
+                    ] = right_precontact_pad_balance[
+                        "corrected_pad_axes_world"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "jaw_axis_world"
+                    ] = right_precontact_pad_balance[
+                        "corrected_jaw_axis_world"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "mean_pad_axis_world"
+                    ] = right_precontact_pad_balance[
+                        "corrected_mean_pad_axis_world"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "predicted_contact_pad_fractions"
+                    ] = right_precontact_pad_balance[
+                        "predicted_pad_fractions"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "measured_precontact_pad_balance"
+                    ] = right_precontact_pad_balance
+                    right_predicted_fractions = np.asarray(
+                        right_precontact_pad_balance[
+                            "predicted_pad_fractions"
+                        ],
+                        dtype=np.float64,
+                    )
                 if not np.all(
                     np.isfinite(right_predicted_fractions)
                     & (right_predicted_fractions >= 0.10)
@@ -4883,33 +5052,6 @@ def main(argv: list[str] | None = None) -> None:
                         dtype=np.float64,
                     ),
                 )
-                if right_precontact_pad_balance_requested:
-                    (
-                        desired_right_source_contact_wrist,
-                        right_precontact_pad_balance,
-                    ) = _measured_right_dual_contact_pad_balance(
-                        desired_right_source_contact_wrist,
-                        args.target_right_quality_precontact_pad_balance_trace,
-                        args.target_right_quality_precontact_pad_balance_diagnosis_json,
-                        int(args.target_right_quality_precontact_pad_balance_step),
-                        lane_id=os.environ["CPGEN_LANE_ID"],
-                        minimum_force_n=float(
-                            quality_config.grasp["minimum_force_n"]
-                        ),
-                        minimum_pad_fraction_margin=float(
-                            quality_config.grasp["minimum_pad_fraction_margin"]
-                        ),
-                        target_weak_pad_fraction=0.20,
-                        maximum_translation_m=float(args.collision_clearance_m),
-                    )
-                    right_precontact_pad_balance[
-                        "source_mapped_target_wrist_pose_unchanged"
-                    ] = (
-                        desired_right_source_contact_wrist.tolist()
-                    )
-                    local_mpc_right_frame_receipt[
-                        "measured_precontact_pad_balance"
-                    ] = right_precontact_pad_balance
             predicted_fractions = np.asarray(
                 frame_receipt["predicted_contact_pad_fractions"],
                 dtype=np.float64,
@@ -6189,7 +6331,13 @@ def main(argv: list[str] | None = None) -> None:
                                 contact_fraction_recenter=bool(
                                     (
                                         active_arm == "left"
-                                        or quality_left_first_local_mpc
+                                        or (
+                                            quality_left_first_local_mpc
+                                            and not (
+                                                active_arm == "right"
+                                                and right_precontact_pad_balance_requested
+                                            )
+                                        )
                                     )
                                     and args.target_handle_local_contact_fraction_recenter
                                 ),
@@ -6197,10 +6345,6 @@ def main(argv: list[str] | None = None) -> None:
                                     (
                                         active_arm == "left"
                                         and args.target_left_quality_handle_tangent_contact_recenter
-                                    )
-                                    or (
-                                        active_arm == "right"
-                                        and right_precontact_pad_balance_requested
                                     )
                                 ),
                                 contact_recenter_preserve_transverse_centering=bool(
@@ -6218,20 +6362,13 @@ def main(argv: list[str] | None = None) -> None:
                                     )
                                 ),
                                 allow_committed_handle_tangent_prestage=bool(
-                                    active_arm == "right"
-                                    and right_precontact_pad_balance_requested
+                                    False
                                 ),
                                 committed_handle_tangent_target_margin=(
-                                    0.20
-                                    if active_arm == "right"
-                                    and right_precontact_pad_balance_requested
-                                    else None
+                                    None
                                 ),
                                 committed_handle_tangent_maximum_total_m=(
-                                    0.020
-                                    if active_arm == "right"
-                                    and right_precontact_pad_balance_requested
-                                    else None
+                                    None
                                 ),
                                 allow_bounded_closure_commit=bool(
                                     (
@@ -8545,7 +8682,13 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "contact_fraction_recenter": {
                     "enabled_arms": (
-                        ["left", "right"]
+                        ["left"]
+                        if (
+                            quality_left_first_local_mpc
+                            and args.target_handle_local_contact_fraction_recenter
+                            and right_precontact_pad_balance_requested
+                        )
+                        else ["left", "right"]
                         if (
                             quality_left_first_local_mpc
                             and args.target_handle_local_contact_fraction_recenter
@@ -8582,16 +8725,19 @@ def main(argv: list[str] | None = None) -> None:
                         right_precontact_pad_balance
                     ),
                     "right_uses_handle_tangent_surface_recenter": bool(
-                        right_precontact_pad_balance_requested
+                        False
                     ),
                     "right_source_mapped_wrist_prior_unchanged": bool(
-                        right_precontact_pad_balance_requested
+                        False
                     ),
                     "right_committed_handle_tangent_target_margin": (
-                        0.20 if right_precontact_pad_balance_requested else None
+                        None
                     ),
                     "right_committed_handle_tangent_maximum_total_m": (
-                        0.020 if right_precontact_pad_balance_requested else None
+                        None
+                    ),
+                    "right_uses_force_free_mesh_screened_wrist_pivot": bool(
+                        right_precontact_pad_balance_requested
                     ),
                     "right_uses_dual_force_pad_margin_pivot": bool(
                         args.target_right_quality_postclosure_force_settle
