@@ -37,6 +37,7 @@ from run_hangmug_skill_program import (
     _activate_quality_wave_contact_reports,
     _array_sha256,
     _bounded_direct_outbound_clearance,
+    _bounded_return_contact_clearance_steps,
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
     _direct_actions_exact,
@@ -91,9 +92,9 @@ def test_left_grasp_approach_depth_continues_object_centric_approach():
         _left_grasp_with_approach_depth(pregrasp, grasp, 0.016)
 
 
-def _return_clearance_row(environment_force, mug_force, prior_rows):
+def _return_clearance_row(environment_force, mug_force, prior_rows, *, required_steps=8):
     receipt = _return_contact_clearance_receipt(
-        environment_force, mug_force, prior_rows
+        environment_force, mug_force, prior_rows, required_steps=required_steps
     )
     return {
         "waypoint": "post_release_return",
@@ -131,6 +132,20 @@ def test_post_release_contact_allows_decreasing_cross_channel_redistribution():
     receipt = redistributed["return_contact_clearance"]
     assert not receipt["contact_reappeared"]
     assert receipt["current_total_force_n"] < receipt["previous_total_force_n"]
+
+
+def test_post_release_contact_clearance_window_is_explicitly_bounded():
+    assert _bounded_return_contact_clearance_steps(8) == 8
+    assert _bounded_return_contact_clearance_steps(30) == 30
+    with pytest.raises(ValueError, match="clearance steps"):
+        _bounded_return_contact_clearance_steps(31)
+    rows = []
+    for force in np.linspace(1.5, 0.8, 8):
+        rows.append(
+            _return_clearance_row(0.0, force, rows, required_steps=30)
+        )
+    assert all(row["passed"] for row in rows)
+    assert rows[-1]["return_contact_clearance"]["required_clear_by_row_index"] == 29
 
 
 def test_post_release_contact_cannot_persist_or_reappear():

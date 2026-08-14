@@ -309,6 +309,15 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--return-contact-clearance-steps",
+        type=int,
+        default=8,
+        help=(
+            "Bounded rows for monotonically decreasing release-pose contact "
+            "to become fully clear during the open-arm return."
+        ),
+    )
+    parser.add_argument(
         "--require-broad-pad-contact",
         action="store_true",
         help=(
@@ -1096,6 +1105,12 @@ def _bounded_direct_outbound_clearance(value: float) -> float:
     return value
 
 
+def _bounded_return_contact_clearance_steps(value: int) -> int:
+    if isinstance(value, bool) or not 8 <= int(value) <= 30:
+        raise ValueError("return contact clearance steps must be in [8, 30]")
+    return int(value)
+
+
 def _bounded_branch_support_fraction(value: float) -> float:
     fraction = float(value)
     if not np.isfinite(fraction) or not 0.25 <= fraction <= 0.75:
@@ -1873,6 +1888,8 @@ def _return_contact_clearance_receipt(
     environment_force_n: float,
     mug_force_n: float,
     prior_rows: list[dict[str, object]],
+    *,
+    required_steps: int = _RETURN_CONTACT_CLEARANCE_STEPS,
 ) -> dict[str, object]:
     """Allow only bounded, monotonically clearing release-pose contact.
 
@@ -1884,6 +1901,7 @@ def _return_contact_clearance_receipt(
     be fully clear by the eighth return row.
     """
 
+    required_steps = _bounded_return_contact_clearance_steps(required_steps)
     return_rows = [
         row for row in prior_rows if row.get("waypoint") == "post_release_return"
     ]
@@ -1935,13 +1953,13 @@ def _return_contact_clearance_receipt(
             <= previous_total + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
         )
     )
-    grace_row = row_index < _RETURN_CONTACT_CLEARANCE_STEPS - 1
+    grace_row = row_index < required_steps - 1
     grace_allowed = bool(
         not contact_free and grace_row and starts_bounded and nonincreasing
     )
     return {
         "return_row_index": row_index,
-        "required_clear_by_row_index": _RETURN_CONTACT_CLEARANCE_STEPS - 1,
+        "required_clear_by_row_index": required_steps - 1,
         "maximum_initial_force_n": _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N,
         "force_increase_tolerance_n": _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N,
         "initial_environment_force_n": initial_environment,
@@ -1964,6 +1982,7 @@ def _direct_segment_live_row(
     waypoint: str,
     physics_dt: float,
     prior_rows: list[dict[str, object]] | None = None,
+    return_clearance_steps: int = _RETURN_CONTACT_CLEARANCE_STEPS,
 ) -> dict[str, object]:
     environment_force = _contact_view_max_force(views["environment"], physics_dt)
     mug_force = _contact_view_max_force(views["mug"], physics_dt)
@@ -1982,6 +2001,7 @@ def _direct_segment_live_row(
             environment_force,
             mug_force,
             [] if prior_rows is None else prior_rows,
+            required_steps=return_clearance_steps,
         )
         if returning
         else None
@@ -3159,6 +3179,7 @@ def main() -> None:
                 "handle-frame, body-wall, translation, pitch, roll, or straddle contact offsets"
             )
     _bounded_direct_outbound_clearance(args.direct_outbound_clearance_m)
+    _bounded_return_contact_clearance_steps(args.return_contact_clearance_steps)
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -3642,6 +3663,7 @@ def main() -> None:
                     waypoint,
                     physics_dt,
                     prior_rows=direct_live_rows,
+                    return_clearance_steps=args.return_contact_clearance_steps,
                 )
                 direct_live_rows.append(live_row)
                 stop_after_row = stop_after_row or not live_row["passed"]
