@@ -309,6 +309,15 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--post-release-clearance-local-x-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional bounded closing-frame X shift used as the first open-jaw "
+            "clearance leg after release."
+        ),
+    )
+    parser.add_argument(
         "--post-release-return-to-rest-steps",
         type=int,
         default=0,
@@ -1118,6 +1127,13 @@ def _bounded_return_contact_clearance_steps(value: int) -> int:
     if isinstance(value, bool) or not 8 <= int(value) <= 30:
         raise ValueError("return contact clearance steps must be in [8, 30]")
     return int(value)
+
+
+def _bounded_post_release_clearance_local_x(value: float) -> float:
+    amount = float(value)
+    if not np.isfinite(amount) or abs(amount) > 0.02:
+        raise ValueError("post-release local X clearance must be within 2 cm")
+    return amount
 
 
 def _bounded_branch_support_fraction(value: float) -> float:
@@ -3042,11 +3058,19 @@ def _build_skill(
             insert_steps=70,
             left_observer=left_branch_observer,
         )
+        clearance_local_x = _bounded_post_release_clearance_local_x(
+            args.post_release_clearance_local_x_m
+        )
+        right_clearance = right_approach
+        if clearance_local_x:
+            right_clearance = _handover_target_with_local_straddle(
+                right_insert, clearance_local_x
+            )
         program.release_and_return_to_rest(
             right_insert,
             right_start,
             right_clearance=(
-                right_approach if args.post_release_clearance_steps else None
+                right_clearance if args.post_release_clearance_steps else None
             ),
             clearance_steps=args.post_release_clearance_steps,
             support_steps=40,
@@ -3229,6 +3253,16 @@ def main() -> None:
             )
     _bounded_direct_outbound_clearance(args.direct_outbound_clearance_m)
     _bounded_return_contact_clearance_steps(args.return_contact_clearance_steps)
+    _bounded_post_release_clearance_local_x(
+        args.post_release_clearance_local_x_m
+    )
+    if (
+        args.post_release_clearance_local_x_m
+        and not args.post_release_clearance_steps
+    ):
+        raise ValueError(
+            "post-release local X clearance requires clearance steps"
+        )
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -4310,6 +4344,9 @@ def main() -> None:
         result["protocol"]["parameters"]["post_release_clearance_steps"] = int(
             args.post_release_clearance_steps
         )
+        result["protocol"]["parameters"][
+            "post_release_clearance_local_x_m"
+        ] = float(args.post_release_clearance_local_x_m)
         result["protocol"]["parameters"][
             "handover_target_camera_clockwise_roll_rad"
         ] = float(args.handover_target_camera_clockwise_roll_rad)
