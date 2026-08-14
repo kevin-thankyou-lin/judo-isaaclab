@@ -394,6 +394,7 @@ def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
     assert sensor.prim_path.endswith("/RightArm/arm/link")
     assert sensor.filter_prim_paths_expr[0].endswith("/mug_tree/tree")
     assert all(isinstance(path, str) for path in sensor.filter_prim_paths_expr)
+    assert sensor.max_contact_data_count_per_prim == 256
     assert config._quality_wave_contact_sensor_names == names
 
 

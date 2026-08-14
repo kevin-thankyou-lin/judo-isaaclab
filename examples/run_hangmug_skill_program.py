@@ -845,7 +845,12 @@ def _install_quality_wave_contact_sensors(config) -> dict[str, tuple[str, ...]]:
                 update_period=update_period,
                 history_length=1,
                 track_contact_points=False,
-                max_contact_data_count_per_prim=64,
+                # Dense mesh contacts can exceed 64 points during a valid
+                # branch seat or close inter-arm handover.  Truncation makes
+                # IsaacLab's CPU contact unpacker index past the reported
+                # buffer, so reserve enough audit-only capacity to keep the
+                # exact physical rollout observable.
+                max_contact_data_count_per_prim=256,
                 track_pose=False,
                 filter_prim_paths_expr=list(filters),
             ),
