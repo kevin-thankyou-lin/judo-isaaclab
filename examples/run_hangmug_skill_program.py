@@ -933,14 +933,24 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
 
         def configure_assets_with_wave_sensors(instance, *args, **kwargs):
             result = original_assets(instance, *args, **kwargs)
-            instance._quality_wave_existing_sensor_capacity_changes = (
-                _ensure_existing_contact_sensor_capacity(instance)
-            )
             _install_quality_wave_contact_sensors(instance)
             return result
 
         config_type.configure_assets_instance_paths = configure_assets_with_wave_sensors
         setattr(config_type, assets_marker, True)
+    contact_marker = "_cpgen_quality_wave_contact_capacity_wrapper"
+    if not getattr(config_type, contact_marker, False):
+        original_contact_sensors = config_type.configure_contact_sensors
+
+        def configure_contact_sensors_with_capacity(instance, *args, **kwargs):
+            result = original_contact_sensors(instance, *args, **kwargs)
+            instance._quality_wave_existing_sensor_capacity_changes = (
+                _ensure_existing_contact_sensor_capacity(instance)
+            )
+            return result
+
+        config_type.configure_contact_sensors = configure_contact_sensors_with_capacity
+        setattr(config_type, contact_marker, True)
     return {
         "grasp_assistance": "datagen-supported grasp assist selected",
         "grasp_assistance_selection": mechanism,
