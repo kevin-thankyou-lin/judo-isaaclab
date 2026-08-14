@@ -282,6 +282,15 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--direct-outbound-clearance-m",
+        type=float,
+        default=0.002,
+        help=(
+            "Required predicted mug-tree surface clearance for the direct "
+            "rest-to-preinsert path; live PhysX contact remains forbidden."
+        ),
+    )
+    parser.add_argument(
         "--post-handover-rest-observer-steps",
         type=int,
         default=0,
@@ -1078,6 +1087,13 @@ def _bounded_handover_standoff_local_offset(value) -> np.ndarray:
     if np.linalg.norm(offset) > 0.08:
         raise ValueError("handover standoff local offset exceeds 8 cm")
     return offset
+
+
+def _bounded_direct_outbound_clearance(value: float) -> float:
+    value = float(value)
+    if not np.isfinite(value) or not 0.0 <= value <= 0.002:
+        raise ValueError("direct outbound clearance must be in [0, 0.002] m")
+    return value
 
 
 def _bounded_branch_support_fraction(value: float) -> float:
@@ -2011,6 +2027,7 @@ def _direct_segment_plan_screen(
     target_assets: dict[str, str],
     *,
     phase: str,
+    outbound_clearance_m: float = 0.002,
 ) -> dict[str, object]:
     """Screen the exact next direct interpolation without adding a phase."""
     from judo_isaaclab.collision_screening import (
@@ -2040,17 +2057,21 @@ def _direct_segment_plan_screen(
     checks = {"full_interpolation_sampled": len(eef_path) == end - start + 2}
     reports = {}
     if phase == "outbound":
+        required_clearance = _bounded_direct_outbound_clearance(
+            outbound_clearance_m
+        )
         object_path = rigid_weld_object_poses(eef_path, current_eef, mug_pose)
         object_report = object_path_clearance_reports(
             object_path,
             tree_pose=tree_pose,
             object_mesh=mug_mesh,
             tree_mesh=tree_mesh,
-            required_clearance_m=0.002,
+            required_clearance_m=required_clearance,
             sample_stride=1,
             maximum_vertices=3000,
         )[0]
         reports["rigidly_carried_mug_vs_tree"] = object_report
+        object_report["required_clearance_m"] = required_clearance
         checks["rigidly_carried_mug_tree_collision_free"] = bool(
             object_report["valid"]
         )
@@ -3140,6 +3161,7 @@ def main() -> None:
                 "source dual-grasp BODY contact requires skill mode and forbids "
                 "handle-frame, body-wall, translation, pitch, roll, or straddle contact offsets"
             )
+    _bounded_direct_outbound_clearance(args.direct_outbound_clearance_m)
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -3551,7 +3573,11 @@ def main() -> None:
                     == trajectory.waypoint_steps["carrying_rest_observer"] + 1
                 ):
                     direct_plan_screens["outbound"] = _direct_segment_plan_screen(
-                        trajectory, samples[-1], target_assets, phase="outbound"
+                        trajectory,
+                        samples[-1],
+                        target_assets,
+                        phase="outbound",
+                        outbound_clearance_m=args.direct_outbound_clearance_m,
                     )
                     if not direct_plan_screens["outbound"]["passed"]:
                         break

@@ -36,6 +36,7 @@ from run_hangmug_skill_program import (
     PROVEN_CONTROL_DEFAULTS,
     _activate_quality_wave_contact_reports,
     _array_sha256,
+    _bounded_direct_outbound_clearance,
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
     _direct_actions_exact,
@@ -1053,6 +1054,15 @@ def test_body_wall_transfer_rejects_wrist_inside_body_wall():
             np.asarray([0.068, 0.081, 0.115]),
             np.asarray([0.087, 0.093, 0.079]),
         )
+
+
+def test_direct_outbound_clearance_is_explicitly_bounded():
+    assert _bounded_direct_outbound_clearance(0.0) == 0.0
+    assert _bounded_direct_outbound_clearance(0.002) == 0.002
+    with pytest.raises(ValueError, match="direct outbound clearance"):
+        _bounded_direct_outbound_clearance(-1.0e-6)
+    with pytest.raises(ValueError, match="direct outbound clearance"):
+        _bounded_direct_outbound_clearance(0.002001)
 
 
 def test_right_carrier_contact_receipt_requires_unassisted_bilateral_retention():
