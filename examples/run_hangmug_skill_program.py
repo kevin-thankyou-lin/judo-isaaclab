@@ -158,6 +158,15 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--left-grasp-approach-depth-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Bounded continuation from the transferred left pregrasp toward "
+            "the grasp, used only to move fingertip contact onto the pads."
+        ),
+    )
+    parser.add_argument(
         "--handover-straddle-local-x-m",
         type=float,
         default=0.0,
@@ -1078,6 +1087,20 @@ def _bounded_handover_post_release_lift_steps(value: int, lift_m: float) -> int:
     if bool(value) != bool(lift_m):
         raise ValueError("handover post-release lift distance and steps must both be zero or positive")
     return value
+
+
+def _left_grasp_with_approach_depth(pregrasp, grasp, depth_m: float) -> np.ndarray:
+    depth = float(depth_m)
+    if not np.isfinite(depth) or not 0.0 <= depth <= 0.015:
+        raise ValueError("left grasp approach depth must be in [0, 0.015] m")
+    pregrasp = np.asarray(pregrasp, dtype=np.float64)
+    grasp = np.asarray(grasp, dtype=np.float64).copy()
+    approach = grasp[:3] - pregrasp[:3]
+    norm = float(np.linalg.norm(approach))
+    if norm <= 1.0e-9:
+        raise ValueError("left pregrasp and grasp positions must differ")
+    grasp[:3] += depth * approach / norm
+    return grasp
 
 
 def _handover_target_with_local_pitch(pose, angle_rad: float) -> np.ndarray:
@@ -2664,7 +2687,12 @@ def _build_skill(
             local_position_scale=target_parts.body_size / source_parts.body_size,
         )
 
-    left_grasp = transfer_mug_frame("left_grasp", "left")
+    left_pregrasp = transfer_mug_frame("left_pregrasp", "left")
+    left_grasp = _left_grasp_with_approach_depth(
+        left_pregrasp,
+        transfer_mug_frame("left_grasp", "left"),
+        args.left_grasp_approach_depth_m,
+    )
     left_contact = compose_pose(inverse_pose(target_geometry.root_pose), left_grasp)
     source_dual = frames["dual_grasp"]
     source_dual_body = compose_pose(
@@ -2812,7 +2840,7 @@ def _build_skill(
 
     program = HangMugSkillProgram(left_start, right_start)
     program.semantic_left_grasp(
-        transfer_mug_frame("left_pregrasp", "left"),
+        left_pregrasp,
         left_grasp,
         left_lift,
         approach_steps=100,
@@ -2986,6 +3014,11 @@ def main() -> None:
     if not 0 <= args.handover_contact_acquire_steps <= 60:
         raise ValueError("--handover-contact-acquire-steps must be in [0, 60]")
     _bounded_handover_offset(args.handover_target_offset_m)
+    _left_grasp_with_approach_depth(
+        np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        np.asarray([0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+        args.left_grasp_approach_depth_m,
+    )
     _handover_target_with_local_pitch(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
         args.handover_target_local_pitch_rad,
@@ -4105,6 +4138,9 @@ def main() -> None:
         result["protocol"]["parameters"][
             "require_source_dual_body_contact"
         ] = bool(args.require_source_dual_body_contact)
+        result["protocol"]["parameters"]["left_grasp_approach_depth_m"] = float(
+            args.left_grasp_approach_depth_m
+        )
         result["protocol"]["parameters"]["branch_roll_offset_rad"] = float(
             args.branch_roll_offset_rad
         )

@@ -57,6 +57,7 @@ from run_hangmug_skill_program import (
     _quality_wave_contact_views,
     _pick_boundary_receipt,
     _independent_terminal_hang_receipt,
+    _left_grasp_with_approach_depth,
     _require_proven_control_defaults,
     _require_canonical_left_fixed_joint_assist,
     _right_carrier_contact_receipt,
@@ -76,6 +77,16 @@ from run_hangmug_skill_program import (
     _update_authored_assist_releases,
     _validate_datagen_grasp_assists,
 )
+
+
+def test_left_grasp_approach_depth_continues_object_centric_approach():
+    pregrasp = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    grasp = np.asarray([0.03, 0.04, 0.0, 1.0, 0.0, 0.0, 0.0])
+    adjusted = _left_grasp_with_approach_depth(pregrasp, grasp, 0.005)
+    np.testing.assert_allclose(adjusted[:3], [0.033, 0.044, 0.0])
+    np.testing.assert_allclose(adjusted[3:], grasp[3:])
+    with pytest.raises(ValueError, match="approach depth"):
+        _left_grasp_with_approach_depth(pregrasp, grasp, 0.016)
 
 
 def _return_clearance_row(environment_force, mug_force, prior_rows):
