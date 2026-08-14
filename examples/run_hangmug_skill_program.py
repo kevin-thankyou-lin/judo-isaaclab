@@ -324,6 +324,14 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--post-release-clearance-hold",
+        action="store_true",
+        help=(
+            "Hold the fully open release pose during the bounded clearance "
+            "window before beginning the rest return."
+        ),
+    )
+    parser.add_argument(
         "--post-release-return-to-rest-steps",
         type=int,
         default=0,
@@ -2187,6 +2195,8 @@ def _direct_pose_interpolation_receipt(
     boundaries: dict[str, dict[str, int | None]],
     previous: str,
     segment: str,
+    *,
+    allow_stationary: bool = False,
 ) -> dict[str, object]:
     """Measure whether one named pose segment is one Cartesian interpolation."""
     previous_end = boundaries[previous]["last_row"]
@@ -2214,6 +2224,16 @@ def _direct_pose_interpolation_receipt(
     direction = points[-1] - start
     squared = float(direction @ direction)
     if squared <= 0.0:
+        maximum_residual = float(np.linalg.norm(points - start, axis=1).max(initial=0.0))
+        if allow_stationary and maximum_residual <= 1.0e-9:
+            return {
+                "rows": int(len(points)),
+                "maximum_line_residual_m": maximum_residual,
+                "fractions_monotone": True,
+                "endpoint_fraction": 0.0,
+                "stationary": True,
+                "passed": True,
+            }
         return {
             "rows": int(len(points)),
             "maximum_line_residual_m": float("inf"),
@@ -2295,7 +2315,11 @@ def _direct_phase_contract_receipt(
     clearance_interpolation = None
     if "post_release_clearance" in trajectory.waypoint_steps:
         clearance_interpolation = _direct_pose_interpolation_receipt(
-            trajectory, boundaries, "right_release", "post_release_clearance"
+            trajectory,
+            boundaries,
+            "right_release",
+            "post_release_clearance",
+            allow_stationary=True,
         )
         return_interpolation = _direct_pose_interpolation_receipt(
             trajectory, boundaries, "post_release_clearance", "post_release_return"
@@ -3074,7 +3098,9 @@ def _build_skill(
             args.post_release_clearance_local_x_m
         )
         right_clearance = right_approach
-        if clearance_local_x:
+        if args.post_release_clearance_hold:
+            right_clearance = right_insert
+        elif clearance_local_x:
             right_clearance = _handover_target_with_local_straddle(
                 right_insert, clearance_local_x
             )
@@ -3276,6 +3302,10 @@ def main() -> None:
         raise ValueError(
             "post-release local X clearance requires clearance steps"
         )
+    if args.post_release_clearance_hold and not args.post_release_clearance_steps:
+        raise ValueError("post-release clearance hold requires clearance steps")
+    if args.post_release_clearance_hold and args.post_release_clearance_local_x_m:
+        raise ValueError("post-release clearance hold and local X shift are exclusive")
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(
         np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
@@ -4363,6 +4393,9 @@ def main() -> None:
         result["protocol"]["parameters"][
             "post_release_clearance_local_x_m"
         ] = float(args.post_release_clearance_local_x_m)
+        result["protocol"]["parameters"]["post_release_clearance_hold"] = bool(
+            args.post_release_clearance_hold
+        )
         result["protocol"]["parameters"][
             "handover_target_camera_clockwise_roll_rad"
         ] = float(args.handover_target_camera_clockwise_roll_rad)

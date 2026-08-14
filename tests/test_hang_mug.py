@@ -44,6 +44,7 @@ from run_hangmug_skill_program import (
     _contact_force_by_body_receipt,
     _direct_actions_exact,
     _direct_phase_contract_receipt,
+    _direct_pose_interpolation_receipt,
     _direct_segment_live_row,
     _return_contact_clearance_receipt,
     _install_grasp_assist_config,
@@ -1673,6 +1674,50 @@ def test_direct_quality_contract_can_reverse_insert_before_full_rest_return():
         "post_release_return",
         "stable_support",
     ]
+
+
+def test_direct_quality_contract_allows_bounded_stationary_release_hold():
+    right_start = _pose(0.2, -0.7, 0.9)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.release_and_return_to_rest(
+        insert,
+        right_start,
+        right_clearance=insert,
+        clearance_steps=4,
+        support_steps=2,
+        release_steps=3,
+        return_steps=5,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+    boundaries = {
+        name: {
+            "first_row": previous,
+            "last_row": endpoint,
+            "rows": endpoint - previous + 1,
+        }
+        for (name, endpoint), previous in zip(
+            trajectory.waypoint_steps.items(),
+            [
+                0,
+                *[
+                    value + 1
+                    for value in list(trajectory.waypoint_steps.values())[:-1]
+                ],
+            ],
+            strict=True,
+        )
+    }
+    receipt = _direct_pose_interpolation_receipt(
+        trajectory,
+        boundaries,
+        "right_release",
+        "post_release_clearance",
+        allow_stationary=True,
+    )
+    assert receipt["passed"] is True
+    assert receipt["stationary"] is True
 
 
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
