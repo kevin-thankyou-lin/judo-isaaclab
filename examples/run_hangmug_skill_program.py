@@ -18,6 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "examples"))
 
+from judo_isaaclab.hang_mug import unassisted_bilateral_pad_contact
+
 PROVEN_CONTROL_DEFAULTS = {
     "damping": 0.045,
     "max_joint_delta": 0.16,
@@ -1563,14 +1565,16 @@ def _sample_has_broad_contact(sample: dict[str, object], side: str) -> bool:
     fractions = np.asarray(sample[f"{side}_pad_fractions"], dtype=np.float64)
     forces = np.asarray(sample[f"{side}_finger_forces_n"], dtype=np.float64)
     assists = sample["grasp_assist_engaged"]
-    assist_contract = (
-        bool(assists.get("left", False))
-        if side == "left"
-        else "right" not in assists
-    )
+    if side == "right":
+        return unassisted_bilateral_pad_contact(
+            sample["right_grasp"],
+            bool(assists.get("right", False)),
+            forces,
+            fractions,
+        )
     return bool(
-        sample[f"{side}_grasp"]
-        and assist_contract
+        sample["left_grasp"]
+        and bool(assists.get("left", False))
         and fractions.shape == (2,)
         and forces.shape == (2,)
         and np.isfinite(fractions).all()
@@ -1870,15 +1874,11 @@ def _direct_segment_live_row(
     returning = waypoint == "post_release_return"
     fractions = np.asarray(sample["right_pad_fractions"], dtype=float)
     forces = np.asarray(sample["right_finger_forces_n"], dtype=float)
-    grasp_secure = bool(
-        sample["right_grasp"]
-        and sample["grasp_assist_engaged"].get("right", False)
-        and fractions.shape == (2,)
-        and forces.shape == (2,)
-        and np.isfinite(fractions).all()
-        and (fractions >= 0.15).all()
-        and (fractions <= 0.85).all()
-        and (forces > 0.0).all()
+    grasp_secure = unassisted_bilateral_pad_contact(
+        sample["right_grasp"],
+        bool(sample["grasp_assist_engaged"].get("right", False)),
+        forces,
+        fractions,
     )
     return_clearance = (
         _return_contact_clearance_receipt(

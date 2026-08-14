@@ -24,6 +24,7 @@ from run_hangmug_skill_program import (  # noqa: E402
 )
 from run_putmarker_skill_program import _probe  # noqa: E402
 from run_three_task_asset_campaign import validate_demo  # noqa: E402
+from judo_isaaclab.hang_mug import unassisted_bilateral_pad_contact  # noqa: E402
 
 SOURCE = Path("/home/linke/datasets/gear-dc-study/task2/teleop/mug_teacup_000000.hdf5")
 SOURCE_SHA256 = "dbb2882af9d99f9042043f1e4a74944fc9907f057a30e885fcf68d02d31bcae5"
@@ -943,13 +944,12 @@ def _handover_wave_audit(result: dict, trace) -> dict:
     forces = np.asarray(trace["right_finger_forces_n"], dtype=np.float64)
     fractions = np.asarray(trace["right_pad_fractions"], dtype=np.float64)
     secure = (
-        np.asarray(trace["right_grasp"], dtype=bool)
-        & np.asarray(trace["right_assist_engaged"], dtype=bool)
-        & np.isfinite(forces).all(axis=1)
-        & np.isfinite(fractions).all(axis=1)
-        & (forces > 0.0).all(axis=1)
-        & (fractions >= 0.15).all(axis=1)
-        & (fractions <= 0.85).all(axis=1)
+        unassisted_bilateral_pad_contact(
+            trace["right_grasp"],
+            trace["right_assist_engaged"],
+            forces,
+            fractions,
+        )
         & (names == "right_grasp")
     )
     secure_rows = np.flatnonzero(secure)

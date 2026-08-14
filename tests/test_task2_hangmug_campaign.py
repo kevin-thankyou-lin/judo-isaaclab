@@ -15,6 +15,56 @@ def _digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _physical_handover_audit_fixture():
+    names = np.asarray(
+        ["handover_pregrasp", "right_grasp_settle", "right_grasp", "right_grasp"]
+    )
+    actions = np.zeros((len(names), 14), dtype=np.float64)
+    actions[:, 13] = [-0.0475, -0.0475, -0.02, 0.0]
+    trace = {
+        "semantic_waypoints": names,
+        "actions": actions,
+        "left_grasp": np.ones(len(names), dtype=bool),
+        "left_assist_engaged": np.ones(len(names), dtype=bool),
+        "right_grasp": np.asarray([False, False, True, True]),
+        "right_assist_engaged": np.zeros(len(names), dtype=bool),
+        "right_finger_forces_n": np.asarray(
+            [[0.0, 0.0], [0.0, 0.0], [4.0, 5.0], [4.0, 5.0]]
+        ),
+        "right_pad_fractions": np.asarray(
+            [[np.nan, np.nan], [np.nan, np.nan], [0.4, 0.6], [0.4, 0.6]]
+        ),
+    }
+    result = {
+        "handover_wave_contract": {
+            "passed": True,
+            "plan_screens": {
+                "clear_pregrasp": {"passed": True},
+                "open_approach": {"passed": True},
+            },
+            "live_physx_contact_guard": {
+                "passed": True,
+                "expected_rows": len(names),
+                "observed_rows": len(names),
+                "first_right_mug_contact": {"waypoint": "right_grasp_settle"},
+            },
+        }
+    }
+    return result, trace
+
+
+def test_handover_audit_accepts_unassisted_physical_receiver_contact():
+    result, trace = _physical_handover_audit_fixture()
+    assert campaign._handover_wave_audit(result, trace)["passed"]
+
+
+def test_handover_audit_rejects_right_assist_even_with_bilateral_contact():
+    result, trace = _physical_handover_audit_fixture()
+    trace["right_assist_engaged"][:] = True
+    with pytest.raises(RuntimeError, match="handover wave audit failed"):
+        campaign._handover_wave_audit(result, trace)
+
+
 def test_same_index_assets_and_proven_command_are_pinned(tmp_path, monkeypatch):
     objects = tmp_path / "objects"
     for kind, name in (

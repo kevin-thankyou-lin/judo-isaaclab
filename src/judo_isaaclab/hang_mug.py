@@ -20,6 +20,46 @@ from .put_marker import (
 )
 
 
+def unassisted_bilateral_pad_contact(
+    grasping: Any,
+    assist_engaged: Any,
+    finger_forces_n: Any,
+    pad_fractions: Any,
+    *,
+    interior_low: float = 0.15,
+    interior_high: float = 0.85,
+) -> bool | np.ndarray:
+    """Return physical two-pad contact while receiver assist is absent.
+
+    Scalar inputs produce a bool; batched inputs produce one bool per leading
+    row.  This is the shared runtime and independent-audit definition for the
+    right receiver grasp.
+    """
+
+    forces = np.asarray(finger_forces_n, dtype=np.float64)
+    fractions = np.asarray(pad_fractions, dtype=np.float64)
+    if (
+        forces.shape != fractions.shape
+        or forces.ndim < 1
+        or forces.shape[-1] != 2
+    ):
+        raise ValueError(
+            "finger forces and pad fractions must have matching (..., 2) shapes"
+        )
+    if not 0.0 <= interior_low < interior_high <= 1.0:
+        raise ValueError("pad interior bounds must satisfy 0 <= low < high <= 1")
+    result = (
+        np.asarray(grasping, dtype=bool)
+        & ~np.asarray(assist_engaged, dtype=bool)
+        & np.isfinite(forces).all(axis=-1)
+        & np.isfinite(fractions).all(axis=-1)
+        & (forces > 0.0).all(axis=-1)
+        & (fractions >= interior_low).all(axis=-1)
+        & (fractions <= interior_high).all(axis=-1)
+    )
+    return bool(result) if np.ndim(result) == 0 else result
+
+
 @dataclass(frozen=True)
 class RigidAssetGeometry:
     """Root pose and local axis-aligned size for a rigid task asset."""

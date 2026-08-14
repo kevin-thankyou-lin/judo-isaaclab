@@ -18,6 +18,7 @@ from judo_isaaclab.hang_mug import (
     reanchor_physical_handover,
     reanchor_right_grasp_from_observed_mug,
     transfer_handover_contact_by_handle_frame,
+    unassisted_bilateral_pad_contact,
 )
 from judo_isaaclab.semantic_parts import BranchPart, MugParts
 from judo_isaaclab.put_marker import (
@@ -253,6 +254,40 @@ def test_direct_segment_live_row_attributes_environment_and_mug_by_body():
     assert row["maximum_environment_contact_force_n"] == 7.0
     assert row["maximum_mug_contact_force_n"] == 2.0
     assert row["passed"] is False
+
+
+def test_unassisted_bilateral_pad_contact_rejects_right_assist():
+    assert unassisted_bilateral_pad_contact(
+        True, False, [4.0, 5.0], [0.4, 0.6]
+    )
+    assert not unassisted_bilateral_pad_contact(
+        True, True, [4.0, 5.0], [0.4, 0.6]
+    )
+
+
+def test_direct_outbound_accepts_only_unassisted_physical_grasp():
+    class ZeroView:
+        data = SimpleNamespace(force_matrix_w=np.zeros((1, 1, 1, 3)))
+
+    views = {
+        "environment": (ZeroView(),),
+        "mug": (ZeroView(),),
+        "right_body_paths": ("right_finger",),
+    }
+    sample = {
+        "step": 12,
+        "right_pad_fractions": [0.4, 0.6],
+        "right_finger_forces_n": [4.0, 5.0],
+        "right_grasp": True,
+        "grasp_assist_engaged": {},
+    }
+    assert _direct_segment_live_row(
+        views, sample, "direct_preinsert", 1.0 / 120.0
+    )["passed"]
+    sample["grasp_assist_engaged"] = {"right": True}
+    assert not _direct_segment_live_row(
+        views, sample, "direct_preinsert", 1.0 / 120.0
+    )["passed"]
 
 
 def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
