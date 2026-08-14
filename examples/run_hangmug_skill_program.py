@@ -300,6 +300,15 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--post-release-clearance-steps",
+        type=int,
+        default=0,
+        help=(
+            "Rows to reverse the final insertion back to the screened pre-insert "
+            "pose before the full open-arm rest return."
+        ),
+    )
+    parser.add_argument(
         "--post-release-return-to-rest-steps",
         type=int,
         default=0,
@@ -1903,7 +1912,10 @@ def _return_contact_clearance_receipt(
 
     required_steps = _bounded_return_contact_clearance_steps(required_steps)
     return_rows = [
-        row for row in prior_rows if row.get("waypoint") == "post_release_return"
+        row
+        for row in prior_rows
+        if row.get("waypoint")
+        in {"post_release_clearance", "post_release_return"}
     ]
     row_index = len(return_rows)
     previous_environment = (
@@ -1987,7 +1999,7 @@ def _direct_segment_live_row(
     environment_force = _contact_view_max_force(views["environment"], physics_dt)
     mug_force = _contact_view_max_force(views["mug"], physics_dt)
     outbound = waypoint == "direct_preinsert"
-    returning = waypoint == "post_release_return"
+    returning = waypoint in {"post_release_clearance", "post_release_return"}
     fractions = np.asarray(sample["right_pad_fractions"], dtype=float)
     forces = np.asarray(sample["right_finger_forces_n"], dtype=float)
     grasp_secure = unassisted_bilateral_pad_contact(
@@ -2132,7 +2144,9 @@ def _direct_segment_plan_screen(
     return {
         "phase": phase,
         "motion_waypoint": endpoint,
-        "motion_subphases_added": False,
+        "motion_subphases_added": (
+            "post_release_clearance" in trajectory.waypoint_steps
+        ),
         "planned_rows": int(len(eef_path) - 1),
         "checks": checks,
         "reports": reports,
@@ -2207,12 +2221,18 @@ def _direct_phase_contract_receipt(
 ) -> dict[str, object] | None:
     if trajectory is None or "direct_preinsert" not in trajectory.waypoint_steps:
         return None
+    optional_clearance = (
+        ("post_release_clearance",)
+        if "post_release_clearance" in trajectory.waypoint_steps
+        else ()
+    )
     required = (
         "carrying_rest_observer",
         "direct_preinsert",
         "branch_insert",
         "supported_release_hold",
         "right_release",
+        *optional_clearance,
         "post_release_return",
         "stable_support",
     )
@@ -2244,9 +2264,18 @@ def _direct_phase_contract_receipt(
     outbound_interpolation = _direct_pose_interpolation_receipt(
         trajectory, boundaries, "carrying_rest_observer", "direct_preinsert"
     )
-    return_interpolation = _direct_pose_interpolation_receipt(
-        trajectory, boundaries, "right_release", "post_release_return"
-    )
+    clearance_interpolation = None
+    if "post_release_clearance" in trajectory.waypoint_steps:
+        clearance_interpolation = _direct_pose_interpolation_receipt(
+            trajectory, boundaries, "right_release", "post_release_clearance"
+        )
+        return_interpolation = _direct_pose_interpolation_receipt(
+            trajectory, boundaries, "post_release_clearance", "post_release_return"
+        )
+    else:
+        return_interpolation = _direct_pose_interpolation_receipt(
+            trajectory, boundaries, "right_release", "post_release_return"
+        )
     action_array = np.asarray(actions, dtype=np.float64)
     right_gripper = (
         action_array[:, 13]
@@ -2258,7 +2287,11 @@ def _direct_phase_contract_receipt(
         hold_end = boundaries["supported_release_hold"]["last_row"]
         release_start = boundaries["right_release"]["first_row"]
         release_end = boundaries["right_release"]["last_row"]
-        return_start = boundaries["post_release_return"]["first_row"]
+        return_start = boundaries[
+            "post_release_clearance"
+            if "post_release_clearance" in boundaries
+            else "post_release_return"
+        ]["first_row"]
         carrier_closed = bool(
             np.all(np.abs(right_gripper[carrier_start : hold_end + 1]) <= 1.0e-6)
         )
@@ -2296,7 +2329,11 @@ def _direct_phase_contract_receipt(
             for row in range(observer_start, observer_end + 1)
         )
         return_rows = range(
-            boundaries["post_release_return"]["first_row"],
+            boundaries[
+                "post_release_clearance"
+                if "post_release_clearance" in boundaries
+                else "post_release_return"
+            ]["first_row"],
             boundaries["post_release_return"]["last_row"] + 1,
         )
         return_released = all(
@@ -2321,7 +2358,13 @@ def _direct_phase_contract_receipt(
         "outbound_one_direct_interpolation": bool(
             outbound_interpolation["passed"]
         ),
-        "return_one_direct_interpolation": bool(return_interpolation["passed"]),
+        "return_each_authored_leg_is_direct": bool(
+            return_interpolation["passed"]
+            and (
+                clearance_interpolation is None
+                or clearance_interpolation["passed"]
+            )
+        ),
         "carrier_command_closed_through_supported_hold": carrier_closed,
         "one_monotone_final_opening": release_monotone and opening_runs == 1,
         "right_gripper_never_reclosed": never_reclosed,
@@ -2338,6 +2381,7 @@ def _direct_phase_contract_receipt(
         "forbidden_waypoints": list(forbidden),
         "phase_boundaries": boundaries,
         "outbound_interpolation": outbound_interpolation,
+        "post_release_clearance_interpolation": clearance_interpolation,
         "post_release_return_interpolation": return_interpolation,
         "right_opening_transition_runs": opening_runs,
         "maximum_left_observer_position_error_m": float(observer_error),
@@ -3001,6 +3045,10 @@ def _build_skill(
         program.release_and_return_to_rest(
             right_insert,
             right_start,
+            right_clearance=(
+                right_approach if args.post_release_clearance_steps else None
+            ),
+            clearance_steps=args.post_release_clearance_steps,
             support_steps=40,
             release_steps=40,
             return_steps=args.post_release_return_to_rest_steps,
@@ -3064,6 +3112,7 @@ def _sparse_joint_nominal(
         "supported_release_hold": indices["inserted_held"],
         "branch_unload": indices["inserted_held"],
         "right_release": indices["release"],
+        "post_release_clearance": indices["tree_approach"],
         "post_release_return": 0,
         "stable_support": indices["stable_settle"],
     }
@@ -3656,7 +3705,11 @@ def main() -> None:
                 )
                 handover_wave_live_rows.append(wave_row)
                 stop_after_row = stop_after_row or not wave_row["passed"]
-            if waypoint in {"direct_preinsert", "post_release_return"}:
+            if waypoint in {
+                "direct_preinsert",
+                "post_release_clearance",
+                "post_release_return",
+            }:
                 live_row = _direct_segment_live_row(
                     direct_contact_views,
                     sample,
@@ -3903,6 +3956,7 @@ def main() -> None:
         if direct_phase_contract is not None:
             expected_live_rows = (
                 args.direct_rest_to_preinsert_steps
+                + args.post_release_clearance_steps
                 + args.post_release_return_to_rest_steps
             )
             direct_collision_screening = {
@@ -4252,6 +4306,9 @@ def main() -> None:
         }
         result["protocol"]["parameters"]["branch_orient_steps"] = int(
             args.branch_orient_steps
+        )
+        result["protocol"]["parameters"]["post_release_clearance_steps"] = int(
+            args.post_release_clearance_steps
         )
         result["protocol"]["parameters"][
             "handover_target_camera_clockwise_roll_rad"

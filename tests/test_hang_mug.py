@@ -1584,6 +1584,80 @@ def test_direct_quality_contract_has_no_intermediate_transport_and_returns_open_
     json.dumps(curved_receipt)
 
 
+def test_direct_quality_contract_can_reverse_insert_before_full_rest_return():
+    right_start = _pose(0.2, -0.7, 0.9)
+    left_observer = _pose(0.6, 0.1, 1.0)
+    preinsert = _pose(0.7, -0.2, 0.95)
+    insert = _pose(0.75, -0.15, 0.85)
+    program = HangMugSkillProgram(_pose(), right_start)
+    program.physical_handover(
+        _pose(), _pose(), _pose(0.4, -0.3, 0.9), _pose(),
+        approach_steps=1, close_steps=1, release_steps=1, confirm_steps=1,
+    )
+    program.post_handover_rest_and_observe(
+        right_start, left_observer, steps=4
+    )
+    program.direct_rest_to_branch_insert(
+        preinsert, insert, direct_steps=5, insert_steps=2,
+        left_observer=left_observer,
+    )
+    program.release_and_return_to_rest(
+        insert,
+        right_start,
+        right_clearance=preinsert,
+        clearance_steps=4,
+        support_steps=2,
+        release_steps=3,
+        return_steps=5,
+        settle_steps=2,
+    )
+    trajectory = program.build()
+
+    clearance_end = trajectory.waypoint_steps["post_release_clearance"]
+    return_end = trajectory.waypoint_steps["post_release_return"]
+    np.testing.assert_allclose(trajectory.right_poses[clearance_end], preinsert)
+    np.testing.assert_allclose(trajectory.right_poses[return_end], right_start)
+    assert clearance_end - trajectory.waypoint_steps["right_release"] == 4
+    assert return_end - clearance_end == 5
+    np.testing.assert_allclose(
+        trajectory.grippers[
+            trajectory.waypoint_steps["right_release"] + 1 :, 1
+        ],
+        -0.0475,
+    )
+    names = []
+    previous = 0
+    for name, endpoint in trajectory.waypoint_steps.items():
+        names.extend([name] * (endpoint + 1 - previous))
+        previous = endpoint + 1
+    actions = np.zeros((trajectory.steps, 14), dtype=np.float64)
+    actions[:, 13] = trajectory.grippers[:, 1]
+    sample_rows = [
+        {
+            "left_eef_pose": trajectory.left_poses[row].tolist(),
+            "right_grasp": name
+            not in {
+                "post_release_clearance",
+                "post_release_return",
+                "stable_support",
+            },
+        }
+        for row, name in enumerate(names)
+    ]
+    receipt = _direct_phase_contract_receipt(
+        trajectory,
+        names,
+        actions,
+        [{"left_eef_pose": _pose().tolist(), "right_grasp": False}, *sample_rows],
+    )
+    assert receipt["passed"] is True
+    assert receipt["required_suffix"][-3:] == [
+        "post_release_clearance",
+        "post_release_return",
+        "stable_support",
+    ]
+
+
 def test_contact_reanchor_regenerates_one_direct_preinsert_pose_interpolation():
     right_start = _pose(0.2, -0.7, 0.9)
     left_observer = _pose(0.6, 0.1, 1.0)

@@ -618,12 +618,24 @@ def reanchor_branch_transport_contact(
         )
     if direct_return is not None:
         release_end = trajectory.waypoint_steps["right_release"]
-        return_start = release_end + 1
-        right[return_start : direct_return + 1] = interpolate_poses(
-            right[release_end],
-            trajectory.right_poses[direct_return],
-            direct_return - release_end,
-        )
+        clearance_end = trajectory.waypoint_steps.get("post_release_clearance")
+        if clearance_end is not None:
+            right[release_end + 1 : clearance_end + 1] = interpolate_poses(
+                right[release_end],
+                trajectory.right_poses[clearance_end],
+                clearance_end - release_end,
+            )
+            right[clearance_end + 1 : direct_return + 1] = interpolate_poses(
+                right[clearance_end],
+                trajectory.right_poses[direct_return],
+                direct_return - clearance_end,
+            )
+        else:
+            right[release_end + 1 : direct_return + 1] = interpolate_poses(
+                right[release_end],
+                trajectory.right_poses[direct_return],
+                direct_return - release_end,
+            )
     return SkillTrajectory(
         left_poses=trajectory.left_poses.copy(),
         right_poses=right,
@@ -968,15 +980,21 @@ class HangMugSkillProgram:
         right_insert: Any,
         right_rest: Any,
         *,
+        right_clearance: Any | None = None,
+        clearance_steps: int = 0,
         support_steps: int,
         release_steps: int,
         return_steps: int,
         settle_steps: int,
         opened: float = -0.0475,
     ) -> None:
-        """Release once on support, then retreat open directly to rest."""
+        """Release once, optionally reverse insertion, then return open to rest."""
         if min(support_steps, release_steps, return_steps, settle_steps) <= 0:
             raise ValueError("release/return phase steps must be positive")
+        if (right_clearance is None) != (clearance_steps == 0):
+            raise ValueError(
+                "right_clearance and positive clearance_steps must be supplied together"
+            )
         self._append(
             "supported_release_hold",
             "release_support",
@@ -989,6 +1007,13 @@ class HangMugSkillProgram:
             release_steps,
             right_gripper=opened,
         )
+        if right_clearance is not None:
+            self._append(
+                "post_release_clearance",
+                "post_release_return",
+                clearance_steps,
+                right_pose=right_clearance,
+            )
         self._append(
             "post_release_return",
             "post_release_return",
