@@ -16,6 +16,7 @@ from run_putpot_skill_program import (
     _measured_loaded_pad_interior_preseat,
     _measured_right_dual_contact_pad_balance,
     _offset_object_contact_frame,
+    _propagate_right_corrected_jaw_center_contact_frame,
     _pivot_source_corridor_from_measured_contacts,
     _pivot_source_corridor_grasp_endpoint,
     _pad_balance_mpc_reference_active,
@@ -394,6 +395,36 @@ def test_measured_right_pad_balance_is_interior_and_bounded(tmp_path):
             minimum_pad_fraction_margin=0.15,
             target_weak_pad_fraction=0.20,
             maximum_translation_m=0.01,
+        )
+
+
+def test_right_corrected_jaw_center_updates_only_contact_frame_position():
+    root = np.asarray([0.71, 0.09, 0.81, 1.0, 0.0, 0.0, 0.0])
+    contact = np.asarray(
+        [0.048, -0.155, 0.064, 0.49, 0.61, 0.39, 0.49], dtype=np.float64
+    )
+    centers = np.asarray(
+        [[0.766, -0.030, 0.906], [0.782, -0.102, 0.841]],
+        dtype=np.float64,
+    )
+    corrected, receipt = _propagate_right_corrected_jaw_center_contact_frame(
+        root,
+        contact,
+        centers,
+        maximum_translation_m=0.025,
+    )
+    expected_local = np.mean(centers, axis=0) - root[:3]
+    np.testing.assert_allclose(corrected[:3], expected_local)
+    np.testing.assert_array_equal(corrected[3:], contact[3:])
+    assert receipt["orientation_unchanged"]
+    assert receipt["additional_wrist_translation_m"] == 0.0
+    assert receipt["translation_norm_m"] <= receipt["maximum_translation_m"]
+    with pytest.raises(ValueError, match="collision-clearance bound"):
+        _propagate_right_corrected_jaw_center_contact_frame(
+            root,
+            contact,
+            centers,
+            maximum_translation_m=0.001,
         )
 
 

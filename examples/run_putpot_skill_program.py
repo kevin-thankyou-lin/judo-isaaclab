@@ -1104,6 +1104,61 @@ def _measured_right_dual_contact_pad_balance(
     }
 
 
+def _propagate_right_corrected_jaw_center_contact_frame(
+    target_root_pose,
+    target_contact_frame_local,
+    corrected_pad_centers_world,
+    *,
+    maximum_translation_m: float,
+):
+    """Align the pair-gated closure frame with its corrected pad prediction."""
+
+    from judo_isaaclab.put_marker import inverse_pose, quaternion_rotate
+
+    root = np.asarray(target_root_pose, dtype=np.float64)
+    contact = np.asarray(target_contact_frame_local, dtype=np.float64).copy()
+    centers = np.asarray(corrected_pad_centers_world, dtype=np.float64)
+    if (
+        root.shape != (7,)
+        or contact.shape != (7,)
+        or centers.shape != (2, 3)
+        or not np.all(np.isfinite(np.concatenate((root, contact, centers.ravel()))))
+        or not np.isfinite(maximum_translation_m)
+        or maximum_translation_m <= 0.0
+    ):
+        raise ValueError("corrected right contact-frame geometry is invalid")
+    original_orientation = contact[3:].copy()
+    corrected_jaw_center_world = np.mean(centers, axis=0)
+    root_inverse = inverse_pose(root)
+    corrected_jaw_center_local = quaternion_rotate(
+        root_inverse[3:], corrected_jaw_center_world - root[:3]
+    )
+    translation_local = corrected_jaw_center_local - contact[:3]
+    translation_norm = float(np.linalg.norm(translation_local))
+    if translation_norm > maximum_translation_m + 1.0e-12:
+        raise ValueError(
+            "corrected right contact-frame position exceeds the existing "
+            "collision-clearance bound"
+        )
+    contact[:3] = corrected_jaw_center_local
+    if not np.array_equal(contact[3:], original_orientation):
+        raise AssertionError("corrected right contact-frame orientation changed")
+    return contact, {
+        "mechanism": "corrected_predicted_jaw_center_closure_frame",
+        "original_contact_frame_local": np.asarray(
+            target_contact_frame_local, dtype=np.float64
+        ).tolist(),
+        "corrected_contact_frame_local": contact.tolist(),
+        "corrected_jaw_center_world_m": corrected_jaw_center_world.tolist(),
+        "translation_local_m": translation_local.tolist(),
+        "translation_norm_m": translation_norm,
+        "maximum_translation_m": float(maximum_translation_m),
+        "bound_margin_m": float(maximum_translation_m - translation_norm),
+        "orientation_unchanged": True,
+        "additional_wrist_translation_m": 0.0,
+    }
+
+
 def _offset_object_contact_frame(
     observed_object_pose, observed_contact_frame, object_local_translation
 ):
@@ -5016,6 +5071,32 @@ def main(argv: list[str] | None = None) -> None:
                         "predicted_contact_pad_fractions"
                     ] = right_precontact_pad_balance[
                         "predicted_pad_fractions"
+                    ]
+                    (
+                        diagnostic_target_contact_frames_local["right"],
+                        corrected_contact_frame_receipt,
+                    ) = _propagate_right_corrected_jaw_center_contact_frame(
+                        calibration_pot_pose,
+                        diagnostic_target_contact_frames_local["right"],
+                        right_precontact_pad_balance[
+                            "corrected_pad_centers_world"
+                        ],
+                        maximum_translation_m=float(
+                            args.collision_clearance_m
+                        ),
+                    )
+                    right_precontact_pad_balance[
+                        "corrected_contact_frame"
+                    ] = corrected_contact_frame_receipt
+                    local_mpc_right_frame_receipt[
+                        "target_contact_frame_local_before_measured_correction"
+                    ] = corrected_contact_frame_receipt[
+                        "original_contact_frame_local"
+                    ]
+                    local_mpc_right_frame_receipt[
+                        "target_contact_frame_local"
+                    ] = corrected_contact_frame_receipt[
+                        "corrected_contact_frame_local"
                     ]
                     local_mpc_right_frame_receipt[
                         "measured_precontact_pad_balance"
