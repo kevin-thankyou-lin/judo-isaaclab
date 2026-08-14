@@ -1513,6 +1513,73 @@ def test_pair_15_committed_right_edge_recenters_on_handle_tangent_before_closure
     assert handle_local_mpc_frame_receipt_complete(interior.frame_receipt)
 
 
+def test_pair_15_committed_force_free_edge_uses_raw_pad_prestage():
+    command = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=30,
+            observed_handle_contact_frame=_pose(),
+            object_relative_wrist_prior=_pose(),
+            source_warm_start_wrist_pose=_pose(),
+            active_pad_axes_world=[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            active_pad_fractions=[-0.04239668324589729, np.nan],
+            active_finger_forces_n=[0.0, 0.0],
+            current_jaw_command=-0.0355,
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_committed_force_free_raw_pad_prestage=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.2, 0.2],
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+
+    recenter = command.frame_receipt["contact_fraction_recenter"]
+    control = command.frame_receipt["executed_control"]
+    assert not command.fail_closed
+    assert command.closure_committed
+    assert recenter["committed_force_free_raw_pad_prestage_enabled"]
+    assert recenter["committed_force_free_raw_pad_prestage_eligible"]
+    assert recenter["preclosure_geometric_prestage_active"]
+    assert recenter["preclosure_geometric_uses_raw_pad_axis"]
+    assert not recenter["surface_tangent_enabled"]
+    assert recenter["executed_translation_m"] == pytest.approx(0.001)
+    assert recenter["effective_maximum_total_m"] == pytest.approx(0.014)
+    np.testing.assert_allclose(
+        control["translation_world_m"], [0.0, 0.0, -0.001]
+    )
+    np.testing.assert_allclose(control["rotation_axis_angle_world_rad"], 0.0)
+    assert control["jaw_increment"] == 0.0
+    assert command.jaw_command == pytest.approx(-0.0355)
+    assert handle_local_mpc_frame_receipt_complete(command.frame_receipt)
+
+    loaded_edge = handle_local_mpc_step(
+        **_inputs(
+            contact_window_step=34,
+            observed_handle_contact_frame=_pose(),
+            object_relative_wrist_prior=_pose(),
+            source_warm_start_wrist_pose=_pose(),
+            active_pad_axes_world=[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            active_pad_fractions=[-0.025, np.nan],
+            active_finger_forces_n=[1.0, 0.0],
+            current_jaw_command=-0.0235,
+        ),
+        contact_fraction_recenter=True,
+        contact_recenter_preserve_bounded_closure=True,
+        allow_committed_force_free_raw_pad_prestage=True,
+        allow_bounded_closure_commit=True,
+        closure_committed=True,
+        require_geometric_preseat_for_closure=True,
+        geometric_preseat_predicted_pad_fractions=[0.2, 0.2],
+        active_pad_fraction_axis_extent_m=0.06806614249944687,
+    )
+    assert loaded_edge.fail_closed
+    assert loaded_edge.fail_reason == "active_contact_outside_pad_margin"
+    assert not loaded_edge.frame_receipt["contact_fraction_recenter"]["active"]
+    assert handle_local_mpc_frame_receipt_complete(loaded_edge.frame_receipt)
+
+
 def test_pair_15_right_dual_force_pivot_uses_geometry_feasible_broad_target():
     command = handle_local_mpc_step(
         **_inputs(

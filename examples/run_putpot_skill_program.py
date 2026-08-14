@@ -6412,13 +6412,7 @@ def main(argv: list[str] | None = None) -> None:
                                 contact_fraction_recenter=bool(
                                     (
                                         active_arm == "left"
-                                        or (
-                                            quality_left_first_local_mpc
-                                            and not (
-                                                active_arm == "right"
-                                                and right_precontact_pad_balance_requested
-                                            )
-                                        )
+                                        or quality_left_first_local_mpc
                                     )
                                     and args.target_handle_local_contact_fraction_recenter
                                 ),
@@ -6441,6 +6435,12 @@ def main(argv: list[str] | None = None) -> None:
                                         active_arm == "right"
                                         and args.target_right_quality_geometric_preseat
                                     )
+                                ),
+                                allow_committed_force_free_raw_pad_prestage=bool(
+                                    active_arm == "right"
+                                    and right_precontact_pad_balance_requested
+                                    and args.target_right_quality_geometric_preseat
+                                    and args.target_handle_local_contact_fraction_recenter
                                 ),
                                 allow_committed_handle_tangent_prestage=bool(
                                     False
@@ -8763,13 +8763,7 @@ def main(argv: list[str] | None = None) -> None:
                 },
                 "contact_fraction_recenter": {
                     "enabled_arms": (
-                        ["left"]
-                        if (
-                            quality_left_first_local_mpc
-                            and args.target_handle_local_contact_fraction_recenter
-                            and right_precontact_pad_balance_requested
-                        )
-                        else ["left", "right"]
+                        ["left", "right"]
                         if (
                             quality_left_first_local_mpc
                             and args.target_handle_local_contact_fraction_recenter
@@ -8807,6 +8801,11 @@ def main(argv: list[str] | None = None) -> None:
                     ),
                     "right_uses_handle_tangent_surface_recenter": bool(
                         False
+                    ),
+                    "right_uses_committed_force_free_raw_pad_prestage": bool(
+                        right_precontact_pad_balance_requested
+                        and args.target_right_quality_geometric_preseat
+                        and args.target_handle_local_contact_fraction_recenter
                     ),
                     "right_source_mapped_wrist_prior_unchanged": bool(
                         False

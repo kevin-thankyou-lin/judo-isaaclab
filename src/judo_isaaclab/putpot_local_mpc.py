@@ -367,6 +367,8 @@ def handle_local_mpc_frame_receipt_complete(receipt: dict[str, Any]) -> bool:
             "bounded_closure_priority_active",
             "preclosure_geometric_prestage_enabled",
             "preclosure_geometric_prestage_active",
+            "committed_force_free_raw_pad_prestage_enabled",
+            "committed_force_free_raw_pad_prestage_eligible",
             "committed_handle_tangent_prestage_enabled",
             "committed_handle_tangent_prestage_eligible",
             "committed_handle_tangent_target_margin",
@@ -497,6 +499,7 @@ def handle_local_mpc_step(
     contact_recenter_use_handle_tangent: bool = False,
     contact_recenter_preserve_transverse_centering: bool = False,
     contact_recenter_preserve_bounded_closure: bool = False,
+    allow_committed_force_free_raw_pad_prestage: bool = False,
     allow_committed_handle_tangent_prestage: bool = False,
     committed_handle_tangent_target_margin: float | None = None,
     committed_handle_tangent_maximum_total_m: float | None = None,
@@ -557,6 +560,17 @@ def handle_local_mpc_step(
         raise ValueError(
             "committed handle-tangent prestage requires tangent recentering, "
             "bounded closure commitment, and geometric preseat"
+        )
+    if allow_committed_force_free_raw_pad_prestage and not (
+        contact_fraction_recenter
+        and not contact_recenter_use_handle_tangent
+        and contact_recenter_preserve_bounded_closure
+        and allow_bounded_closure_commit
+        and require_geometric_preseat_for_closure
+    ):
+        raise ValueError(
+            "committed force-free raw-pad prestage requires raw-pad "
+            "recentering, bounded closure commitment, and geometric preseat"
         )
     if allow_committed_handle_tangent_prestage and (
         committed_handle_tangent_target_margin is None
@@ -849,7 +863,13 @@ def handle_local_mpc_step(
     )
     preclosure_geometric_prestage_eligible = bool(
         preclosure_geometric_prestage_enabled
-        and not closure_committed
+        and (
+            not closure_committed
+            or (
+                allow_committed_force_free_raw_pad_prestage
+                and not physical_contact_observed
+            )
+        )
         and np.count_nonzero(finite_pad_intersections) == 1
         and (preclosure_pose_aligned or contact_recenter_total_m > 0.0)
         and pot_motion_ok
@@ -1013,6 +1033,10 @@ def handle_local_mpc_step(
     contact_recenter_active = bool(
         contact_fraction_recenter
         and control_contact_observed
+        and (
+            not allow_committed_force_free_raw_pad_prestage
+            or not physical_contact_observed
+        )
         and (
             not active_margin_ok
             or pre_release_margin_protection_active
@@ -1648,6 +1672,14 @@ def handle_local_mpc_step(
             ),
             "preclosure_geometric_prestage_active": (
                 preclosure_geometric_prestage_active
+            ),
+            "committed_force_free_raw_pad_prestage_enabled": bool(
+                allow_committed_force_free_raw_pad_prestage
+            ),
+            "committed_force_free_raw_pad_prestage_eligible": bool(
+                preclosure_geometric_prestage_eligible
+                and closure_committed
+                and allow_committed_force_free_raw_pad_prestage
             ),
             "committed_handle_tangent_prestage_enabled": bool(
                 allow_committed_handle_tangent_prestage
