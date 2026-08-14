@@ -209,6 +209,14 @@ def _parser() -> argparse.Namespace:
         help="Transfer the demonstrated receiver pose through authored handle-hole frames.",
     )
     parser.add_argument(
+        "--handover-body-wall-transfer",
+        action="store_true",
+        help=(
+            "Transfer the receiver through the target mug BODY frame while "
+            "preserving the source wrist clearance from the grasp-side wall."
+        ),
+    )
+    parser.add_argument(
         "--require-source-dual-body-contact",
         action="store_true",
         help=(
@@ -1008,6 +1016,59 @@ def _source_dual_body_contact_receipt(
         "checks": checks,
         "passed": all(checks.values()),
     }
+
+
+def _body_wall_transferred_contact(
+    source_right_eef,
+    source_body,
+    target_body,
+    source_body_size,
+    target_body_size,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Preserve wrist clearance from the grasp-side mug body wall."""
+
+    from judo_isaaclab.put_marker import compose_pose, inverse_pose
+
+    source_size = np.asarray(source_body_size, dtype=np.float64)
+    target_size = np.asarray(target_body_size, dtype=np.float64)
+    if (
+        source_size.shape != (3,)
+        or target_size.shape != (3,)
+        or np.any(~np.isfinite(source_size))
+        or np.any(~np.isfinite(target_size))
+        or np.any(source_size <= 0.0)
+        or np.any(target_size <= 0.0)
+    ):
+        raise ValueError("mug BODY sizes must contain three positive values")
+    source_local = compose_pose(inverse_pose(source_body), source_right_eef)
+    side = float(np.sign(source_local[0]))
+    if side == 0.0:
+        raise ValueError("source receiver wrist is not on a measurable body-wall side")
+    source_wall = 0.5 * source_size[0]
+    source_wall_clearance = abs(float(source_local[0])) - source_wall
+    if not 0.0 <= source_wall_clearance <= 0.04:
+        raise ValueError("source receiver wrist wall clearance must be in [0, 0.04] m")
+    target_local = source_local.copy()
+    target_local[0] = side * (0.5 * target_size[0] + source_wall_clearance)
+    target_local[1:3] *= target_size[1:3] / source_size[1:3]
+    target_right_eef = compose_pose(target_body, target_local)
+    proportional_local = source_local.copy()
+    proportional_local[:3] *= target_size / source_size
+    receipt = {
+        "method": "source_dual_grasp_target_body_wall_clearance",
+        "source_right_eef_in_mug_body": source_local.tolist(),
+        "target_right_eef_in_mug_body": target_local.tolist(),
+        "source_grasp_side": int(side),
+        "source_body_wall_half_extent_m": source_wall,
+        "target_body_wall_half_extent_m": float(0.5 * target_size[0]),
+        "preserved_outside_wall_clearance_m": source_wall_clearance,
+        "proportional_target_local_position_m": proportional_local[:3].tolist(),
+        "wall_transfer_delta_in_target_body_m": (
+            target_local[:3] - proportional_local[:3]
+        ).tolist(),
+        "passed": True,
+    }
+    return target_right_eef, receipt
 
 
 def _bounded_handover_standoff_local_offset(value) -> np.ndarray:
@@ -2717,6 +2778,8 @@ def _build_skill(
     pick_latch_mug_pose = compose_pose(
         pick_latch_body, inverse_pose(target_parts.body_frame)
     )
+    if args.handover_handle_frame_transfer and args.handover_body_wall_transfer:
+        raise ValueError("handle-frame and body-wall handover transfers are exclusive")
     if args.handover_handle_frame_transfer:
         right_grasp = transfer_handover_contact_by_handle_frame(
             source_dual["mug_pose"],
@@ -2725,6 +2788,18 @@ def _build_skill(
             target_parts.handle_hole_frame,
             source_dual["right_eef_pose"],
         )
+        body_contact_receipt = {
+            "method": "handle_hole_frame_transfer",
+            "passed": True,
+        }
+    elif args.handover_body_wall_transfer:
+        right_grasp, body_contact_receipt = _body_wall_transferred_contact(
+            source_dual["right_eef_pose"],
+            source_dual_body,
+            target_handover_body,
+            source_parts.body_size,
+            target_parts.body_size,
+        )
     else:
         right_grasp = transfer_pose(
             source_dual["right_eef_pose"],
@@ -2732,13 +2807,13 @@ def _build_skill(
             target_handover_body,
             local_position_scale=target_parts.body_size / source_parts.body_size,
         )
-    body_contact_receipt = _source_dual_body_contact_receipt(
-        source_dual["right_eef_pose"],
-        source_dual_body,
-        target_handover_body,
-        right_grasp,
-        target_parts.body_size / source_parts.body_size,
-    )
+        body_contact_receipt = _source_dual_body_contact_receipt(
+            source_dual["right_eef_pose"],
+            source_dual_body,
+            target_handover_body,
+            right_grasp,
+            target_parts.body_size / source_parts.body_size,
+        )
     if args.require_source_dual_body_contact and not body_contact_receipt["passed"]:
         raise RuntimeError(
             "receiver target does not preserve the scaled source dual-grasp BODY contact"
@@ -3054,6 +3129,7 @@ def main() -> None:
     if args.require_source_dual_body_contact:
         forbidden_contact_override = bool(
             args.handover_handle_frame_transfer
+            or args.handover_body_wall_transfer
             or np.linalg.norm(_bounded_handover_offset(args.handover_target_offset_m))
             or args.handover_target_local_pitch_rad
             or args.handover_target_camera_clockwise_roll_rad
@@ -3062,7 +3138,7 @@ def main() -> None:
         if args.mode != "skill" or forbidden_contact_override:
             raise ValueError(
                 "source dual-grasp BODY contact requires skill mode and forbids "
-                "handle-frame, translation, pitch, roll, or straddle contact offsets"
+                "handle-frame, body-wall, translation, pitch, roll, or straddle contact offsets"
             )
     _bounded_branch_support_fraction(args.branch_support_fraction)
     _branch_approach_mug_pose(

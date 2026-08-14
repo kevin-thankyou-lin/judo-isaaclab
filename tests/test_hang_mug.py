@@ -28,6 +28,7 @@ from judo_isaaclab.put_marker import (
     quaternion_rotate,
 )
 from run_hangmug_skill_program import (
+    _body_wall_transferred_contact,
     _broad_pad_contact_receipt,
     _branch_approach_mug_pose,
     _branch_reanchor_waypoints,
@@ -1015,6 +1016,43 @@ def test_source_dual_body_contact_receipt_requires_scaled_demo_relation():
     )
     assert not failed["passed"]
     assert not failed["checks"]["target_position_is_scaled_source_body_contact"]
+
+
+def test_body_wall_transfer_preserves_metric_outside_wall_clearance():
+    source_body = _pose(0.2, 0.1, 0.8)
+    source_local = _pose(-0.046, -0.019, 0.147)
+    source_right = compose_pose(source_body, source_local)
+    target_body = _pose(-0.1, 0.3, 0.9)
+    source_size = np.asarray([0.068, 0.081, 0.115])
+    target_size = np.asarray([0.087, 0.093, 0.079])
+
+    target_right, receipt = _body_wall_transferred_contact(
+        source_right, source_body, target_body, source_size, target_size
+    )
+    target_local = compose_pose(inverse_pose(target_body), target_right)
+    source_clearance = abs(source_local[0]) - 0.5 * source_size[0]
+    target_clearance = abs(target_local[0]) - 0.5 * target_size[0]
+
+    assert receipt["passed"]
+    assert target_clearance == pytest.approx(source_clearance)
+    assert target_local[1:] == pytest.approx(
+        np.concatenate(
+            (source_local[1:3] * target_size[1:3] / source_size[1:3], source_local[3:])
+        )
+    )
+    assert receipt["wall_transfer_delta_in_target_body_m"][0] > 0.0
+
+
+def test_body_wall_transfer_rejects_wrist_inside_body_wall():
+    body = _pose(0.0, 0.0, 0.0)
+    with pytest.raises(ValueError, match="wall clearance"):
+        _body_wall_transferred_contact(
+            _pose(-0.02, 0.0, 0.05),
+            body,
+            body,
+            np.asarray([0.068, 0.081, 0.115]),
+            np.asarray([0.087, 0.093, 0.079]),
+        )
 
 
 def test_right_carrier_contact_receipt_requires_unassisted_bilateral_retention():
