@@ -300,6 +300,12 @@ def _parser() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--right-release-steps",
+        type=int,
+        default=40,
+        help="Bounded rows for the single final right-gripper opening.",
+    )
+    parser.add_argument(
         "--post-release-clearance-steps",
         type=int,
         default=0,
@@ -1134,6 +1140,12 @@ def _bounded_post_release_clearance_local_x(value: float) -> float:
     if not np.isfinite(amount) or abs(amount) > 0.02:
         raise ValueError("post-release local X clearance must be within 2 cm")
     return amount
+
+
+def _bounded_right_release_steps(value: int) -> int:
+    if isinstance(value, bool) or not 40 <= int(value) <= 120:
+        raise ValueError("right release steps must be in [40, 120]")
+    return int(value)
 
 
 def _bounded_branch_support_fraction(value: float) -> float:
@@ -3074,7 +3086,7 @@ def _build_skill(
             ),
             clearance_steps=args.post_release_clearance_steps,
             support_steps=40,
-            release_steps=40,
+            release_steps=_bounded_right_release_steps(args.right_release_steps),
             return_steps=args.post_release_return_to_rest_steps,
             settle_steps=args.stable_support_steps,
         )
@@ -3256,6 +3268,7 @@ def main() -> None:
     _bounded_post_release_clearance_local_x(
         args.post_release_clearance_local_x_m
     )
+    _bounded_right_release_steps(args.right_release_steps)
     if (
         args.post_release_clearance_local_x_m
         and not args.post_release_clearance_steps
@@ -4343,6 +4356,9 @@ def main() -> None:
         )
         result["protocol"]["parameters"]["post_release_clearance_steps"] = int(
             args.post_release_clearance_steps
+        )
+        result["protocol"]["parameters"]["right_release_steps"] = int(
+            args.right_release_steps
         )
         result["protocol"]["parameters"][
             "post_release_clearance_local_x_m"

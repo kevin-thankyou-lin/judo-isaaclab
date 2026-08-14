@@ -38,6 +38,7 @@ from run_hangmug_skill_program import (
     _array_sha256,
     _bounded_direct_outbound_clearance,
     _bounded_post_release_clearance_local_x,
+    _bounded_right_release_steps,
     _bounded_return_contact_clearance_steps,
     _bounded_handover_offset,
     _contact_force_by_body_receipt,
@@ -154,6 +155,14 @@ def test_post_release_local_x_clearance_is_bounded():
     assert _bounded_post_release_clearance_local_x(-0.02) == pytest.approx(-0.02)
     with pytest.raises(ValueError, match="within 2 cm"):
         _bounded_post_release_clearance_local_x(0.021)
+
+
+def test_right_release_steps_are_bounded():
+    assert _bounded_right_release_steps(40) == 40
+    assert _bounded_right_release_steps(80) == 80
+    assert _bounded_right_release_steps(120) == 120
+    with pytest.raises(ValueError, match="right release steps"):
+        _bounded_right_release_steps(121)
 
 
 def test_post_release_contact_cannot_persist_or_reappear():
