@@ -123,6 +123,16 @@ def test_post_release_contact_rejects_excessive_or_increasing_force():
     assert not increased["passed"]
 
 
+def test_post_release_contact_allows_decreasing_cross_channel_redistribution():
+    first = _return_clearance_row(0.0, 1.538, [])
+    redistributed = _return_clearance_row(0.077, 1.371, [first])
+    assert first["passed"]
+    assert redistributed["passed"]
+    receipt = redistributed["return_contact_clearance"]
+    assert not receipt["contact_reappeared"]
+    assert receipt["current_total_force_n"] < receipt["previous_total_force_n"]
+
+
 def test_post_release_contact_cannot_persist_or_reappear():
     rows = []
     for _ in range(8):

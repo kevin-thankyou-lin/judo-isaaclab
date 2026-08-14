@@ -1908,37 +1908,31 @@ def _return_contact_clearance_receipt(
         if return_rows
         else float(mug_force_n)
     )
+    current_total = float(environment_force_n + mug_force_n)
+    previous_total = (
+        None
+        if previous_environment is None or previous_mug is None
+        else float(previous_environment + previous_mug)
+    )
+    initial_total = float(initial_environment + initial_mug)
     contact_free = bool(
         environment_force_n <= _CONTACT_FREE_FORCE_N
         and mug_force_n <= _CONTACT_FREE_FORCE_N
     )
     contact_reappeared = bool(
-        (
-            previous_environment is not None
-            and previous_environment <= _CONTACT_FREE_FORCE_N
-            and environment_force_n > _CONTACT_FREE_FORCE_N
-        )
-        or (
-            previous_mug is not None
-            and previous_mug <= _CONTACT_FREE_FORCE_N
-            and mug_force_n > _CONTACT_FREE_FORCE_N
-        )
+        previous_total is not None
+        and previous_total <= _CONTACT_FREE_FORCE_N
+        and current_total > _CONTACT_FREE_FORCE_N
     )
     starts_bounded = bool(
-        initial_environment <= _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N
-        and initial_mug <= _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N
+        initial_total <= _RETURN_CONTACT_CLEARANCE_MAX_INITIAL_FORCE_N
     )
     nonincreasing = bool(
         not contact_reappeared
         and (
-            previous_environment is None
-            or environment_force_n
-            <= previous_environment + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
-        )
-        and (
-            previous_mug is None
-            or mug_force_n
-            <= previous_mug + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
+            previous_total is None
+            or current_total
+            <= previous_total + _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N
         )
     )
     grace_row = row_index < _RETURN_CONTACT_CLEARANCE_STEPS - 1
@@ -1952,6 +1946,9 @@ def _return_contact_clearance_receipt(
         "force_increase_tolerance_n": _RETURN_CONTACT_FORCE_INCREASE_TOLERANCE_N,
         "initial_environment_force_n": initial_environment,
         "initial_mug_force_n": initial_mug,
+        "initial_total_force_n": initial_total,
+        "current_total_force_n": current_total,
+        "previous_total_force_n": previous_total,
         "contact_free": contact_free,
         "contact_reappeared": contact_reappeared,
         "starts_bounded": starts_bounded,
