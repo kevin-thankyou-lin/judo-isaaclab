@@ -873,6 +873,24 @@ def _install_quality_wave_contact_sensors(config) -> dict[str, tuple[str, ...]]:
     return frozen_names
 
 
+def _ensure_existing_contact_sensor_capacity(
+    config, *, minimum_count_per_prim: int = 256
+) -> dict[str, tuple[int, int]]:
+    """Prevent Gear's filtered grasp sensors from truncating dense contacts."""
+    if minimum_count_per_prim < 1:
+        raise ValueError("contact sensor capacity must be positive")
+    changed = {}
+    for name, sensor in vars(config.scene).items():
+        if not hasattr(sensor, "max_contact_data_count_per_prim"):
+            continue
+        previous = int(sensor.max_contact_data_count_per_prim)
+        current = max(previous, minimum_count_per_prim)
+        sensor.max_contact_data_count_per_prim = current
+        if current != previous:
+            changed[name] = (previous, current)
+    return changed
+
+
 def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, object]:
     import isaaclab.sim as sim_utils
     import dc_study.envs.tasks.hang_mug_on_tree_manager as manager_module
@@ -915,6 +933,9 @@ def _configure_task_for_evidence(mechanism: str = "task_config") -> dict[str, ob
 
         def configure_assets_with_wave_sensors(instance, *args, **kwargs):
             result = original_assets(instance, *args, **kwargs)
+            instance._quality_wave_existing_sensor_capacity_changes = (
+                _ensure_existing_contact_sensor_capacity(instance)
+            )
             _install_quality_wave_contact_sensors(instance)
             return result
 

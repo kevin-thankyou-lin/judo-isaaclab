@@ -49,6 +49,7 @@ from run_hangmug_skill_program import (
     _return_contact_clearance_receipt,
     _install_grasp_assist_config,
     _install_quality_wave_contact_sensors,
+    _ensure_existing_contact_sensor_capacity,
     _handover_boundary_receipt,
     _handover_target_with_local_pitch,
     _handover_target_with_camera_clockwise_roll,
@@ -396,6 +397,22 @@ def test_quality_wave_contact_sensors_are_predeclared_per_link(monkeypatch):
     assert all(isinstance(path, str) for path in sensor.filter_prim_paths_expr)
     assert sensor.max_contact_data_count_per_prim == 256
     assert config._quality_wave_contact_sensor_names == names
+
+
+def test_existing_grasp_contact_sensor_capacity_is_raised_only_when_needed():
+    low = SimpleNamespace(max_contact_data_count_per_prim=64)
+    sufficient = SimpleNamespace(max_contact_data_count_per_prim=512)
+    unrelated = SimpleNamespace()
+    config = SimpleNamespace(
+        scene=SimpleNamespace(low=low, sufficient=sufficient, unrelated=unrelated)
+    )
+
+    changed = _ensure_existing_contact_sensor_capacity(config)
+
+    assert changed == {"low": (64, 256)}
+    assert low.max_contact_data_count_per_prim == 256
+    assert sufficient.max_contact_data_count_per_prim == 512
+    assert not hasattr(unrelated, "max_contact_data_count_per_prim")
 
 
 def test_branch_approach_height_can_preserve_middle_branch_axis():
